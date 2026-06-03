@@ -1,0 +1,20 @@
+{
+    "name": "UnityGLTF.KhrCharacter.Runtime",
+    "rootNamespace": "",
+    "references": [
+        "GLTFSerialization",
+        "UnityGLTFScripts",
+        "UnityGLTF.KhrCharacter.Schema",
+        "Unity.Collections",
+        "Unity.Mathematics"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
