@@ -76,6 +76,27 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(0f, joint.localPosition.y, 1e-3f); // re-based to neutral
         }
 
+        [UnityTest]
+        public IEnumerator Rotation_ComposesOverBakedNeutral_NotLivePose()
+        {
+            var root = MakeRoot(out var joint);
+            // Baked neutral is identity; the joint base captured by the baker is the node neutral, not reference_pose.
+            var set = JointRotationSet("turn", joint,
+                new[] { Quaternion.identity, Quaternion.Euler(0f, 90f, 0f) }, Quaternion.identity);
+            var ec = root.AddComponent<ExpressionController>();
+            ec.Initialize(set);
+
+            // Simulate an Animator writing a pose earlier in the frame.
+            joint.localRotation = Quaternion.Euler(0f, 0f, 45f);
+            ec.SetWeight("turn", 1f);
+            yield return null;
+
+            // Documented limitation (M9b): the joint expression composes over the baked node neutral (identity),
+            // so the result is the absolute 90 degree pose and the live 45 degree pose is discarded, not stacked.
+            Assert.Less(Quaternion.Angle(joint.localRotation, Quaternion.Euler(0f, 90f, 0f)), 0.1f);
+            Assert.Greater(Quaternion.Angle(joint.localRotation, Quaternion.Euler(0f, 0f, 45f)), 1f);
+        }
+
         private static CharacterExpressionSet JointRotationSet(string name, Transform target, Quaternion[] deltaQuat, Quaternion baseQuat)
         {
             var driver = new JointDriver

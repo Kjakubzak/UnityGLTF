@@ -67,6 +67,91 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
+        public void BakeSkeleton_InvertedWithConventionalNodeNames_PicksDirectionByResolvedBones()
+        {
+            // Inverted layout {nodeName: vocab} where the node names are conventional tokens that ALSO look like
+            // vocabulary (Hips/Head). The vocab-count heuristic is a tie here, so the old code mis-detected the
+            // direction and resolved nothing. Resolving both directions and keeping the one that maps more real
+            // transforms picks the correct NodeKeyToTargetValue reading.
+            var hips = NewGo("Hips");
+            var head = NewGo("Head");
+            var nodeMap = new Dictionary<int, GameObject> { { 0, hips }, { 1, head } };
+            var ext = Mapping(new Dictionary<string, string> { { "Hips", "hips" }, { "Head", "head" } });
+
+            var result = KhrCharacterSkeletonBaker.BakeSkeleton(new GLTFRoot(), nodeMap, ext);
+
+            Assert.IsNotNull(result);
+            Assert.AreEqual(MappingDirection.NodeKeyToTargetValue, result.Direction);
+            Assert.AreSame(hips.transform, result.Bones["hips"]);
+            Assert.AreSame(head.transform, result.Bones["head"]);
+        }
+
+        [Test]
+        public void BakeSkeleton_UnresolvedRequiredJoint_FlagsMissingRequiredAndInvalid()
+        {
+            // hips resolves; leftFoot (a REQUIRED humanoid bone) is mapped but its node is absent.
+            var hips = NewGo("Hips_node");
+            var nodeMap = new Dictionary<int, GameObject> { { 0, hips } };
+            var ext = Mapping(new Dictionary<string, string>
+            {
+                { "hips", "Hips_node" },
+                { "leftFoot", "LeftFoot_node" }, // no such node
+            });
+
+            var result = KhrCharacterSkeletonBaker.BakeSkeleton(new GLTFRoot(), nodeMap, ext);
+
+            Assert.IsNotNull(result);
+            Assert.AreSame(hips.transform, result.Bones["hips"]);
+            Assert.IsFalse(result.Bones.ContainsKey("leftFoot"));
+            CollectionAssert.Contains(result.Report.MissingRequiredBones, "leftFoot");
+            Assert.IsFalse(result.Report.IsValid, "a missing required bone invalidates the mapping");
+        }
+
+        [Test]
+        public void BakeSkeleton_UnresolvedOptionalJoint_StaysValid()
+        {
+            // hips + head resolve; jaw (an OPTIONAL humanoid bone) is mapped but its node is absent. The mapping
+            // is still valid with no missing *required* bone — only a warning is recorded.
+            var hips = NewGo("Hips_node");
+            var head = NewGo("Head_node");
+            var nodeMap = new Dictionary<int, GameObject> { { 0, hips }, { 1, head } };
+            var ext = Mapping(new Dictionary<string, string>
+            {
+                { "hips", "Hips_node" },
+                { "head", "Head_node" },
+                { "jaw", "Jaw_node" }, // no such node
+            });
+
+            var result = KhrCharacterSkeletonBaker.BakeSkeleton(new GLTFRoot(), nodeMap, ext);
+
+            Assert.IsNotNull(result);
+            Assert.AreSame(hips.transform, result.Bones["hips"]);
+            Assert.AreSame(head.transform, result.Bones["head"]);
+            Assert.AreEqual(0, result.Report.MissingRequiredBones.Count, "jaw is optional, not a required bone");
+            Assert.IsTrue(result.Report.IsValid, "an unresolved optional joint must not invalidate the mapping");
+            Assert.Greater(result.Report.Warnings.Count, 0, "the unresolved jaw still records a warning");
+        }
+
+        [Test]
+        public void BakeSkeleton_EqualResolvedCounts_TieBreaksToTargetKeyByVocab()
+        {
+            // Both directions resolve exactly one bone, so resolved-count can't decide; the vocab-count tie-break
+            // (bias toward the spec's target-key order) selects TargetKeyToNodeValue.
+            var nodeA = NewGo("NodeA");
+            var nodeB = NewGo("NodeB");
+            var nodeMap = new Dictionary<int, GameObject> { { 0, nodeA }, { 1, nodeB } };
+            // "hips" (vocab key) resolves under target-key; "NodeB" (node-name key) resolves under node-key.
+            var ext = Mapping(new Dictionary<string, string> { { "hips", "NodeA" }, { "NodeB", "head" } });
+
+            var result = KhrCharacterSkeletonBaker.BakeSkeleton(new GLTFRoot(), nodeMap, ext);
+
+            Assert.IsNotNull(result);
+            Assert.AreEqual(1, result.Bones.Count);
+            Assert.AreEqual(MappingDirection.TargetKeyToNodeValue, result.Direction);
+            Assert.AreSame(nodeA.transform, result.Bones["hips"]);
+        }
+
+        [Test]
         public void BuildHumanoidAvatar_MissingRequiredBones_ReturnsNullAndFallsBack()
         {
             var root = NewGo("char");

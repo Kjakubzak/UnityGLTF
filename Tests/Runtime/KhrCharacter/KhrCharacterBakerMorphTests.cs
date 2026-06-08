@@ -86,5 +86,60 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(1, drivers.Count);
             Assert.AreEqual(Interp.Step, drivers[0].Sampler.Interp);
         }
+
+        // ── KHR_animation_pointer morph weights ("/nodes/{i}/weights/{j}") ──────
+
+        [Test]
+        public void MorphPointer_DrivesSingleBlendshape_DeltaOverFrame0()
+        {
+            var smr = MakeSmr(3, 1f);
+            var times = new[] { 0f, 0.5f, 1f };
+            var values = new[] { 0.2f, 0.6f, 1f }; // scalar per keyframe for ONE blendshape (not frame-major N-wide)
+
+            var drivers = new List<MorphDriver>();
+            KhrCharacterBaker.BuildMorphPointerDriver(smr, 1, times, values, InterpolationType.LINEAR, drivers);
+
+            Assert.AreEqual(1, drivers.Count);
+            Assert.AreEqual(1, drivers[0].BlendShapeIndex);                                  // the pointer's /weights/{j}
+            Assert.That(drivers[0].DeltaValues, Is.EqualTo(new[] { 0f, 0.4f, 0.8f }).Within(1e-5f)); // delta over frame0 (0.2)
+            Assert.AreEqual(Interp.Linear, drivers[0].Sampler.Interp);
+            Assert.IsFalse(drivers[0].Sampler.SingleKey);
+            Assert.AreSame(smr, drivers[0].Smr);
+        }
+
+        [Test]
+        public void MorphPointer_SingleKey_StoresAbsoluteTarget()
+        {
+            var smr = MakeSmr(2, 1f);
+            var drivers = new List<MorphDriver>();
+            KhrCharacterBaker.BuildMorphPointerDriver(smr, 0, new[] { 0f }, new[] { 0.7f }, InterpolationType.LINEAR, drivers);
+
+            Assert.AreEqual(1, drivers.Count);
+            Assert.IsTrue(drivers[0].Sampler.SingleKey);
+            Assert.AreEqual(0, drivers[0].BlendShapeIndex);
+            Assert.AreEqual(0.7f, drivers[0].DeltaValues[0], 1e-5f);
+        }
+
+        [Test]
+        public void MorphPointer_BlendShapeOutOfRange_Dropped()
+        {
+            var smr = MakeSmr(1, 1f); // only blendshape 0 exists
+            var drivers = new List<MorphDriver>();
+            KhrCharacterBaker.BuildMorphPointerDriver(smr, 5, new[] { 0f, 1f }, new[] { 0f, 1f }, InterpolationType.LINEAR, drivers);
+            Assert.AreEqual(0, drivers.Count); // out-of-range target dropped, no throw
+        }
+
+        [Test]
+        public void ParseNodeWeightsPointer_ValidAndInvalid()
+        {
+            Assert.IsTrue(KhrCharacterBaker.TryParseNodeWeightsPointer("/nodes/112/weights/3", out int node, out int shape));
+            Assert.AreEqual(112, node);
+            Assert.AreEqual(3, shape);
+
+            Assert.IsFalse(KhrCharacterBaker.TryParseNodeWeightsPointer("/meshes/2/weights/1", out _, out _));    // not a node pointer
+            Assert.IsFalse(KhrCharacterBaker.TryParseNodeWeightsPointer("/nodes/112/translation", out _, out _)); // not weights
+            Assert.IsFalse(KhrCharacterBaker.TryParseNodeWeightsPointer("/nodes/x/weights/3", out _, out _));     // non-numeric
+            Assert.IsFalse(KhrCharacterBaker.TryParseNodeWeightsPointer(null, out _, out _));
+        }
     }
 }

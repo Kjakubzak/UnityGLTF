@@ -41,6 +41,10 @@ namespace UnityGLTF.KhrCharacter
                 }
 
                 var animation = root.Animations[item.Animation];
+                // The glTF schema carries neither a per-expression blendMode nor a driver priority yet, so
+                // everything bakes as Additive with Priority = 0. Override is a runtime-selectable compositing
+                // policy (ExpressionController honors ExpressionTrack.BlendMode / driver Priority) pending a
+                // PR #2512 blendMode/priority discriminator; wire those through here once the schema lands.
                 var track = new ExpressionTrack
                 {
                     Name = item.Expression,
@@ -110,11 +114,27 @@ namespace UnityGLTF.KhrCharacter
                     if (channelIndex < 0 || channelIndex >= animation.Channels.Count) continue;
                     var channel = animation.Channels[channelIndex];
                     if (channel?.Target == null) continue;
-                    if (channel.Target.Path != "weights" || channel.Target.Node == null) continue;
 
-                    int nodeIndex = channel.Target.Node.Id;
-                    if (!nodeIndexToGo.TryGetValue(nodeIndex, out var go) || go == null) continue;
-                    var smr = go.GetComponent<SkinnedMeshRenderer>();
+                    // Resolve the target renderer and, for the pointer form, the single blendshape it drives. Two
+                    // authoring conventions reach the same SkinnedMeshRenderer:
+                    //  • standard glTF: target.path == "weights" on a node (one channel drives ALL its blendshapes)
+                    //  • KHR_animation_pointer: "/nodes/{i}/weights/{j}" (one channel drives ONE blendshape) — the
+                    //    VRM/0b5vr convention. Requires the KHR_animation_pointer import plugin so the channel's
+                    //    target extension deserializes to a typed pointer (see GetPointer).
+                    SkinnedMeshRenderer smr = null;
+                    int singleShapeIndex = -1;
+                    if (channel.Target.Path == "weights" && channel.Target.Node != null)
+                    {
+                        if (!nodeIndexToGo.TryGetValue(channel.Target.Node.Id, out var go) || go == null) continue;
+                        smr = go.GetComponent<SkinnedMeshRenderer>();
+                    }
+                    else
+                    {
+                        var pointer = GetPointer(channel);
+                        if (pointer == null || !TryParseNodeWeightsPointer(pointer, out int nodeIndex, out singleShapeIndex)) continue;
+                        if (!nodeIndexToGo.TryGetValue(nodeIndex, out var go) || go == null) continue;
+                        smr = go.GetComponent<SkinnedMeshRenderer>();
+                    }
                     if (smr == null || smr.sharedMesh == null) continue;
 
                     int samplerIndex = channel.Sampler?.Id ?? -1;
@@ -123,7 +143,10 @@ namespace UnityGLTF.KhrCharacter
 
                     var times = DecodeScalar(importer, GetAccessor(root, sampler.Input));
                     var values = DecodeScalar(importer, GetAccessor(root, sampler.Output));
-                    BuildMorphDrivers(smr, times, values, sampler.Interpolation, output);
+                    if (singleShapeIndex >= 0)
+                        BuildMorphPointerDriver(smr, singleShapeIndex, times, values, sampler.Interpolation, output);
+                    else
+                        BuildMorphDrivers(smr, times, values, sampler.Interpolation, output);
                 }
                 catch (Exception e)
                 {
@@ -193,7 +216,51 @@ namespace UnityGLTF.KhrCharacter
             return (index >= 0 && index < values.Length) ? values[index] : 0f;
         }
 
-        // ── Joint (node TRS) channels ────────────────────────────────────────
+        /// <summary>
+        /// Builds one delta-over-rest <see cref="MorphDriver"/> from a KHR_animation_pointer
+        /// "/nodes/{i}/weights/{j}" channel: a scalar sampler driving a single blendshape (unlike the standard
+        /// "weights" channel that drives all of a node's blendshapes at once). CUBICSPLINE keyframes are
+        /// [inTangent, value, outTangent] blocks; only the value is used. Single-key samplers store the absolute target.
+        /// </summary>
+        internal static void BuildMorphPointerDriver(
+            SkinnedMeshRenderer smr, int blendShapeIndex, float[] times, float[] values, InterpolationType interpolation, List<MorphDriver> output)
+        {
+            if (smr?.sharedMesh == null || times == null || values == null) return;
+            int n = times.Length;
+            if (n == 0 || values.Length == 0) return;
+            if (blendShapeIndex < 0 || blendShapeIndex >= smr.sharedMesh.blendShapeCount)
+            {
+                Debug.LogWarning($"[KHR_character] morph pointer targets blendshape {blendShapeIndex} but '{smr.name}' has {smr.sharedMesh.blendShapeCount}; skipping.");
+                return;
+            }
+
+            bool isCubic = interpolation == InterpolationType.CUBICSPLINE;
+            int stride = isCubic ? 3 : 1, off = isCubic ? 1 : 0;
+            if (values.Length < n * stride) return;
+
+            var deltas = new float[n];
+            if (n == 1)
+            {
+                deltas[0] = values[off];
+            }
+            else
+            {
+                float frame0 = values[off];
+                for (int k = 0; k < n; k++) deltas[k] = values[k * stride + off] - frame0;
+            }
+
+            output.Add(new MorphDriver
+            {
+                Smr = smr,
+                BlendShapeIndex = blendShapeIndex,
+                Sampler = BuildSampler(times, MapInterp(interpolation)),
+                DeltaValues = deltas,
+                BaseValue = 0f,
+                Priority = 0,
+            });
+        }
+
+        // ── Joint (node TRS) channels ──────────────────────────────
 
         private static void BakeJointChannels(
             GLTFRoot root, GLTFSceneImporter importer, GLTFAnimation animation,
@@ -507,6 +574,18 @@ namespace UnityGLTF.KhrCharacter
             if (!int.TryParse(parts[2], out materialIndex)) return false;
             gltfProperty = string.Join("/", parts, 3, parts.Length - 3);
             return true;
+        }
+
+        // Parse a KHR_animation_pointer morph-weight path of the exact form "/nodes/{nodeIndex}/weights/{blendShapeIndex}"
+        // (the VRM/0b5vr per-blendshape convention). Other shapes (e.g. "/meshes/.../weights") are rejected.
+        internal static bool TryParseNodeWeightsPointer(string pointer, out int nodeIndex, out int blendShapeIndex)
+        {
+            nodeIndex = -1;
+            blendShapeIndex = -1;
+            if (string.IsNullOrEmpty(pointer)) return false;
+            var parts = pointer.Split('/'); // ["", "nodes", "{i}", "weights", "{j}"]
+            if (parts.Length != 5 || parts[1] != "nodes" || parts[3] != "weights") return false;
+            return int.TryParse(parts[2], out nodeIndex) && int.TryParse(parts[4], out blendShapeIndex);
         }
 
         private static bool TryResolveRendererSlot(GLTFRoot root, GLTFSceneImporter importer, int materialIndex, out Renderer renderer, out int slot)

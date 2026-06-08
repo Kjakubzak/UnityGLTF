@@ -7,12 +7,17 @@ namespace UnityGLTF.KhrCharacter
     /// <summary>
     /// Top-level hub attached to the character root. Owns capability discovery and references to the
     /// sub-controllers (null when the corresponding extension is absent). Application code branches on
-    /// <see cref="Has"/> / <see cref="Capabilities"/> and waits for <see cref="OnCharacterReady"/>.
+    /// <see cref="Has"/> / <see cref="Capabilities"/> and registers a readiness callback via
+    /// <see cref="WhenReady"/>.
     /// </summary>
     [DisallowMultipleComponent]
     public class KhrCharacter : MonoBehaviour
     {
-        /// <summary>Fired after import wiring completes. Do not assume readiness in Awake (async import).</summary>
+        /// <summary>
+        /// Fired once when the character becomes ready (after a live import or prefab rehydration). Readiness can
+        /// be reached during Start, or synchronously inside Object.Instantiate / a live import, so a subscription
+        /// added afterwards may miss it — prefer <see cref="WhenReady"/>.
+        /// </summary>
         public event Action<KhrCharacter> OnCharacterReady;
         public bool IsReady { get; private set; }
 
@@ -26,31 +31,76 @@ namespace UnityGLTF.KhrCharacter
         private readonly List<CharacterCapability> _capabilities = new List<CharacterCapability>();
         public IReadOnlyList<CharacterCapability> Capabilities => _capabilities;
 
+        // Persisted so an editor-imported prefab can rehydrate on Start. A non-empty value is also the signal
+        // that this component was deserialized from a baked asset (vs added fresh by a live import). Hidden from
+        // the inspector: it's baked data, surfaced read-only by KhrCharacterEditor rather than hand-edited.
+        [SerializeField, HideInInspector] private List<CharacterCapability> _serializedCapabilities = new List<CharacterCapability>();
+
         public bool Has(CharacterCapability capability) => _capabilities.Contains(capability);
+
+        // Rehydrate an editor-imported prefab: restore capabilities, re-resolve the sub-controllers that persist
+        // as sibling components, then fire OnCharacterReady. Runs in Start (not Awake) so every sub-controller
+        // has already rehydrated in its own Awake before readiness is announced. Guarded on the serialized
+        // capabilities being present so a live import (which adds this component fresh, then wires + MarkReady
+        // itself) is never pre-empted, and on IsReady so the already-wired live path no-ops here.
+        private void Start()
+        {
+            if (IsReady) return;
+            if (_serializedCapabilities == null || _serializedCapabilities.Count == 0) return;
+
+            _capabilities.Clear();
+            _capabilities.AddRange(_serializedCapabilities);
+
+            if (Expressions == null) Expressions = GetComponent<ExpressionController>();
+            if (Gaze == null) Gaze = GetComponent<GazeSolver>();
+            if (CameraHints == null) CameraHints = GetComponent<CameraHintSet>();
+            if (Skeleton == null) Skeleton = GetComponent<SkeletonMap>();
+            if (View == null) View = GetComponent<ViewModeController>();
+
+            MarkReady();
+        }
 
         internal void SetCapabilities(IEnumerable<CharacterCapability> capabilities)
         {
             _capabilities.Clear();
             if (capabilities != null) _capabilities.AddRange(capabilities);
+            _serializedCapabilities = new List<CharacterCapability>(_capabilities);   // persist for prefab rehydration
         }
 
         internal void MarkReady()
         {
+            if (IsReady) return;   // fire OnCharacterReady exactly once (live import path or Start rehydration)
             IsReady = true;
             OnCharacterReady?.Invoke(this);
         }
 
         /// <summary>
+        /// Register a readiness callback that runs immediately if the character is already ready, or exactly once
+        /// when it becomes ready. Unlike subscribing to <see cref="OnCharacterReady"/> directly, this never
+        /// misses an already-fired readiness (which happens for rehydrated prefabs and live imports).
+        /// </summary>
+        public void WhenReady(Action<KhrCharacter> callback)
+        {
+            if (callback == null) return;
+            if (IsReady) callback(this);
+            else OnCharacterReady += callback;
+        }
+
+        // Reused across calls so the per-frame HUD/inspector polling doesn't allocate a fresh report + list each
+        // call. The returned report is owned by this component and is overwritten on the next GetHealth() call.
+        private CharacterHealthReport _healthReport;
+
+        /// <summary>
         /// Snapshot of which capabilities are active vs present-but-inert, plus the resolved skeleton direction.
-        /// Drives the Character Health inspector/HUD and helps diagnose dropped name-couplings.
+        /// Drives the Character Health inspector/HUD and helps diagnose dropped name-couplings. The returned
+        /// report instance is reused on each call (overwritten on the next call); copy it to retain a snapshot.
         /// </summary>
         public CharacterHealthReport GetHealth()
         {
-            var report = new CharacterHealthReport
-            {
-                SkeletonDirection = Skeleton != null ? Skeleton.DetectedDirection : MappingDirection.Unknown,
-                ExpressionCount = Expressions != null ? Expressions.Count : 0,
-            };
+            var report = _healthReport ?? (_healthReport = new CharacterHealthReport());
+            report.SkeletonDirection = Skeleton != null ? Skeleton.DetectedDirection : MappingDirection.Unknown;
+            report.ExpressionCount = Expressions != null ? Expressions.Count : 0;
+            report.Capabilities.Clear();
             foreach (var capability in _capabilities)
                 report.Capabilities.Add(new CapabilityHealth { Capability = capability, Status = StatusFor(capability) });
             return report;
@@ -74,12 +124,25 @@ namespace UnityGLTF.KhrCharacter
                 case CharacterCapability.LookAtTarget:
                     return Gaze != null ? CapabilityStatus.Active : CapabilityStatus.Inert;
                 case CharacterCapability.SkeletonMapping:
-                    return Skeleton != null ? CapabilityStatus.Active : CapabilityStatus.Inert;
+                    if (Skeleton == null) return CapabilityStatus.Inert;
+                    return SkeletonMappingDegraded() ? CapabilityStatus.Degraded : CapabilityStatus.Active;
                 case CharacterCapability.ReferencePose:
                     return (Skeleton != null && Skeleton.Result?.ReferencePose != null) ? CapabilityStatus.Active : CapabilityStatus.Inert;
                 default:
                     return CapabilityStatus.Inert;
             }
+        }
+
+        // A skeleton mapping is "degraded" (present but only partially driven) when it resolved no bones at all,
+        // or when a declared joint that maps to a *required* humanoid bone failed to bind (the baker records
+        // those in the chosen direction's report and clears Report.IsValid). Optional joints that are simply
+        // absent (jaw/eyes/toes/...) do NOT degrade a rig that otherwise resolved its required bones.
+        private bool SkeletonMappingDegraded()
+        {
+            var result = Skeleton.Result;
+            if (result?.Bones == null || result.Bones.Count == 0) return true;
+            var report = result.Report;
+            return report != null && (!report.IsValid || report.MissingRequiredBones.Count > 0);
         }
     }
 }

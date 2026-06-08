@@ -218,5 +218,19 @@ sysinfo.txt
 *.unitypackage
 
 /www/node_modules/
-
 .idea
+
+# This is a UPM package, not a Unity project. If the package folder is opened as a project,
+# Unity generates the following at the repo root — keep them out of the package.
+/ProjectSettings/
+/Logs/
+/UserSettings/
+/Assets/
+/Packages/
+/Assets.meta
+/Library.meta
+/Logs.meta
+/Packages.meta
+/ProjectSettings.meta
+/Temp.meta
+/UserSettings.meta

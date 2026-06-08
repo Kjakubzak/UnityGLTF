@@ -169,6 +169,60 @@ namespace UnityGLTF.KhrCharacter
         public ValidationReport Report = new ValidationReport();
     }
 
+    // Serializable mirror of SkeletonMappingResult: Unity can't serialize the Dictionary<string,Transform>,
+    // so persist the bone map as a parallel entry array. Used by SkeletonMap to survive prefab deserialize.
+    // Converted to/from the runtime SkeletonMappingResult via FromResult/ToResult around the public API.
+    [Serializable]
+    public struct SerializableBoneEntry
+    {
+        public string JointName;   // vocab joint name (hips/head/...)
+        public Transform Bone;     // resolved Transform (intra-hierarchy refs survive prefab serialization)
+    }
+
+    [Serializable]
+    public class SerializableSkeletonMapping
+    {
+        public SerializableBoneEntry[] Bones;
+        public string SelectedRig;
+        public ReferencePose ReferencePose;   // already [Serializable]
+        public MappingDirection Direction;
+        public ValidationReport Report = new ValidationReport();   // already [Serializable]
+
+        public static SerializableSkeletonMapping FromResult(SkeletonMappingResult result)
+        {
+            if (result == null) return null;
+            var entries = new List<SerializableBoneEntry>();
+            if (result.Bones != null)
+                foreach (var kv in result.Bones)
+                    if (!string.IsNullOrEmpty(kv.Key))   // symmetric with ToResult's guard -> lossless round-trip
+                        entries.Add(new SerializableBoneEntry { JointName = kv.Key, Bone = kv.Value });
+            return new SerializableSkeletonMapping
+            {
+                Bones = entries.ToArray(),
+                SelectedRig = result.SelectedRig,
+                ReferencePose = result.ReferencePose,
+                Direction = result.Direction,
+                Report = result.Report ?? new ValidationReport(),
+            };
+        }
+
+        public SkeletonMappingResult ToResult()
+        {
+            var bones = new Dictionary<string, Transform>();
+            if (Bones != null)
+                foreach (var entry in Bones)
+                    if (!string.IsNullOrEmpty(entry.JointName)) bones[entry.JointName] = entry.Bone;
+            return new SkeletonMappingResult
+            {
+                Bones = bones,
+                SelectedRig = SelectedRig,
+                ReferencePose = ReferencePose,
+                Direction = Direction,
+                Report = Report ?? new ValidationReport(),
+            };
+        }
+    }
+
     // ── Node-extension metadata ──────────────────────────────────────────────
     [Serializable]
     public class CameraHint

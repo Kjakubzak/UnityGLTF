@@ -122,5 +122,29 @@ namespace UnityGLTF.KhrCharacter.Tests
             yield return null;
             Assert.AreEqual(1f, smr.GetBlendShapeWeight(0), 1e-3f); // 1 + 1 -> clamp01 -> 1
         }
+
+        [UnityTest]
+        public IEnumerator Morph_TwoExpressions_BothInactive_PreservesBase()
+        {
+            var smr = MakeSmr(1, 1f, out var go);
+            var driverA = LinearMorphDriver(smr, 0); driverA.BaseValue = 0.25f;
+            var driverB = LinearMorphDriver(smr, 0); driverB.BaseValue = 0.25f;
+            var set = SetWith(
+                new ExpressionTrack { Name = "a", Domains = ExpressionDomain.Morph, MorphDrivers = new[] { driverA } },
+                new ExpressionTrack { Name = "b", Domains = ExpressionDomain.Morph, MorphDrivers = new[] { driverB } });
+            var ec = go.AddComponent<ExpressionController>();
+            ec.Initialize(set);
+
+            // Both expressions at d=0: each delta sample returns 0, so the model base weight is preserved (H2).
+            ec.SetWeight("a", 0f);
+            ec.SetWeight("b", 0f);
+            yield return null;
+            Assert.AreEqual(0.25f, smr.GetBlendShapeWeight(0), 1e-3f);
+
+            // Driving one expression adds its delta over the preserved base.
+            ec.SetWeight("a", 0.5f);
+            yield return null;
+            Assert.AreEqual(0.75f, smr.GetBlendShapeWeight(0), 1e-3f); // base 0.25 + delta 0.5
+        }
     }
 }

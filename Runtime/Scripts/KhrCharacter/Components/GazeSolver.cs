@@ -35,10 +35,16 @@ namespace UnityGLTF.KhrCharacter
         private readonly List<LookAtTarget> _authoredTargets = new List<LookAtTarget>();
         public IReadOnlyList<LookAtTarget> AuthoredTargets => _authoredTargets;
 
+        // Persisted so an editor-imported prefab can restore its authored targets (the live import calls Bind,
+        // which also stores here). LookAtTarget is [Serializable] and its Transform ref survives serialization.
+        // Hidden from the inspector: it's baked data, surfaced read-only by GazeSolverEditor in Play mode.
+        [SerializeField, HideInInspector] private List<LookAtTarget> _serializedTargets = new List<LookAtTarget>();
+
         private ExpressionController _expressions;
         private Transform _leftEye, _rightEye, _head;
         private Quaternion _leftEyeRest, _rightEyeRest;
         private bool _hasEyes;
+        private bool _lazyBound;
 
         private Vector3 _worldTarget;
         private bool _hasWorldTarget;
@@ -54,8 +60,10 @@ namespace UnityGLTF.KhrCharacter
         {
             _authoredTargets.Clear();
             if (authoredTargets != null) _authoredTargets.AddRange(authoredTargets);
+            _serializedTargets = new List<LookAtTarget>(_authoredTargets);   // persist for prefab rehydration
             _expressions = expressions;
             ResolveBones(skeleton);
+            _lazyBound = true;   // a live bind fully resolves links; skip the LateUpdate lazy path
         }
 
         /// <summary>Explicit eye/head bone assignment (used when no SkeletonMap is available, e.g. in tests).</summary>
@@ -85,6 +93,7 @@ namespace UnityGLTF.KhrCharacter
 
         private void LateUpdate()
         {
+            if (!_lazyBound) LazyBind();
             if (Mode == LookAtMode.None || Weight <= 0f) { ResetOutputs(); return; }
             if (!TryGetTargetPosition(out var targetPos)) { ResetOutputs(); return; }
 
@@ -100,6 +109,18 @@ namespace UnityGLTF.KhrCharacter
 
             if (OutputMode == GazeOutputMode.Expression) DriveExpressions(yaw, pitch);
             else DriveBones(yaw, pitch);
+        }
+
+        // Cross-component Awake order isn't guaranteed, so a deserialized prefab resolves its sibling
+        // ExpressionController / SkeletonMap on the first frame instead (LateUpdate runs after every Awake).
+        // A live import calls Bind (which sets _lazyBound), so this only fires for a rehydrated prefab.
+        private void LazyBind()
+        {
+            _lazyBound = true;
+            if (_authoredTargets.Count == 0 && _serializedTargets != null && _serializedTargets.Count > 0)
+                _authoredTargets.AddRange(_serializedTargets);
+            if (_expressions == null) _expressions = GetComponent<ExpressionController>();
+            if (!_hasEyes) ResolveBones(GetComponent<SkeletonMap>());
         }
 
         private bool TryGetTargetPosition(out Vector3 pos)

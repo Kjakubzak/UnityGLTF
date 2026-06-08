@@ -77,6 +77,26 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.Less(Quaternion.Angle(drivers[0].DeltaQuat[1], q1), 1e-3f);                  // q1 * inverse(q0)
         }
 
+        [Test]
+        public void Base_IsCapturedFromNodeNeutral()
+        {
+            var t = MakeTransform();
+            // The baker captures the base from the node's neutral local pose (target.localRotation/localPosition/
+            // localScale), not from any reference_pose. Mirror that capture and assert it round-trips (H2).
+            t.localPosition = new Vector3(1f, 2f, 3f);
+            t.localRotation = Quaternion.Euler(10f, 20f, 30f);
+
+            var rotDrivers = new List<JointDriver>();
+            KhrCharacterBaker.BuildJointRotationDriver(t, new[] { 0f, 1f }, new[] { Quaternion.identity, Quaternion.Euler(0f, 90f, 0f) },
+                InterpolationType.LINEAR, t.localRotation, rotDrivers);
+            Assert.Less(Quaternion.Angle(rotDrivers[0].BaseQuat, t.localRotation), 1e-3f);
+
+            var posDrivers = new List<JointDriver>();
+            KhrCharacterBaker.BuildJointVectorDriver(t, TrsChannel.Translation, new[] { 0f, 1f },
+                new[] { Vector3.zero, new Vector3(0f, 1f, 0f) }, InterpolationType.LINEAR, t.localPosition, posDrivers);
+            AssertVec(t.localPosition, posDrivers[0].BaseVec);
+        }
+
         private static void AssertVec(Vector3 expected, Vector3 actual)
         {
             Assert.AreEqual(expected.x, actual.x, 1e-4f);

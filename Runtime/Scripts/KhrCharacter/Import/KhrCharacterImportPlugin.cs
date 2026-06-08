@@ -190,6 +190,11 @@ namespace UnityGLTF.KhrCharacter
 
             var skeleton = sceneObject.GetComponent<SkeletonMap>() ?? sceneObject.AddComponent<SkeletonMap>();
             skeleton.Bind(result);
+            // Persist the intent to (re)build + assign the humanoid Avatar when this prefab rehydrates at
+            // runtime. The build self-validates required bones and falls back to the generic rig, so this is
+            // safe to set for non-humanoid rigs too. Only meaningful when an actual bone mapping resolved.
+            if (result.Bones != null && result.Bones.Count > 0)
+                skeleton.BuildHumanoidOnAwake = true;
             hub.Skeleton = skeleton;
         }
 

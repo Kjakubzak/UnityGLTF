@@ -63,5 +63,71 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(1, contribs[1].SourceIndex);
             Assert.AreEqual(0.3f, contribs[1].Weight, 1e-5f);
         }
+
+        [Test]
+        public void BuildMaskEntries_AllUnknownTargets_ReturnsEmpty()
+        {
+            var mask = new KHR_character_expression_mask
+            {
+                Masks = new List<KHR_character_expression_mask.Mask>
+                {
+                    new KHR_character_expression_mask.Mask { Target = "ghost1", Type = "blend", Amount = 1f },
+                    new KHR_character_expression_mask.Mask { Target = "ghost2", Type = "block", Amount = 1f },
+                }
+            };
+
+            var entries = KhrCharacterBaker.BuildMaskEntries(mask, sourceIndex: 0, NameToIndex);
+
+            Assert.IsNotNull(entries);
+            Assert.AreEqual(0, entries.Length); // every dangling target dropped; the call still succeeds (M2/N4)
+        }
+
+        [Test]
+        public void BuildMappingSets_TargetWithAllUnknownSources_IsDropped()
+        {
+            var mapping = new KHR_character_expression_mapping();
+            mapping.ExpressionSetMappings["vrm"] = new Dictionary<string, List<KHR_character_expression_mapping.SourceWeight>>
+            {
+                {
+                    "ghostTarget", new List<KHR_character_expression_mapping.SourceWeight>
+                    {
+                        new KHR_character_expression_mapping.SourceWeight { Source = "missing1", Weight = 1f },
+                        new KHR_character_expression_mapping.SourceWeight { Source = "missing2", Weight = 1f },
+                    }
+                },
+                {
+                    "happy", new List<KHR_character_expression_mapping.SourceWeight>
+                    {
+                        new KHR_character_expression_mapping.SourceWeight { Source = "a", Weight = 1f },
+                    }
+                },
+            };
+
+            var sets = KhrCharacterBaker.BuildMappingSets(mapping, NameToIndex);
+
+            // The all-unknown target is dropped; the valid target survives, so the set still builds (M2/N4).
+            Assert.AreEqual(1, sets.Length);
+            Assert.AreEqual(1, sets[0].Targets.Length);
+            Assert.AreEqual("happy", sets[0].Targets[0].TargetName);
+        }
+
+        [Test]
+        public void BuildMappingSets_AllUnknown_ReturnsNull()
+        {
+            var mapping = new KHR_character_expression_mapping();
+            mapping.ExpressionSetMappings["vrm"] = new Dictionary<string, List<KHR_character_expression_mapping.SourceWeight>>
+            {
+                {
+                    "ghost", new List<KHR_character_expression_mapping.SourceWeight>
+                    {
+                        new KHR_character_expression_mapping.SourceWeight { Source = "missing", Weight = 1f },
+                    }
+                },
+            };
+
+            var sets = KhrCharacterBaker.BuildMappingSets(mapping, NameToIndex);
+
+            Assert.IsNull(sets); // no resolvable contributions -> no set, handled gracefully (no throw)
+        }
     }
 }

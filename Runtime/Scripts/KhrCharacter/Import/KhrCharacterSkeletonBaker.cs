@@ -17,21 +17,36 @@ namespace UnityGLTF.KhrCharacter
     /// </summary>
     internal static class KhrCharacterSkeletonBaker
     {
-        // Vocabulary joint (case-insensitive) -> Unity HumanTrait.BoneName (the spaced form).
-        private static readonly Dictionary<string, string> VocabToHumanName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        // Vocabulary joint (case-insensitive) -> Unity humanoid bone. The HumanBone.humanName required by
+        // AvatarBuilder must be exactly HumanTrait.BoneName[(int)bone] (e.g. "LeftUpperArm", not "Left Upper
+        // Arm"), so we map to the enum and resolve the canonical name at runtime — robust across Unity versions.
+        private static readonly Dictionary<string, HumanBodyBones> VocabToHumanBone = new Dictionary<string, HumanBodyBones>(StringComparer.OrdinalIgnoreCase)
         {
-            { "hips", "Hips" }, { "spine", "Spine" }, { "chest", "Chest" }, { "upperChest", "Upper Chest" },
-            { "neck", "Neck" }, { "head", "Head" }, { "jaw", "Jaw" },
-            { "leftEye", "Left Eye" }, { "rightEye", "Right Eye" },
-            { "leftShoulder", "Left Shoulder" }, { "rightShoulder", "Right Shoulder" },
-            { "leftUpperArm", "Left Upper Arm" }, { "leftLowerArm", "Left Lower Arm" }, { "leftHand", "Left Hand" },
-            { "rightUpperArm", "Right Upper Arm" }, { "rightLowerArm", "Right Lower Arm" }, { "rightHand", "Right Hand" },
-            { "leftUpperLeg", "Left Upper Leg" }, { "leftLowerLeg", "Left Lower Leg" }, { "leftFoot", "Left Foot" }, { "leftToes", "Left Toes" },
-            { "rightUpperLeg", "Right Upper Leg" }, { "rightLowerLeg", "Right Lower Leg" }, { "rightFoot", "Right Foot" }, { "rightToes", "Right Toes" },
+            { "hips", HumanBodyBones.Hips }, { "spine", HumanBodyBones.Spine }, { "chest", HumanBodyBones.Chest }, { "upperChest", HumanBodyBones.UpperChest },
+            { "neck", HumanBodyBones.Neck }, { "head", HumanBodyBones.Head }, { "jaw", HumanBodyBones.Jaw },
+            { "leftEye", HumanBodyBones.LeftEye }, { "rightEye", HumanBodyBones.RightEye },
+            { "leftShoulder", HumanBodyBones.LeftShoulder }, { "rightShoulder", HumanBodyBones.RightShoulder },
+            { "leftUpperArm", HumanBodyBones.LeftUpperArm }, { "leftLowerArm", HumanBodyBones.LeftLowerArm }, { "leftHand", HumanBodyBones.LeftHand },
+            { "rightUpperArm", HumanBodyBones.RightUpperArm }, { "rightLowerArm", HumanBodyBones.RightLowerArm }, { "rightHand", HumanBodyBones.RightHand },
+            { "leftUpperLeg", HumanBodyBones.LeftUpperLeg }, { "leftLowerLeg", HumanBodyBones.LeftLowerLeg }, { "leftFoot", HumanBodyBones.LeftFoot }, { "leftToes", HumanBodyBones.LeftToes },
+            { "rightUpperLeg", HumanBodyBones.RightUpperLeg }, { "rightLowerLeg", HumanBodyBones.RightLowerLeg }, { "rightFoot", HumanBodyBones.RightFoot }, { "rightToes", HumanBodyBones.RightToes },
         };
 
+        // HumanTrait.BoneName allocates a fresh array on every access, and TryGetHumanName is called once per
+        // mapped joint during a humanoid build. Cache the array (lazily — HumanTrait APIs can't be touched from a
+        // static/field initializer) so a build doesn't allocate one array per bone.
+        private static string[] _humanBoneNames;
+        private static string[] HumanBoneNames => _humanBoneNames ?? (_humanBoneNames = HumanTrait.BoneName);
+
         public static bool TryGetHumanName(string vocabularyJoint, out string humanName)
-            => VocabToHumanName.TryGetValue(vocabularyJoint ?? string.Empty, out humanName);
+        {
+            humanName = null;
+            if (!VocabToHumanBone.TryGetValue(vocabularyJoint ?? string.Empty, out var bone)) return false;
+            // HumanTrait.BoneName is indexed by the HumanBodyBones value; this is the exact string AvatarBuilder
+            // and HumanTrait.RequiredBone use, so it always matches the required-bone validation.
+            humanName = HumanBoneNames[(int)bone];
+            return true;
+        }
 
         public static SkeletonMappingResult BakeSkeleton(GLTFRoot root, IReadOnlyDictionary<int, GameObject> nodeIndexToGo, KHR_character_skeleton_mapping ext)
         {
@@ -147,19 +162,43 @@ namespace UnityGLTF.KhrCharacter
         {
             if (mapping == null || mapping.Count == 0) return null;
 
-            // Direction auto-detect: whichever side has more known-vocabulary joints is the vocabulary side.
+            // The mapping is rigName -> { jointA -> jointB } with an ambiguous direction: one side is a vocabulary
+            // joint, the other a model node name. Resolve it under BOTH interpretations and keep whichever maps
+            // more actual transforms. Counting vocabulary tokens alone is unreliable when model node names happen
+            // to equal vocabulary tokens (e.g. bones literally named "Hips"/"Head"), so resolved-bone count is the
+            // real signal; the vocab count is only the tie-breaker (bias toward the spec's target-key order).
+            var asTargetKey = ResolveDirection(mapping, nameToTransform, keyIsVocab: true,  out var targetKeyReport);
+            var asNodeKey   = ResolveDirection(mapping, nameToTransform, keyIsVocab: false, out var nodeKeyReport);
+
             int keyVocab = 0, valueVocab = 0;
             foreach (var kv in mapping)
             {
-                if (kv.Key != null && VocabToHumanName.ContainsKey(kv.Key)) keyVocab++;
-                if (kv.Value != null && VocabToHumanName.ContainsKey(kv.Value)) valueVocab++;
+                if (kv.Key != null && VocabToHumanBone.ContainsKey(kv.Key)) keyVocab++;
+                if (kv.Value != null && VocabToHumanBone.ContainsKey(kv.Value)) valueVocab++;
             }
 
-            var direction = keyVocab >= valueVocab ? MappingDirection.TargetKeyToNodeValue : MappingDirection.NodeKeyToTargetValue;
-            bool keyIsVocab = direction == MappingDirection.TargetKeyToNodeValue;
+            bool preferTargetKey = asTargetKey.Count != asNodeKey.Count
+                ? asTargetKey.Count > asNodeKey.Count   // more resolved bones wins
+                : keyVocab >= valueVocab;               // tie -> vocab-count heuristic
 
+            var bones = preferTargetKey ? asTargetKey : asNodeKey;
+            if (bones.Count == 0) return null;
+            return new SkeletonMappingResult
+            {
+                Bones = bones,
+                SelectedRig = rigName,
+                Direction = preferTargetKey ? MappingDirection.TargetKeyToNodeValue : MappingDirection.NodeKeyToTargetValue,
+                Report = preferTargetKey ? targetKeyReport : nodeKeyReport,
+            };
+        }
+
+        // Resolve the mapping under one interpretation: when keyIsVocab the key is the vocabulary joint and the
+        // value is the model node name (spec / TargetKeyToNodeValue), otherwise the roles are swapped.
+        private static Dictionary<string, Transform> ResolveDirection(
+            Dictionary<string, string> mapping, Dictionary<string, Transform> nameToTransform, bool keyIsVocab, out ValidationReport report)
+        {
             var bones = new Dictionary<string, Transform>();
-            var report = new ValidationReport();
+            report = new ValidationReport();
             foreach (var kv in mapping)
             {
                 string vocab = keyIsVocab ? kv.Key : kv.Value;
@@ -169,12 +208,26 @@ namespace UnityGLTF.KhrCharacter
                 if (nameToTransform.TryGetValue(nodeName, out var t) && t != null)
                     bones[vocab] = t;
                 else
+                {
                     report.Warnings.Add($"[KHR_character] skeleton joint '{vocab}' -> node '{nodeName}' was not found.");
+                    // Distinguish a broken *required* humanoid coupling from a merely-absent optional joint
+                    // (jaw/eyes/toes/...). Only the former should mark the rig degraded/invalid downstream.
+                    if (IsRequiredHumanoidJoint(vocab))
+                        report.MissingRequiredBones.Add(vocab);
+                }
             }
-
-            if (bones.Count == 0) return null;
-            return new SkeletonMappingResult { Bones = bones, SelectedRig = rigName, Direction = direction, Report = report };
+            // Valid when at least one bone resolved and no *required* humanoid joint was left unbound.
+            report.IsValid = bones.Count > 0 && report.MissingRequiredBones.Count == 0;
+            return bones;
         }
+
+        // A vocabulary joint is "required" when it maps to a Unity humanoid bone that Mecanim marks required
+        // (hips/spine/head and the four limbs). Optional joints (jaw/eyes/toes/shoulders/chest/upperChest/neck)
+        // are not, so their absence must not flag the mapping as degraded.
+        private static bool IsRequiredHumanoidJoint(string vocab)
+            => vocab != null
+               && VocabToHumanBone.TryGetValue(vocab, out var bone)
+               && HumanTrait.RequiredBone((int)bone);
 
         private static Dictionary<string, Transform> BuildNameToTransform(GLTFRoot root, IReadOnlyDictionary<int, GameObject> nodeIndexToGo)
         {

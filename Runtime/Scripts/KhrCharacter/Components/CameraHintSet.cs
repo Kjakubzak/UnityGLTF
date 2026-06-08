@@ -13,10 +13,24 @@ namespace UnityGLTF.KhrCharacter
         private readonly List<CameraHint> _hints = new List<CameraHint>();
         public IReadOnlyList<CameraHint> Hints => _hints;
 
+        // Persisted so an editor-imported prefab can rehydrate on Awake (the live import calls Bind, which also
+        // stores here). CameraHint is [Serializable] and its Transform/Camera refs survive prefab serialization.
+        // Hidden from the inspector: it's baked data, surfaced read-only by CameraHintSetEditor.
+        [SerializeField, HideInInspector] private List<CameraHint> _serializedHints = new List<CameraHint>();
+
         public void Bind(IReadOnlyList<CameraHint> hints)
         {
             _hints.Clear();
             if (hints != null) _hints.AddRange(hints);
+            _serializedHints = new List<CameraHint>(_hints);   // persist for prefab rehydration
+        }
+
+        // Rehydrate an editor-imported prefab. A live import adds this component fresh (no serialized hints) and
+        // calls Bind itself, so this is a no-op in that path; it only fires for a deserialized prefab.
+        private void Awake()
+        {
+            if (_hints.Count == 0 && _serializedHints != null && _serializedHints.Count > 0)
+                Bind(_serializedHints);
         }
 
         public bool TryGetByRole(string role, out CameraHint hint)

@@ -73,9 +73,14 @@ namespace UnityGLTF.KhrCharacter
             public readonly List<IndexProp> Index = new List<IndexProp>();
         }
 
+        // Persisted so an editor-imported prefab can rehydrate on Awake (the live import calls Initialize,
+        // which also stores here). Not the runtime working copy — see _set below, which is rebuilt from this.
+        // Hidden from the inspector: it's baked data, surfaced read-only by ExpressionControllerEditor.
+        [SerializeField, HideInInspector] private CharacterExpressionSet _serializedSet;
+
         private CharacterExpressionSet _set;
         private IExpressionSemantics _semantics;
-        private readonly List<ExpressionHandle> _handles = new List<ExpressionHandle>();
+        private ExpressionHandle[] _handles = System.Array.Empty<ExpressionHandle>();
 
         private float[] _weights;   // user-set driver per expression
         private float[] _rawInputs; // scratch (post-map)
@@ -88,8 +93,18 @@ namespace UnityGLTF.KhrCharacter
 
         public IReadOnlyList<ExpressionHandle> Expressions => _handles;
         public CharacterExpressionSet Set => _set;
-        public int Count => _handles.Count;
+        public int Count => _handles.Length;
         public IReadOnlyList<string> VocabularySets { get; private set; } = new List<string>();
+
+        // Rehydrate an editor-imported prefab. A live import adds this component fresh (no serialized set) and
+        // calls Initialize itself, so this is a no-op in that path; it only fires for a deserialized prefab.
+        private void Awake()
+        {
+            // Rehydrate only when a baked set was actually persisted. Unity may rehydrate a never-assigned
+            // [Serializable] field as a default (non-null) instance, so require a real payload, not just non-null.
+            if (_set == null && _serializedSet?.Expressions != null && _serializedSet.Expressions.Length > 0)
+                Initialize(_serializedSet);
+        }
 
         /// <summary>
         /// Receive the baked expression set and (optionally) an evaluation policy. The default additive policy
@@ -98,10 +113,13 @@ namespace UnityGLTF.KhrCharacter
         public void Initialize(CharacterExpressionSet set, IExpressionSemantics semantics = null)
         {
             _set = set;
+            // Persist for prefab rehydration. Guard the self-assign: Awake calls Initialize(_serializedSet), where
+            // set and _serializedSet are already the same reference.
+            if (!ReferenceEquals(_serializedSet, set)) _serializedSet = set;
             _semantics = semantics ?? AdditiveExpressionSemantics.Default;
             _set?.RebuildIndex();
 
-            _handles.Clear();
+            _handles = System.Array.Empty<ExpressionHandle>();
             _morphTargets.Clear();
             _jointTargets.Clear();
             _textureTargets.Clear();
@@ -121,6 +139,9 @@ namespace UnityGLTF.KhrCharacter
 
             if (_set?.Expressions == null) return;
 
+            // Array (not List): SetWeight/ResetAll replace elements in place; an array's element-write doesn't bump
+            // a version, so callers may safely enumerate Expressions while driving weights.
+            _handles = new ExpressionHandle[_set.Expressions.Length];
             var morphLookup = new Dictionary<(SkinnedMeshRenderer, int), MorphTarget>();
             var jointLookup = new Dictionary<(Transform, TrsChannel), JointTarget>();
             var textureLookup = new Dictionary<(Renderer, int), TextureRenderTarget>();
@@ -128,13 +149,13 @@ namespace UnityGLTF.KhrCharacter
             for (int e = 0; e < _set.Expressions.Length; e++)
             {
                 var track = _set.Expressions[e];
-                _handles.Add(new ExpressionHandle
+                _handles[e] = new ExpressionHandle
                 {
                     Name = track?.Name,
                     Value = 0f,
                     Domains = track?.Domains ?? ExpressionDomain.None,
                     IsBinary = track?.IsBinary ?? false,
-                });
+                };
 
                 if (track?.MorphDrivers != null)
                 {
@@ -287,6 +308,11 @@ namespace UnityGLTF.KhrCharacter
             EvaluateTextureTargets();
         }
 
+        // Compositing policy (shared by morph / joint / texture-UV): contributors sum additively as the
+        // default. If any active (d>0) Override contributor exists on a target, the winner (highest Priority,
+        // tie -> latest declaration / highest expression index) replaces the additive result with its absolute
+        // pose (base + winnerDelta). Additive-only targets are byte-identical to the pre-Override behavior
+        // because the winner branch is skipped entirely when no Override contributor is active.
         private void EvaluateMorphTargets()
         {
             for (int t = 0; t < _morphTargets.Count; t++)
@@ -295,12 +321,21 @@ namespace UnityGLTF.KhrCharacter
                 if (mt.Smr == null) continue;
 
                 float acc = mt.BaseValue;
+                int winner = -1, winnerPrio = 0, winnerExpr = -1;
                 for (int k = 0; k < mt.Drivers.Count; k++)
                 {
-                    float di = _d[mt.ExprIndices[k]];
+                    int e = mt.ExprIndices[k];
+                    float di = _d[e];
                     if (di <= 0f) continue;
                     var driver = mt.Drivers[k];
                     acc += _semantics.SampleScalarDelta(driver.Sampler, driver.DeltaValues, mt.BaseValue, di);
+                    if (IsOverride(e) && IsBetterWinner(driver.Priority, e, winner, winnerPrio, winnerExpr))
+                    { winner = k; winnerPrio = driver.Priority; winnerExpr = e; }
+                }
+                if (winner >= 0)
+                {
+                    var d = mt.Drivers[winner];
+                    acc = mt.BaseValue + _semantics.SampleScalarDelta(d.Sampler, d.DeltaValues, mt.BaseValue, _d[mt.ExprIndices[winner]]);
                 }
                 mt.Smr.SetBlendShapeWeight(mt.BlendShapeIndex, _semantics.Clamp01(acc) * mt.Multiplier);
             }
@@ -316,25 +351,43 @@ namespace UnityGLTF.KhrCharacter
                 if (jt.Channel == TrsChannel.Rotation)
                 {
                     var accDelta = Quaternion.identity;
+                    int winner = -1, winnerPrio = 0, winnerExpr = -1;
                     for (int k = 0; k < jt.Drivers.Count; k++)
                     {
-                        float di = _d[jt.ExprIndices[k]];
+                        int e = jt.ExprIndices[k];
+                        float di = _d[e];
                         if (di <= 0f) continue;
                         var driver = jt.Drivers[k];
                         var delta = _semantics.SampleRotationDelta(driver.Sampler, driver.DeltaQuat, driver.BaseQuat, di);
                         accDelta = _semantics.AccumulateRotation(accDelta, delta, 1f);
+                        if (IsOverride(e) && IsBetterWinner(driver.Priority, e, winner, winnerPrio, winnerExpr))
+                        { winner = k; winnerPrio = driver.Priority; winnerExpr = e; }
+                    }
+                    if (winner >= 0)
+                    {
+                        var d = jt.Drivers[winner];
+                        accDelta = _semantics.SampleRotationDelta(d.Sampler, d.DeltaQuat, d.BaseQuat, _d[jt.ExprIndices[winner]]);
                     }
                     jt.Target.localRotation = accDelta * jt.BaseQuat;
                 }
                 else
                 {
                     var acc = jt.BaseVec;
+                    int winner = -1, winnerPrio = 0, winnerExpr = -1;
                     for (int k = 0; k < jt.Drivers.Count; k++)
                     {
-                        float di = _d[jt.ExprIndices[k]];
+                        int e = jt.ExprIndices[k];
+                        float di = _d[e];
                         if (di <= 0f) continue;
                         var driver = jt.Drivers[k];
                         acc += _semantics.SampleVectorDelta(driver.Sampler, driver.DeltaVec, driver.BaseVec, di);
+                        if (IsOverride(e) && IsBetterWinner(driver.Priority, e, winner, winnerPrio, winnerExpr))
+                        { winner = k; winnerPrio = driver.Priority; winnerExpr = e; }
+                    }
+                    if (winner >= 0)
+                    {
+                        var d = jt.Drivers[winner];
+                        acc = jt.BaseVec + _semantics.SampleVectorDelta(d.Sampler, d.DeltaVec, d.BaseVec, _d[jt.ExprIndices[winner]]);
                     }
                     if (jt.Channel == TrsChannel.Translation) jt.Target.localPosition = acc;
                     else jt.Target.localScale = acc;
@@ -351,31 +404,45 @@ namespace UnityGLTF.KhrCharacter
 
                 target.Renderer.GetPropertyBlock(target.Mpb, target.Slot);
 
-                // UV transforms: additive _ST over the base.
+                // UV transforms: additive _ST over the base, with the same Override winner-takes rule as morph/joint.
                 for (int u = 0; u < target.Uv.Count; u++)
                 {
                     var uv = target.Uv[u];
                     var st = uv.BaseSt;
+                    int winner = -1, winnerPrio = 0, winnerExpr = -1;
                     for (int k = 0; k < uv.Drivers.Count; k++)
                     {
-                        float di = _d[uv.ExprIndices[k]];
+                        int e = uv.ExprIndices[k];
+                        float di = _d[e];
                         if (di <= 0f) continue;
                         var driver = uv.Drivers[k];
                         st += _semantics.SampleVector4Delta(driver.Sampler, driver.StValues, driver.BaseSt, di);
+                        if (IsOverride(e) && IsBetterWinner(driver.Priority, e, winner, winnerPrio, winnerExpr))
+                        { winner = k; winnerPrio = driver.Priority; winnerExpr = e; }
+                    }
+                    if (winner >= 0)
+                    {
+                        var d = uv.Drivers[winner];
+                        st = uv.BaseSt + _semantics.SampleVector4Delta(d.Sampler, d.StValues, d.BaseSt, _d[uv.ExprIndices[winner]]);
                     }
                     target.Mpb.SetVector(uv.PropId, st);
                 }
 
-                // Index swaps: the most-active expression above threshold wins; otherwise re-base.
+                // Index swaps: among drivers active above threshold, pick the winner by Priority desc, then
+                // driver weight, then declaration order (earliest). With equal priorities (the baker default)
+                // this is identical to the prior most-active-wins rule. Otherwise re-base to the slot's texture.
                 for (int x = 0; x < target.Index.Count; x++)
                 {
                     var idx = target.Index[x];
-                    int best = -1;
-                    float bestWeight = IndexSwapThreshold;
+                    int best = -1, bestPrio = 0;
+                    float bestWeight = 0f;
                     for (int k = 0; k < idx.Drivers.Count; k++)
                     {
                         float di = _d[idx.ExprIndices[k]];
-                        if (di > bestWeight) { bestWeight = di; best = k; }
+                        if (di <= IndexSwapThreshold) continue;
+                        int prio = idx.Drivers[k].Priority;
+                        if (best < 0 || prio > bestPrio || (prio == bestPrio && di > bestWeight))
+                        { best = k; bestPrio = prio; bestWeight = di; }
                     }
 
                     Texture tex = idx.BaseTexture;
@@ -391,6 +458,24 @@ namespace UnityGLTF.KhrCharacter
 
                 target.Renderer.SetPropertyBlock(target.Mpb, target.Slot);
             }
+        }
+
+        // True when the expression at exprIndex requests Override (winner-takes) compositing.
+        private bool IsOverride(int exprIndex)
+        {
+            var exprs = _set?.Expressions;
+            return exprs != null && exprIndex >= 0 && exprIndex < exprs.Length
+                && exprs[exprIndex] != null && exprs[exprIndex].BlendMode == ExpressionBlendMode.Override;
+        }
+
+        // Override winner selection on a forward scan of a target's contributors: higher Priority wins; on a tie
+        // the latest declaration wins. A target's expression indices are non-decreasing across k, so a >= test
+        // keeps the latest (highest exprIndex / latest declaration order). bestK < 0 means "no winner yet".
+        private static bool IsBetterWinner(int priority, int exprIndex, int bestK, int bestPriority, int bestExpr)
+        {
+            if (bestK < 0) return true;
+            if (priority != bestPriority) return priority > bestPriority;
+            return exprIndex >= bestExpr;
         }
 
         private bool TryIndex(string name, out int index)
