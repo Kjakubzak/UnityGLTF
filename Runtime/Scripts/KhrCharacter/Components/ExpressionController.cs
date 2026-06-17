@@ -93,6 +93,11 @@ namespace UnityGLTF.KhrCharacter
 
         public IReadOnlyList<ExpressionHandle> Expressions => _handles;
         public CharacterExpressionSet Set => _set;
+
+        // The baked set as persisted with the component, available at edit time too (the runtime working copy
+        // _set is only built in Play mode / after Initialize). Intended for editor authoring/extraction tooling.
+        public CharacterExpressionSet BakedSet => _serializedSet;
+
         public int Count => _handles.Length;
         public IReadOnlyList<string> VocabularySets { get; private set; } = new List<string>();
 

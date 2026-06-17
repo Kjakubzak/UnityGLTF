@@ -216,7 +216,6 @@ namespace UnityGLTF.KhrCharacter.Tests
             // Note: Bind is deliberately NOT called — the solver must resolve the sibling ExpressionController
             // itself on the first LateUpdate (the deserialized-prefab path).
             var gaze = go.AddComponent<GazeSolver>();
-            gaze.OutputMode = GazeSolver.GazeOutputMode.Expression;
             gaze.Mode = GazeSolver.LookAtMode.CustomTarget;
 
             var target = NewGo("target");

@@ -5,9 +5,9 @@ using UnityEngine;
 namespace UnityGLTF.KhrCharacter.Editor
 {
     /// <summary>
-    /// Inspector for <see cref="GazeSolver"/>: the default tunables (mode, weight, clamps, look-expression
-    /// names, authored targets) plus Play-mode controls — a "Look at Main Camera" / "Stop" pair and a live
-    /// weight slider.
+    /// Inspector for <see cref="GazeSolver"/>: the default tunables (mode, weight, reference frame,
+    /// look-expression names, authored targets) plus Play-mode controls — a "Look at Main Camera" / "Stop" pair
+    /// and a live weight slider.
     /// </summary>
     [CustomEditor(typeof(GazeSolver))]
     public class GazeSolverEditor : UnityEditor.Editor

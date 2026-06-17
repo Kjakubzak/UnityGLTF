@@ -4,29 +4,35 @@ using UnityEngine;
 namespace UnityGLTF.KhrCharacter
 {
     /// <summary>
-    /// Gaze solver. Two output modes: <see cref="GazeOutputMode.BoneAim"/> rotates eye bones toward the target,
-    /// or <see cref="GazeOutputMode.Expression"/> drives look left/right/up/down expressions. Runs before
+    /// Spec-aligned, expression-driven gaze solver. Drives look left/right/up/down expression weights toward a
+    /// target, measured against a <see cref="ReferenceFrame"/> (the gaze origin). Runs before
     /// <see cref="ExpressionController"/> (execution order 50 &lt; 100) so it feeds the same-frame evaluation.
-    /// Angles are measured against the character's forward frame; a target behind the head is clamped, never
-    /// flipped.
+    /// Each direction saturates to 1 at 90° (per the look-expression convention); a target behind the head is
+    /// clamped, never flipped.
+    ///
+    /// This component is intentionally vendor-neutral and carries no geometric eye-bone aiming: that engine-only
+    /// convenience lives in the separate, opt-in <see cref="EyeAimConstraint"/> (not part of KHR_character).
     /// </summary>
     [DisallowMultipleComponent]
     [DefaultExecutionOrder(50)]
     public class GazeSolver : MonoBehaviour
     {
-        public enum GazeOutputMode { BoneAim, Expression }
         public enum LookAtMode { None, Camera, CustomTarget }
 
-        public GazeOutputMode OutputMode = GazeOutputMode.Expression;
         public LookAtMode Mode = LookAtMode.None;
 
         public Transform Target;
         public Camera TargetCamera;          // used when Mode == Camera; defaults to Camera.main
         [Range(0f, 1f)] public float Weight = 1f;
-        public float MaxYawDegrees = 35f;    // BoneAim clamp
-        public float MaxPitchDegrees = 30f;  // BoneAim clamp
 
-        // Look-expression names (override per model vocabulary if needed).
+        // Gaze origin / measurement frame. When unset, resolves to the mapped head bone (if a SkeletonMap
+        // resolved one), else this transform — so expression-driven gaze works on non-humanoid characters with
+        // no skeleton mapping. Serialized with the prefab (intra-hierarchy Transform refs survive).
+        [Tooltip("Optional gaze origin/measurement frame. Falls back to the mapped head bone, then this transform.")]
+        public Transform ReferenceFrame;
+
+        // Look-expression names. Auto-detected from the model's baked expressions at import (see
+        // KhrCharacterImportContext.BindLookExpressionNames); override per model vocabulary if needed.
         public string LookLeft = "lookLeft";
         public string LookRight = "lookRight";
         public string LookUp = "lookUp";
@@ -41,9 +47,7 @@ namespace UnityGLTF.KhrCharacter
         [SerializeField, HideInInspector] private List<LookAtTarget> _serializedTargets = new List<LookAtTarget>();
 
         private ExpressionController _expressions;
-        private Transform _leftEye, _rightEye, _head;
-        private Quaternion _leftEyeRest, _rightEyeRest;
-        private bool _hasEyes;
+        private Transform _head;
         private bool _lazyBound;
 
         private Vector3 _worldTarget;
@@ -62,33 +66,16 @@ namespace UnityGLTF.KhrCharacter
             if (authoredTargets != null) _authoredTargets.AddRange(authoredTargets);
             _serializedTargets = new List<LookAtTarget>(_authoredTargets);   // persist for prefab rehydration
             _expressions = expressions;
-            ResolveBones(skeleton);
+            ResolveHead(skeleton);
             _lazyBound = true;   // a live bind fully resolves links; skip the LateUpdate lazy path
         }
 
-        /// <summary>Explicit eye/head bone assignment (used when no SkeletonMap is available, e.g. in tests).</summary>
-        public void SetEyeBones(Transform leftEye, Transform rightEye, Transform head)
+        // Resolve only the head bone (the default gaze frame when ReferenceFrame is unset). Eye-bone resolution
+        // is no longer this component's concern — see EyeAimConstraint.
+        private void ResolveHead(SkeletonMap skeleton)
         {
-            _leftEye = leftEye;
-            _rightEye = rightEye;
-            _head = head;
-            CacheEyeRest();
-        }
-
-        private void ResolveBones(SkeletonMap skeleton)
-        {
-            if (skeleton == null) { _hasEyes = false; return; }
-            skeleton.TryGetBone("leftEye", out _leftEye);
-            skeleton.TryGetBone("rightEye", out _rightEye);
+            if (skeleton == null) return;
             skeleton.TryGetBone("head", out _head);
-            CacheEyeRest();
-        }
-
-        private void CacheEyeRest()
-        {
-            if (_leftEye != null) _leftEyeRest = _leftEye.localRotation;
-            if (_rightEye != null) _rightEyeRest = _rightEye.localRotation;
-            _hasEyes = _leftEye != null || _rightEye != null;
         }
 
         private void LateUpdate()
@@ -97,18 +84,17 @@ namespace UnityGLTF.KhrCharacter
             if (Mode == LookAtMode.None || Weight <= 0f) { ResetOutputs(); return; }
             if (!TryGetTargetPosition(out var targetPos)) { ResetOutputs(); return; }
 
-            var frame = _head != null ? _head : transform;
+            // Frame resolution order: explicit ReferenceFrame -> mapped head -> root transform.
+            var frame = ReferenceFrame != null ? ReferenceFrame : (_head != null ? _head : transform);
             var toTarget = targetPos - frame.position;
             if (toTarget.sqrMagnitude < 1e-10f) { ResetOutputs(); return; }
 
-            // Measure yaw/pitch in the frame the eyes parent to (head when available, else the root) so the
-            // decomposition stays consistent with where BoneAim applies the rotation.
+            // Measure yaw/pitch in the gaze frame so the decomposition is consistent with the chosen origin.
             var local = frame.InverseTransformDirection(toTarget.normalized);
             float yaw = Mathf.Atan2(local.x, local.z);                                          // + = right
             float pitch = Mathf.Atan2(local.y, Mathf.Sqrt(local.x * local.x + local.z * local.z)); // + = up
 
-            if (OutputMode == GazeOutputMode.Expression) DriveExpressions(yaw, pitch);
-            else DriveBones(yaw, pitch);
+            DriveExpressions(yaw, pitch);
         }
 
         // Cross-component Awake order isn't guaranteed, so a deserialized prefab resolves its sibling
@@ -120,7 +106,7 @@ namespace UnityGLTF.KhrCharacter
             if (_authoredTargets.Count == 0 && _serializedTargets != null && _serializedTargets.Count > 0)
                 _authoredTargets.AddRange(_serializedTargets);
             if (_expressions == null) _expressions = GetComponent<ExpressionController>();
-            if (!_hasEyes) ResolveBones(GetComponent<SkeletonMap>());
+            if (_head == null) ResolveHead(GetComponent<SkeletonMap>());
         }
 
         private bool TryGetTargetPosition(out Vector3 pos)
@@ -156,30 +142,13 @@ namespace UnityGLTF.KhrCharacter
             if (!string.IsNullOrEmpty(name)) _expressions.SetWeight(name, value);
         }
 
-        private void DriveBones(float yaw, float pitch)
-        {
-            if (!_hasEyes) return;
-            float yawDeg = Mathf.Clamp(yaw * Mathf.Rad2Deg, -MaxYawDegrees, MaxYawDegrees);
-            float pitchDeg = Mathf.Clamp(pitch * Mathf.Rad2Deg, -MaxPitchDegrees, MaxPitchDegrees);
-            var gaze = Quaternion.Euler(-pitchDeg, yawDeg, 0f); // pitch about local X, yaw about local Y
-            if (_leftEye != null) _leftEye.localRotation = Quaternion.Slerp(_leftEyeRest, _leftEyeRest * gaze, Weight);
-            if (_rightEye != null) _rightEye.localRotation = Quaternion.Slerp(_rightEyeRest, _rightEyeRest * gaze, Weight);
-        }
-
         private void ResetOutputs()
         {
-            if (OutputMode == GazeOutputMode.Expression && _expressions != null)
-            {
-                SetIfPresent(LookRight, 0f);
-                SetIfPresent(LookLeft, 0f);
-                SetIfPresent(LookUp, 0f);
-                SetIfPresent(LookDown, 0f);
-            }
-            else if (_hasEyes)
-            {
-                if (_leftEye != null) _leftEye.localRotation = _leftEyeRest;
-                if (_rightEye != null) _rightEye.localRotation = _rightEyeRest;
-            }
+            if (_expressions == null) return;
+            SetIfPresent(LookRight, 0f);
+            SetIfPresent(LookLeft, 0f);
+            SetIfPresent(LookUp, 0f);
+            SetIfPresent(LookDown, 0f);
         }
     }
 }

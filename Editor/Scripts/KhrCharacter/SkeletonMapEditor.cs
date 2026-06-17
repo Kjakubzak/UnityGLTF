@@ -58,6 +58,14 @@ namespace UnityGLTF.KhrCharacter.Editor
 
             var skeleton = (SkeletonMap)target;
             EditorGUILayout.Space();
+            // RigVocabularies is runtime-populated (after Bind/rehydrate); the serialized "Selected Rig" above is
+            // the edit-time equivalent. Show the live detected vocabularies in Play mode.
+            if (Application.isPlaying)
+            {
+                var vocab = skeleton.RigVocabularies;
+                EditorGUILayout.LabelField("Rig Vocabularies",
+                    vocab != null && vocab.Count > 0 ? string.Join(", ", vocab) : "—");
+            }
             EditorGUILayout.LabelField("Humanoid Available", skeleton.HumanoidAvailable.ToString());
 
             using (new EditorGUI.DisabledScope(!Application.isPlaying))

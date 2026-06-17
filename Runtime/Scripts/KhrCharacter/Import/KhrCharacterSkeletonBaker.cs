@@ -13,7 +13,7 @@ namespace UnityGLTF.KhrCharacter
     /// <c>rigName -&gt; { jointA -&gt; jointB }</c> with an ambiguous direction: one side is a known vocabulary
     /// joint (hips/head/leftUpperArm/...), the other is a model node name. We auto-detect which side is the
     /// vocabulary by counting matches against a known token set, so both the spec layout and the inverted
-    /// (0b5vr-style) layout resolve. Also maps vocabulary joints to Unity humanoid bone names.
+    /// layout resolve. Also maps vocabulary joints to Unity humanoid bone names.
     /// </summary>
     internal static class KhrCharacterSkeletonBaker
     {

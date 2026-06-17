@@ -119,7 +119,7 @@ namespace UnityGLTF.KhrCharacter
                     // authoring conventions reach the same SkinnedMeshRenderer:
                     //  • standard glTF: target.path == "weights" on a node (one channel drives ALL its blendshapes)
                     //  • KHR_animation_pointer: "/nodes/{i}/weights/{j}" (one channel drives ONE blendshape) — the
-                    //    VRM/0b5vr convention. Requires the KHR_animation_pointer import plugin so the channel's
+                    //    VRM convention. Requires the KHR_animation_pointer import plugin so the channel's
                     //    target extension deserializes to a typed pointer (see GetPointer).
                     SkinnedMeshRenderer smr = null;
                     int singleShapeIndex = -1;
@@ -577,7 +577,7 @@ namespace UnityGLTF.KhrCharacter
         }
 
         // Parse a KHR_animation_pointer morph-weight path of the exact form "/nodes/{nodeIndex}/weights/{blendShapeIndex}"
-        // (the VRM/0b5vr per-blendshape convention). Other shapes (e.g. "/meshes/.../weights") are rejected.
+        // (the VRM per-blendshape convention). Other shapes (e.g. "/meshes/.../weights") are rejected.
         internal static bool TryParseNodeWeightsPointer(string pointer, out int nodeIndex, out int blendShapeIndex)
         {
             nodeIndex = -1;

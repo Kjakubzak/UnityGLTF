@@ -14,6 +14,7 @@ namespace UnityGLTF.KhrCharacter.Editor
     {
         private bool _showExpressions = true;
         private bool _showVocabularySets = true;
+        private CharacterExpressionSetAsset _authoringAsset;
 
         public override void OnInspectorGUI()
         {
@@ -99,8 +100,63 @@ namespace UnityGLTF.KhrCharacter.Editor
                 }
             }
 
+            DrawAuthoring();
+
             EditorGUILayout.Space();
             EditorGUILayout.HelpBox("Enter Play mode to drive expression weights.", MessageType.Info);
+        }
+
+        // Edit-time authoring affordances: extract the baked set into a reusable ScriptableObject asset (whose
+        // default inspector then edits expression metadata), plus a session slot to quickly re-open such an asset.
+        private void DrawAuthoring()
+        {
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Authoring", EditorStyles.boldLabel);
+
+            _authoringAsset = (CharacterExpressionSetAsset)EditorGUILayout.ObjectField(
+                "Expression Set Asset", _authoringAsset, typeof(CharacterExpressionSetAsset), false);
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (GUILayout.Button("Extract to ScriptableObject")) ExtractToAsset();
+                using (new EditorGUI.DisabledScope(_authoringAsset == null))
+                    if (GUILayout.Button("Edit Asset")) Selection.activeObject = _authoringAsset;
+            }
+
+            EditorGUILayout.HelpBox(
+                "Extract creates a CharacterExpressionSetAsset from the baked set, capturing drivers as " +
+                "scene-independent bindings (renderer/bone paths + blendshape names + curves) you can edit in its " +
+                "inspector and re-resolve onto a character. glTF export is still future work.", MessageType.Info);
+        }
+
+        private void ExtractToAsset()
+        {
+            var controller = (ExpressionController)target;
+            var baked = controller.BakedSet;
+            if (baked?.Expressions == null || baked.Expressions.Length == 0)
+            {
+                EditorUtility.DisplayDialog("Extract Expression Set", "No baked expressions to extract.", "OK");
+                return;
+            }
+
+            var path = EditorUtility.SaveFilePanelInProject(
+                "Save Expression Set", controller.gameObject.name + "_Expressions", "asset",
+                "Choose where to save the extracted CharacterExpressionSetAsset.");
+            if (string.IsNullOrEmpty(path)) return;
+
+            var asset = ScriptableObject.CreateInstance<CharacterExpressionSetAsset>();
+            // Capture scene-independent driver bindings (renderer/bone paths + blendshape names + curves) plus
+            // metadata. controller.transform is the character root (the importer attaches the controller there),
+            // so driver paths resolve relative to it and the asset serializes without live scene refs.
+            asset.Bindings = CharacterExpressionSetAsset.Extract(baked, controller.transform);
+
+            AssetDatabase.CreateAsset(asset, path);
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
+
+            _authoringAsset = asset;
+            EditorGUIUtility.PingObject(asset);
+            Selection.activeObject = asset;
         }
     }
 }

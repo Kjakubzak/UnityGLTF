@@ -5,6 +5,15 @@ using UnityGLTF.Plugins;
 
 namespace UnityGLTF.KhrCharacter
 {
+    /// <summary>How the importer treats the character's rig (mirrors FBX-style "Rig" import settings).</summary>
+    public enum RigImportMode
+    {
+        /// <summary>Build + assign a Mecanim humanoid Avatar when the skeleton mapping resolves the required bones.</summary>
+        Humanoid,
+        /// <summary>Keep the generic rig; never build a humanoid Avatar.</summary>
+        Generic,
+    }
+
     /// <summary>
     /// Import plugin for the KHR Character/Avatar extension set (glTF PR #2512). Modeled on the
     /// KHR_audio_emitter plugin. Disabled by default and marked non-ratified until the extension set is
@@ -19,8 +28,13 @@ namespace UnityGLTF.KhrCharacter
 
         public override bool EnabledByDefault => false;
 
+        [Tooltip("Rig: Humanoid (default) builds and assigns a Mecanim humanoid Avatar when the skeleton mapping " +
+                 "resolves the required bones; Generic keeps the generic rig and never builds a humanoid Avatar. " +
+                 "Vendor-neutral — operates over whatever rig vocabularies the model declares.")]
+        public RigImportMode Rig = RigImportMode.Humanoid;
+
         public override GLTFImportPluginContext CreateInstance(GLTFImportContext context)
-            => new KhrCharacterImportContext(context);
+            => new KhrCharacterImportContext(context, Rig);
     }
 
     /// <summary>
@@ -30,6 +44,7 @@ namespace UnityGLTF.KhrCharacter
     public class KhrCharacterImportContext : GLTFImportPluginContext
     {
         private readonly GLTFImportContext _context;
+        private readonly RigImportMode _rigMode;
         private bool _isCharacter;
 
         // UnityGLTF doesn't expose a GameObject -> node-index map, so build our own from the node callbacks.
@@ -38,9 +53,10 @@ namespace UnityGLTF.KhrCharacter
         private readonly List<(int nodeIndex, KHR_node_camera_hint hint)> _cameraHints = new List<(int, KHR_node_camera_hint)>();
         private readonly List<(int nodeIndex, KHR_node_lookat_target target)> _lookatTargets = new List<(int, KHR_node_lookat_target)>();
 
-        public KhrCharacterImportContext(GLTFImportContext context)
+        public KhrCharacterImportContext(GLTFImportContext context, RigImportMode rigMode = RigImportMode.Humanoid)
         {
             _context = context;
+            _rigMode = rigMode;
         }
 
         public override void OnAfterImportRoot(GLTFRoot gltfRoot)
@@ -164,11 +180,49 @@ namespace UnityGLTF.KhrCharacter
             {
                 var gaze = sceneObject.GetComponent<GazeSolver>() ?? sceneObject.AddComponent<GazeSolver>();
                 gaze.Bind(lookTargets, hub.Expressions, hub.Skeleton);
+                BindLookExpressionNames(gaze, hub.Expressions);
                 hub.Gaze = gaze;
             }
 
             // ViewModeController is a passive utility (no extension required); expose it for app code.
             hub.View = sceneObject.GetComponent<ViewModeController>() ?? sceneObject.AddComponent<ViewModeController>();
+        }
+
+        // Look-direction expression name candidates, ordered by preference. Vendor-neutral: covers common
+        // spellings/conventions (camelCase, snake_case, eye/eyes/gaze prefixes), not VRM only. The first entry
+        // matches the GazeSolver default.
+        private static readonly string[] LookRightCandidates = { "lookRight", "look_right", "lookatRight", "eyeLookRight", "eyesLookRight", "gazeRight" };
+        private static readonly string[] LookLeftCandidates  = { "lookLeft", "look_left", "lookatLeft", "eyeLookLeft", "eyesLookLeft", "gazeLeft" };
+        private static readonly string[] LookUpCandidates    = { "lookUp", "look_up", "lookatUp", "eyeLookUp", "eyesLookUp", "gazeUp" };
+        private static readonly string[] LookDownCandidates  = { "lookDown", "look_down", "lookatDown", "eyeLookDown", "eyesLookDown", "gazeDown" };
+
+        // Bind each of the four look directions to whichever expression actually exists in the baked set, so the
+        // gaze solver drives the model's real expression names instead of a hardcoded vocabulary. Falls back to
+        // the GazeSolver default when no candidate matches (SetWeight no-ops on an unknown name -> inert). The
+        // names stay public/inspector-editable, so this auto-detection is overridable. Internal for unit tests.
+        internal static void BindLookExpressionNames(GazeSolver gaze, ExpressionController expressions)
+        {
+            if (expressions == null) return;
+            var handles = expressions.Expressions;
+            if (handles == null || handles.Count == 0) return;
+
+            // Case-insensitive match -> actual baked name (ExpressionController.SetWeight is case-sensitive).
+            var byLower = new Dictionary<string, string>();
+            foreach (var h in handles)
+                if (!string.IsNullOrEmpty(h.Name)) byLower[h.Name.ToLowerInvariant()] = h.Name;
+
+            if (TryResolveLookName(byLower, LookRightCandidates, out var right)) gaze.LookRight = right;
+            if (TryResolveLookName(byLower, LookLeftCandidates, out var left)) gaze.LookLeft = left;
+            if (TryResolveLookName(byLower, LookUpCandidates, out var up)) gaze.LookUp = up;
+            if (TryResolveLookName(byLower, LookDownCandidates, out var down)) gaze.LookDown = down;
+        }
+
+        private static bool TryResolveLookName(Dictionary<string, string> byLower, string[] candidates, out string matched)
+        {
+            foreach (var c in candidates)
+                if (byLower.TryGetValue(c.ToLowerInvariant(), out matched)) return true;
+            matched = null;
+            return false;
         }
 
         private void WireSkeleton(GameObject sceneObject, KhrCharacter hub)
@@ -190,10 +244,10 @@ namespace UnityGLTF.KhrCharacter
 
             var skeleton = sceneObject.GetComponent<SkeletonMap>() ?? sceneObject.AddComponent<SkeletonMap>();
             skeleton.Bind(result);
-            // Persist the intent to (re)build + assign the humanoid Avatar when this prefab rehydrates at
-            // runtime. The build self-validates required bones and falls back to the generic rig, so this is
-            // safe to set for non-humanoid rigs too. Only meaningful when an actual bone mapping resolved.
-            if (result.Bones != null && result.Bones.Count > 0)
+            // Flag the intent to (re)build + assign the humanoid Avatar when this prefab rehydrates at runtime,
+            // gated on the Rig import mode: only Humanoid, and only when a bone mapping actually resolved. The
+            // build self-validates required bones and falls back to the generic rig; Generic never builds one.
+            if (ShouldBuildHumanoid(_rigMode, result))
                 skeleton.BuildHumanoidOnAwake = true;
             hub.Skeleton = skeleton;
         }
@@ -235,6 +289,12 @@ namespace UnityGLTF.KhrCharacter
                 return new KHR_character_expression_Factory().Deserialize(root, raw.ExtensionData) as KHR_character_expression;
             return null;
         }
+
+        // Decide whether to flag the SkeletonMap to (re)build + assign the humanoid Avatar when the prefab
+        // rehydrates: only in Humanoid rig mode AND only when an actual bone mapping resolved. Pure function so
+        // the rig-mode gating is unit-testable without a full glTF import.
+        internal static bool ShouldBuildHumanoid(RigImportMode rigMode, SkeletonMappingResult result)
+            => rigMode == RigImportMode.Humanoid && result?.Bones != null && result.Bones.Count > 0;
 
         internal static List<CharacterCapability> DeriveCapabilities(ICollection<string> presentExtensions, CharacterExpressionSet set)
         {
