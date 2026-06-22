@@ -1374,6 +1374,80 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
+        public void CameraHint_EmptyOrNullLabel_OmittedFromWire_ValidLabelKept()
+        {
+            // Spec: KHR_node_camera_hint.label is OPTIONAL but minLength:1 WHEN PRESENT — an empty string is invalid.
+            // Unity coerces a null [SerializeField] string to "" on prefab save, so a label that was absent on import
+            // can resurface as "". With a valid role, the hint still exports, but an empty/null label must be OMITTED
+            // from the wire while a real label is kept. Asserts the serialized JSON (the actual wire contract).
+            var root = new GameObject("char");
+            _created.Add(root);
+            root.AddComponent<KhrCharacter>();
+
+            var emptyLabelNode = new GameObject("emptyLabelNode").transform; emptyLabelNode.SetParent(root.transform, false);
+            var nullLabelNode = new GameObject("nullLabelNode").transform; nullLabelNode.SetParent(root.transform, false);
+            var validLabelNode = new GameObject("validLabelNode").transform; validLabelNode.SetParent(root.transform, false);
+
+            root.AddComponent<CameraHintSet>().Bind(new List<CameraHint>
+            {
+                new CameraHint { Role = "portrait", Label = "",     Node = emptyLabelNode },   // empty label -> omitted
+                new CameraHint { Role = "portrait", Label = null,   Node = nullLabelNode },    // null label  -> omitted
+                new CameraHint { Role = "portrait", Label = "Hero", Node = validLabelNode },   // valid label -> kept
+            });
+
+            var gltf = ExportToGltfRoot(root);
+
+            // Empty label: the hint still exports (role is valid) but the serialized wire must NOT contain "label".
+            var emptyExt = NodeExtension<KHR_node_camera_hint>(gltf, FindNodeIndex(gltf, "emptyLabelNode"), KHR_node_camera_hint.EXTENSION_NAME);
+            Assert.IsNotNull(emptyExt, "a valid role still exports the camera hint");
+            var emptyObj = (JObject)emptyExt.Serialize().Value;
+            Assert.IsTrue(emptyObj.ContainsKey("role"), "role must still be present on the wire");
+            Assert.IsFalse(emptyObj.ContainsKey("label"), "an empty label must be omitted from the wire (schema minLength:1)");
+
+            // Null label: same — no "label" key on the wire.
+            var nullExt = NodeExtension<KHR_node_camera_hint>(gltf, FindNodeIndex(gltf, "nullLabelNode"), KHR_node_camera_hint.EXTENSION_NAME);
+            Assert.IsNotNull(nullExt);
+            Assert.IsFalse(((JObject)nullExt.Serialize().Value).ContainsKey("label"), "a null label must be omitted from the wire");
+
+            // Valid label: emitted verbatim.
+            var validExt = NodeExtension<KHR_node_camera_hint>(gltf, FindNodeIndex(gltf, "validLabelNode"), KHR_node_camera_hint.EXTENSION_NAME);
+            Assert.IsNotNull(validExt);
+            Assert.AreEqual("Hero", ((JObject)validExt.Serialize().Value)["label"]?.Value<string>(), "a non-empty label must be emitted");
+        }
+
+        [Test]
+        public void LookatTarget_EmptyHint_OmittedFromWire_ValidHintKept()
+        {
+            // Spec: KHR_node_lookat_target.hint is OPTIONAL but minLength:1 WHEN PRESENT. An empty string (e.g. from a
+            // prefab-saved null) must be omitted, leaving a valid empty {} extension (presence alone marks the target);
+            // a real hint is kept. Asserts the serialized wire.
+            var root = new GameObject("char");
+            _created.Add(root);
+            root.AddComponent<KhrCharacter>();
+
+            var emptyHintNode = new GameObject("emptyHintNode").transform; emptyHintNode.SetParent(root.transform, false);
+            var validHintNode = new GameObject("validHintNode").transform; validHintNode.SetParent(root.transform, false);
+
+            root.AddComponent<GazeSolver>().Bind(new List<LookAtTarget>
+            {
+                new LookAtTarget { Node = emptyHintNode, Hint = "" },           // empty hint -> omitted, {} stays valid
+                new LookAtTarget { Node = validHintNode, Hint = "eye_target" }, // valid hint -> kept
+            }, null);
+
+            var gltf = ExportToGltfRoot(root);
+
+            // Empty hint: extension still present (marks the target) but the wire must NOT contain "hint".
+            var emptyExt = NodeExtension<KHR_node_lookat_target>(gltf, FindNodeIndex(gltf, "emptyHintNode"), KHR_node_lookat_target.EXTENSION_NAME);
+            Assert.IsNotNull(emptyExt, "presence alone marks the node as a look-at target");
+            Assert.IsFalse(((JObject)emptyExt.Serialize().Value).ContainsKey("hint"), "an empty hint must be omitted from the wire (schema minLength:1)");
+
+            // Valid hint: emitted.
+            var validExt = NodeExtension<KHR_node_lookat_target>(gltf, FindNodeIndex(gltf, "validHintNode"), KHR_node_lookat_target.EXTENSION_NAME);
+            Assert.IsNotNull(validExt);
+            Assert.AreEqual("eye_target", ((JObject)validExt.Serialize().Value)["hint"]?.Value<string>(), "a non-empty hint must be emitted");
+        }
+
+        [Test]
         public void LookatTarget_EmptyHint_StillEmitsExtension()
         {
             // hint is optional: an empty {} is valid and its presence alone marks the node as a look-at target.

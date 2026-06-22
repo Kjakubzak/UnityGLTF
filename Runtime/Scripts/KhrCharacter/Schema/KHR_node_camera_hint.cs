@@ -24,7 +24,8 @@ namespace GLTF.Schema
             if (Role != null) obj.Add("role", Role);
             if (Camera.HasValue) obj.Add("camera", Camera.Value);
             if (TargetNode.HasValue) obj.Add("targetNode", TargetNode.Value);
-            if (Label != null) obj.Add("label", Label);
+            // label is optional but minLength:1 — never emit "" (Unity coerces a null SerializeField string to "").
+            if (!string.IsNullOrEmpty(Label)) obj.Add("label", Label);
             return new JProperty(EXTENSION_NAME, obj);
         }
 

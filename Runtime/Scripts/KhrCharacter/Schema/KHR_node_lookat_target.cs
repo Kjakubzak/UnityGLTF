@@ -18,7 +18,8 @@ namespace GLTF.Schema
         {
             if (RawData != null) return new JProperty(RawData.Name, RawData.Value);
             var obj = new JObject();
-            if (Hint != null) obj.Add("hint", Hint);
+            // hint is optional but minLength:1 — never emit "" (Unity coerces a null SerializeField string to "").
+            if (!string.IsNullOrEmpty(Hint)) obj.Add("hint", Hint);
             return new JProperty(EXTENSION_NAME, obj);
         }
 
