@@ -36,6 +36,15 @@ namespace UnityGLTF.KhrCharacter
         ReferencePose, SkeletonMapping, CameraHint, LookAtTarget
     }
 
+    /// <summary>How the importer treats the character's rig (mirrors FBX-style "Rig" import settings).</summary>
+    public enum RigImportMode
+    {
+        /// <summary>Build + assign a Mecanim humanoid Avatar when the skeleton mapping resolves the required bones.</summary>
+        Humanoid,
+        /// <summary>Keep the generic rig; never build a humanoid Avatar.</summary>
+        Generic,
+    }
+
     // ── Sampler (shared by all driver kinds) ─────────────────────────────────
     [Serializable]
     public struct Sampler
@@ -76,11 +85,15 @@ namespace UnityGLTF.KhrCharacter
         public Renderer Renderer;
         public int SubmeshSlot;          // material index on the renderer
         public int PropertyId;           // resolved per pipeline (Shader.PropertyToID) at bake
+        public string PropertyName;      // human-readable shader property name (e.g., "_BaseMap") — required for export
+        public string GltfTextureSlot;   // glTF texture slot name (e.g., "baseColorTexture") — required for export
         public TexKind Kind;
         public Sampler Sampler;
         public Texture[] SwapTextures;   // IndexSwap: resolved texture per STEP key
         public Vector4[] StValues;       // UvTransform: frame-0-relative _ST (tiling.xy, offset.zw) deltas
-        public Vector4 BaseSt;           // UvTransform: the material's base _ST
+        public Vector4 BaseSt;           // UvTransform: the material's base _ST (runtime rest anchor)
+        public Vector4 Frame0St;         // UvTransform: animation frame-0 absolute _ST; multi-key export anchor when HasFrame0St
+        public bool HasFrame0St;         // true once import captured the authored frame-0 absolute; else export anchors on BaseSt
         public int Priority;             // same-slot conflict resolution
     }
 

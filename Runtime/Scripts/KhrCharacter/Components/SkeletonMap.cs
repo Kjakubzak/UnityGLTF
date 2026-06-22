@@ -41,6 +41,13 @@ namespace UnityGLTF.KhrCharacter
         public MappingDirection DetectedDirection => _result?.Direction ?? MappingDirection.Unknown;
         public SkeletonMappingResult Result => _result;
 
+        // Internal access to the last built avatar for runtime rig switching (avoids exposing the field publicly).
+        internal Avatar LastBuiltAvatar => _lastBuiltAvatar;
+
+        // Edit-time accessor for the baked skeleton mapping (used by exporter at edit-time when Awake/Bind not called).
+        // Returns the live result if available, otherwise the deserialized baked result.
+        public SkeletonMappingResult EditorBakedResult => _result ?? _serializedMapping?.ToResult();
+
         public void Bind(SkeletonMappingResult result)
         {
             BindRuntimeState(result);
@@ -247,6 +254,45 @@ namespace UnityGLTF.KhrCharacter
             if (animator.isInitialized) animator.Rebind();
             if (previous != null && previous != avatar) Object.Destroy(previous);
             return avatar;
+        }
+
+        /// <summary>
+        /// Switches the character's rig mode between Generic and Humanoid at runtime.
+        /// </summary>
+        /// <param name="mode">The target rig mode. Humanoid builds and assigns a Mecanim humanoid Avatar
+        /// when the skeleton mapping resolves the required bones. Generic removes the humanoid Avatar and
+        /// keeps the generic rig.</param>
+        /// <returns>True if the switch succeeded, false otherwise (e.g., Humanoid requested but bones missing).</returns>
+        public bool SwitchRigMode(RigImportMode mode)
+        {
+            if (mode == RigImportMode.Humanoid)
+            {
+                // BuildAndAssignAvatar handles validation, leak prevention via _lastBuiltAvatar,
+                // and sets HumanoidAvailable flag. Returns null on failure.
+                var avatar = BuildAndAssignAvatar();
+                return avatar != null;
+            }
+            else // RigImportMode.Generic
+            {
+                // Remove the humanoid Avatar and revert to generic rig.
+                var animator = GetComponent<Animator>();
+                if (animator != null)
+                {
+                    animator.avatar = null;
+                    // Optionally destroy the Animator if it was auto-added and no other components need it.
+                    // For now, we keep the Animator component (it may be used for other purposes).
+                }
+
+                // Destroy the built avatar to avoid leaks.
+                if (_lastBuiltAvatar != null)
+                {
+                    Object.Destroy(_lastBuiltAvatar);
+                    _lastBuiltAvatar = null;
+                }
+
+                HumanoidAvailable = false;
+                return true;
+            }
         }
 
         private static bool ValidateRequired(List<HumanBone> human, out List<string> missing)

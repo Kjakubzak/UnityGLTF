@@ -402,6 +402,8 @@ namespace UnityGLTF.KhrCharacter
             public Vector2[] ScaleVals;   // glTF scale keyframes (or null)
             public float[] OffsetTimes;
             public Vector2[] OffsetVals;  // glTF offset keyframes (or null)
+            public string PropertyName;    // Unity texture property (no "_ST"); export-only metadata
+            public string GltfTextureSlot; // full glTF slot path, e.g. pbrMetallicRoughness/baseColorTexture
         }
 
         private static void BakeTextureChannels(
@@ -440,10 +442,12 @@ namespace UnityGLTF.KhrCharacter
                         // Texture-index swap: not handled by UnityGLTF's pointer importer, so resolve here.
                         var indices = DecodeScalar(importer, GetAccessor(root, sampler.Output));
                         if (indices.Length == 0) continue;
-                        if (!TryResolveTextureProperty(remapper, mat, gltfProperty, out int texPropId)) continue;
+                        if (!TryResolveTextureProperty(remapper, mat, gltfProperty, out int texPropId, out string texName)) continue;
                         var swaps = new Texture[indices.Length];
                         for (int k = 0; k < indices.Length; k++) swaps[k] = ResolveTexture(importer, Mathf.RoundToInt(indices[k]));
-                        BuildIndexSwapDriver(renderer, slot, texPropId, times, swaps, output);
+                        // Export-only metadata (G-B): texture property + full glTF slot path (strip the "/index" leaf).
+                        var indexSlot = gltfProperty.Substring(0, gltfProperty.Length - "/index".Length);
+                        BuildIndexSwapDriver(renderer, slot, texPropId, times, swaps, output, texName, indexSlot);
                     }
                     else if (gltfProperty.Contains("KHR_texture_transform"))
                     {
@@ -459,7 +463,15 @@ namespace UnityGLTF.KhrCharacter
                         var key = (matIndex, unityName);
                         if (!uvGroups.TryGetValue(key, out var group))
                         {
-                            group = new UvGroup { Renderer = renderer, Slot = slot, PropId = propId, BaseSt = mat.GetVector(propId), Interp = sampler.Interpolation };
+                            group = new UvGroup
+                            {
+                                Renderer = renderer, Slot = slot, PropId = propId,
+                                BaseSt = mat.GetVector(propId), Interp = sampler.Interpolation,
+                                // Export-only metadata (G-B): Unity texture property (strip "_ST") + full glTF slot
+                                // path, so a later re-export can rebuild the KHR_animation_pointer paths.
+                                PropertyName = StripStSuffix(unityName),
+                                GltfTextureSlot = SlotFromGltfProperty(map.GltfPropertyName),
+                            };
                             uvGroups[key] = group;
                         }
                         // The remapper's primary glTF property is "scale", secondary is "offset".
@@ -494,7 +506,8 @@ namespace UnityGLTF.KhrCharacter
                 var offset = (g.OffsetVals != null && k < g.OffsetVals.Length) ? g.OffsetVals[k] : baseOffset;
                 st[k] = PackSt(scale, offset);
             }
-            BuildUvTransformDriver(g.Renderer, g.Slot, g.PropId, times, st, g.BaseSt, g.Interp, output);
+            BuildUvTransformDriver(g.Renderer, g.Slot, g.PropId, times, st, g.BaseSt, g.Interp, output,
+                g.PropertyName, g.GltfTextureSlot);
         }
 
         /// <summary>
@@ -503,7 +516,8 @@ namespace UnityGLTF.KhrCharacter
         /// </summary>
         internal static void BuildUvTransformDriver(
             Renderer renderer, int slot, int propId, float[] times, Vector4[] stValues, Vector4 baseSt,
-            InterpolationType interpolation, List<TextureDriver> output)
+            InterpolationType interpolation, List<TextureDriver> output,
+            string propertyName = null, string gltfTextureSlot = null)
         {
             int n = times?.Length ?? 0;
             if (renderer == null || stValues == null || n == 0 || stValues.Length < n) return;
@@ -525,16 +539,25 @@ namespace UnityGLTF.KhrCharacter
                 SubmeshSlot = slot,
                 Kind = TexKind.UvTransform,
                 PropertyId = propId,
+                PropertyName = propertyName,
+                GltfTextureSlot = gltfTextureSlot,
                 Sampler = BuildSampler(times, MapInterp(interpolation)),
                 StValues = deltas,
                 BaseSt = baseSt,
+                // Frame-0 absolute _ST (before delta-izing). Export anchors multi-key reconstruction on this so a
+                // foreign asset whose authored frame0 != material rest (baseSt) round-trips exactly on the first
+                // cycle; BaseSt stays the runtime rest anchor only. HasFrame0St marks it captured (drivers that
+                // skip this path — hand-authored sets — leave it false and export falls back to BaseSt).
+                Frame0St = stValues[0],
+                HasFrame0St = true,
                 Priority = 0,
             });
         }
 
         /// <summary>Builds a STEP texture-index-swap <see cref="TextureDriver"/> from resolved textures.</summary>
         internal static void BuildIndexSwapDriver(
-            Renderer renderer, int slot, int propId, float[] times, Texture[] swapTextures, List<TextureDriver> output)
+            Renderer renderer, int slot, int propId, float[] times, Texture[] swapTextures, List<TextureDriver> output,
+            string propertyName = null, string gltfTextureSlot = null)
         {
             int n = times?.Length ?? 0;
             if (renderer == null || swapTextures == null || n == 0) return;
@@ -545,6 +568,8 @@ namespace UnityGLTF.KhrCharacter
                 SubmeshSlot = slot,
                 Kind = TexKind.IndexSwap,
                 PropertyId = propId,
+                PropertyName = propertyName,
+                GltfTextureSlot = gltfTextureSlot,
                 Sampler = new Sampler { Times = times, Interp = Interp.Step, SingleKey = n <= 1 }, // swaps are always discrete
                 SwapTextures = swapTextures,
                 Priority = 0,
@@ -554,6 +579,19 @@ namespace UnityGLTF.KhrCharacter
         // glTF (scale, offset) -> Unity _ST = (tiling.xy, offset.zw), with the V-axis flip UnityGLTF uses.
         internal static Vector4 PackSt(Vector2 gltfScale, Vector2 gltfOffset)
             => new Vector4(gltfScale.x, gltfScale.y, gltfOffset.x, 1f - gltfOffset.y - gltfScale.y);
+
+        // Export-only metadata helpers (G-B): the texture property without its "_ST" suffix, and the glTF slot path
+        // with any trailing "/extensions/KHR_texture_transform/<scale|offset>" removed.
+        private static string StripStSuffix(string unityName)
+            => (!string.IsNullOrEmpty(unityName) && unityName.EndsWith("_ST", StringComparison.Ordinal))
+                ? unityName.Substring(0, unityName.Length - 3) : unityName;
+
+        private static string SlotFromGltfProperty(string gltfPropertyName)
+        {
+            if (string.IsNullOrEmpty(gltfPropertyName)) return gltfPropertyName;
+            int extIdx = gltfPropertyName.IndexOf("/extensions/", StringComparison.Ordinal);
+            return extIdx > 0 ? gltfPropertyName.Substring(0, extIdx) : gltfPropertyName;
+        }
 
         private static string GetPointer(AnimationChannel channel)
         {
@@ -612,9 +650,10 @@ namespace UnityGLTF.KhrCharacter
             return false;
         }
 
-        private static bool TryResolveTextureProperty(MaterialPropertiesRemapper remapper, Material mat, string gltfProperty, out int propId)
+        private static bool TryResolveTextureProperty(MaterialPropertiesRemapper remapper, Material mat, string gltfProperty, out int propId, out string unityTextureName)
         {
             propId = 0;
+            unityTextureName = null;
             int idx = gltfProperty.LastIndexOf("/index", StringComparison.Ordinal);
             if (idx <= 0) return false;
             var slot = gltfProperty.Substring(0, idx); // e.g. pbrMetallicRoughness/baseColorTexture
@@ -624,11 +663,11 @@ namespace UnityGLTF.KhrCharacter
             if (remapper.GetUnityPropertyName(mat, ttOffset, out string stName, out _, out _) && stName.EndsWith("_ST", StringComparison.Ordinal))
             {
                 var texName = stName.Substring(0, stName.Length - 3);
-                if (mat.HasProperty(texName)) { propId = Shader.PropertyToID(texName); return true; }
+                if (mat.HasProperty(texName)) { propId = Shader.PropertyToID(texName); unityTextureName = texName; return true; }
             }
 
             foreach (var name in new[] { "_BaseMap", "_MainTex", "_BaseColorTexture" })
-                if (mat.HasProperty(name)) { propId = Shader.PropertyToID(name); return true; }
+                if (mat.HasProperty(name)) { propId = Shader.PropertyToID(name); unityTextureName = name; return true; }
             return false;
         }
 

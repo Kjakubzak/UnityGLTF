@@ -36,6 +36,85 @@ importing character assets:
 When disabled, character assets still import as plain glTF; unknown extensions round-trip as
 `DefaultExtension` and are never rejected.
 
+## Export
+
+`KhrCharacterExportPlugin` is a `GLTFExportPlugin` with `EnabledByDefault => false`. Enable it before
+exporting character assets:
+
+- **Project-wide:** Project Settings → UnityGLTF → Export → enable **"KHR Character / Avatar Extensions"**.
+- **Per-export (code):** enable the plugin on the `GLTFSettings`/export context you pass to the exporter.
+
+When enabled, the plugin writes the following extensions from a Unity character with a `KhrCharacter` hub:
+
+- **`KHR_character_expression`** (+ sub-extensions): Expression metadata (names, drivers, masks, mappings).
+  - `KHR_character_expression_morphtarget`: Morph target (blendshape) drivers.
+  - `KHR_character_expression_joint`: Joint (TRS) animation drivers.
+  - `KHR_character_expression_texture`: Texture (UV transform or index swap) drivers.
+  - `KHR_character_expression_mask`: Mask entries for attenuating other expressions.
+  - `KHR_character_expression_mapping`: Vocabulary mapping sets.
+- **`KHR_character_skeleton_mapping`**: Rig vocabulary → bone mapping dictionary.
+- **`KHR_character_reference_pose`**: Reference pose animation (e.g., T-Pose) with bone TRS channels.
+
+### Scope rule (facial expressions only)
+
+The exporter writes **whatever expressions are in the `CharacterExpressionSet`**. The **caller is responsible**
+for putting only **facial expressions** (0→1 driven, no loop expectation) into the set. **Body/locomotion
+animations** (walk cycles, idle poses, etc.) must be exported via the **standard UnityGLTF animation export
+path**, not through this plugin. The KHR_character extension set is reserved for facial expressions and
+other scalar-driven (0→1) animations without loop expectations.
+
+### Pending schema fields
+
+The following fields are in the runtime contract but **not yet in the glTF schema** (pending PR #2512 update):
+
+- `ExpressionTrack.BlendMode` (`Additive` | `Override`): **Not exported** — no ratified schema field exists yet.
+- `ExpressionTrack.Priority`: **Not exported** — no ratified schema field exists yet.
+
+The exporter writes **no** vendor `extras` for these, so the expression wire is fully Khronos-neutral. The import
+baker reconstructs `Additive` + priority `0` regardless, so they round-trip via the authoring asset
+(`CharacterExpressionSetAsset`) but **not** through a glTF import/export cycle. They may return later via a
+ratified representation.
+
+## Round-trip caveats
+
+Honest fidelity notes for an export → import (or import → export) cycle. None of these break neutral-glTF
+loading in a third-party viewer; they are documented so consumers know what is and isn't preserved.
+
+- **CUBICSPLINE animations are imported as LINEAR.** The baker has no cubic-spline evaluator: it samples each
+  keyframe's value block (`[inTangent, value, outTangent]`) and records the track as `LINEAR`, discarding the
+  tangents (`KhrCharacterBaker.MapInterp`). `STEP` and `LINEAR` round-trip exactly.
+- **Multi-key UV-transform animations round-trip exactly on the first cycle.** Import captures the animation's
+  frame-0 absolute `_ST` (`Frame0St`) alongside the frame-0-relative deltas and the material's static `_ST`
+  (`BaseSt`). On export the absolute `_ST` per key is reconstructed as `Frame0St + (frame_k − frame0)`, so both the
+  inter-key *shape* (deltas) and the authored absolute baseline are preserved — a foreign asset whose animated
+  frame 0 differs from its material's static `_ST` round-trips exactly on the first cycle. (Drivers that carry no
+  captured frame 0 — e.g. hand-authored sets — fall back to anchoring on `BaseSt`, the prior behavior.) `BaseSt`
+  stays the runtime rest the compositor applies deltas over.
+- **A material shared by multiple renderers is one entry on the wire.** Texture (UV-transform / index-swap)
+  channels are addressed per material via `KHR_animation_pointer` (`/materials/{m}/...`), not per renderer. If two
+  renderers share a material but carry different texture animations, both resolve to the same material index and
+  collapse to a single animated material on export. Give renderers distinct materials when they need independent
+  texture animation.
+- **Duplicate node names are ambiguous for skeleton mapping.** `KHR_character_skeleton_mapping` values are
+  exported as node *names* (UnityGLTF does not uniquify node names). If two bound bones share a name, the mapping
+  cannot distinguish them on re-import; the humanoid build guards this with a warning
+  (`SkeletonMap.HasDuplicateBoundName`). Use unique bone names for a clean round-trip.
+- **`blendMode` / per-driver `priority` are not exported.** The schema has no ratified field for them, and the
+  import baker reconstructs `Additive` + priority `0` regardless, so the exporter writes **no** vendor `extras`
+  at all — the expression wire is fully Khronos-neutral. They may return later via a ratified representation. Each
+  sub-extension lists its animation channels under the `channels` (plural) key.
+- **Camera hints / look-at targets export, but the camera projection index does not round-trip.** `CameraHintSet`
+  hints export as `KHR_node_camera_hint` (`role`, `label`, `targetNode`) and `GazeSolver` authored targets export
+  as `KHR_node_lookat_target` (`hint`); all of these round-trip. The optional `camera` index is **omitted** unless
+  the referenced camera was already exported onto its own node — `GLTFSceneExporter.ExportCamera` is private and
+  there is no public way to force-export a camera here, and import does not populate the projection link today.
+  `camera` is optional in the spec, so the omission is conformant.
+- **One character per glTF document (PR #2512).** `KHR_character` is a root singleton with a single `rootNode`, so
+  a document models exactly one character. If an export set contains multiple character roots, the exporter
+  deterministically emits the **first** (in `RootTransforms` order) and logs a warning naming the skipped roots —
+  nothing is silently dropped. To export multiple characters, export each character root to its **own** glTF
+  document (one document per character); each round-trips independently.
+
 ## Compositing policy (additive vs. override)
 
 Expression evaluation is **target-major**: for each concrete target (a blendshape, a transform TRS channel,
@@ -96,6 +175,31 @@ mirroring Unity's FBX "Rig" setting:
 The selection is **vendor-neutral** — it operates over whatever rig vocabularies the model declares in
 `KHR_character_skeleton_mapping` (no rig name such as `vrmHumanoid` is privileged). The gating decision is
 `KhrCharacterImportContext.ShouldBuildHumanoid`.
+
+## Runtime rig switching
+
+`SkeletonMap.SwitchRigMode(RigImportMode)` allows switching a character between **Generic** and **Humanoid**
+rig modes at runtime, on a character prefab that was already imported.
+
+```csharp
+var skeleton = character.GetComponent<SkeletonMap>();
+
+// Switch to Humanoid: builds and assigns a Mecanim humanoid Avatar when the skeleton
+// mapping resolves the required bones. Returns true on success, false if bones are missing.
+bool success = skeleton.SwitchRigMode(RigImportMode.Humanoid);
+
+// Switch to Generic: removes the humanoid Avatar, destroys the built avatar to avoid leaks,
+// sets HumanoidAvailable = false, and keeps the generic rig. Always returns true.
+skeleton.SwitchRigMode(RigImportMode.Generic);
+```
+
+The API is useful for:
+- Toggling a Generic-imported character to Humanoid at runtime (e.g., when the user enables IK).
+- Reverting a Humanoid character to Generic (e.g., to save memory or avoid Animator overhead).
+- Testing both rig modes on the same imported prefab without re-importing.
+
+The `HumanoidAvailable` property reflects the current state. When switching to Humanoid fails (missing bones),
+the character stays in Generic mode and `HumanoidAvailable` remains false.
 
 ## Gaze / look-at
 
@@ -167,6 +271,7 @@ The baked data is import-time only, but the components survive being saved as a 
 - Contracts (import↔runtime boundary): `Contracts/KhrCharacter.Contracts.cs`
 - Import/baking: `Import/KhrCharacterImportPlugin.cs`, `Import/KhrCharacterBaker.cs`,
   `Import/KhrCharacterSkeletonBaker.cs`
+- Export: `Export/KhrCharacterExportPlugin.cs`, `Export/KhrCharacterExportContext.cs`
 - Runtime: `Components/ExpressionController.cs`, `Components/SkeletonMap.cs`, `Components/GazeSolver.cs`,
   `Components/EyeAimConstraint.cs` (non-spec, opt-in eye aiming)
 - Authoring: `Authoring/CharacterExpressionSetAsset.cs`

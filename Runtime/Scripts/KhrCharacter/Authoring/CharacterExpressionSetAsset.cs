@@ -142,11 +142,15 @@ namespace UnityGLTF.KhrCharacter
                             RendererPath = path,
                             SubmeshSlot = d.SubmeshSlot,
                             PropertyId = d.PropertyId,
+                            PropertyName = d.PropertyName,
+                            GltfTextureSlot = d.GltfTextureSlot,
                             Kind = d.Kind,
                             Sampler = d.Sampler,
                             SwapTextures = d.SwapTextures,
                             StValues = d.StValues,
                             BaseSt = d.BaseSt,
+                            Frame0St = d.Frame0St,
+                            HasFrame0St = d.HasFrame0St,
                             Priority = d.Priority,
                         });
                     }
@@ -264,11 +268,15 @@ namespace UnityGLTF.KhrCharacter
                             Renderer = renderer,
                             SubmeshSlot = b.SubmeshSlot,
                             PropertyId = b.PropertyId,
+                            PropertyName = b.PropertyName,
+                            GltfTextureSlot = b.GltfTextureSlot,
                             Kind = b.Kind,
                             Sampler = b.Sampler,
                             SwapTextures = b.SwapTextures,
                             StValues = b.StValues,
                             BaseSt = b.BaseSt,
+                            Frame0St = b.Frame0St,
+                            HasFrame0St = b.HasFrame0St,
                             Priority = b.Priority,
                         });
                     }

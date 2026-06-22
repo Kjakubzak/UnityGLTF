@@ -444,7 +444,7 @@ public partial class GLTFSceneExporter
 			return id;
 		}
 
-		private AccessorId ExportAccessor(float[] arr)
+		internal AccessorId ExportAccessor(float[] arr)
 		{
 			exportAccessorMarker.Begin();
 			exportAccessorFloatArrayMarker.Begin();
@@ -632,7 +632,7 @@ public partial class GLTFSceneExporter
 			return id;
 		}
 
-		private AccessorId ExportAccessor(Vector2[] arr)
+		internal AccessorId ExportAccessor(Vector2[] arr)
 		{
 			exportAccessorMarker.Begin();
 			exportAccessorVector2ArrayMarker.Begin();
@@ -705,7 +705,7 @@ public partial class GLTFSceneExporter
 			return id;
 		}
 
-		private AccessorId ExportAccessor(Vector3[] arr)
+		internal AccessorId ExportAccessor(Vector3[] arr)
 		{
 			exportAccessorMarker.Begin();
 			exportAccessorVector3ArrayMarker.Begin();
@@ -951,7 +951,7 @@ public partial class GLTFSceneExporter
 		}
 
 
-		private AccessorId ExportAccessor(Vector4[] arr)
+		internal AccessorId ExportAccessor(Vector4[] arr)
 		{
 			exportAccessorMarker.Begin();
 			exportAccessorVector4ArrayMarker.Begin();

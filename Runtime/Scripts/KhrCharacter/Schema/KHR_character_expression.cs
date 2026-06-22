@@ -24,6 +24,7 @@ namespace GLTF.Schema
             public KHR_character_expression_joint Joint;
             public KHR_character_expression_texture Texture;
             public KHR_character_expression_mask Mask;
+            public JObject Extras;                                // glTF-standard per-item extras (e.g. runtime blendMode/priority; spec item allows "extras")
             public JObject RawExtensions;                         // preserved for forward-compat
         }
 
@@ -47,6 +48,10 @@ namespace GLTF.Schema
                     AddSubExtension(exts, item.Texture);
                     AddSubExtension(exts, item.Mask);
                     if (exts.HasValues) itemObj.Add("extensions", exts);
+
+                    // glTF-standard "extras" on the expression item (the schema item allows it). Carries
+                    // runtime-only metadata (BlendMode/Priority) that has no ratified field yet.
+                    if (item.Extras != null && item.Extras.HasValues) itemObj.Add("extras", item.Extras);
 
                     arr.Add(itemObj);
                 }
@@ -87,6 +92,7 @@ namespace GLTF.Schema
                 {
                     Expression = itemObj["expression"]?.Value<string>(),
                     Animation = itemObj["animation"]?.Value<int>() ?? -1,
+                    Extras = itemObj["extras"] as JObject,            // round-trip extras verbatim
                 };
 
                 if (itemObj["extensions"] is JObject itemExts)
