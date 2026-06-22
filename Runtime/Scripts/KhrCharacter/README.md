@@ -139,7 +139,7 @@ slot's base texture.
 
 ### Known limitations
 
-These are honest, documented gaps (raised back to PR #2512 — see `pr2512_feedback.md`):
+These are honest, documented gaps (raised in the glTF PR #2512 discussion):
 
 1. **Joint / texture absolute-pose expressions assume additive-authored deltas.** Two *absolute-pose*
    expressions on one bone composed additively will **over-rotate**. Author conflicting absolute poses as
@@ -230,7 +230,7 @@ clamps are not on `GazeSolver`).
 > (it is recognized but kept strictly separate — `KhrCharacterExtensionNames.VrmcExpressionLookat`). The 90°
 > saturation matches the VRM convention but is implemented as a neutral convention, not a VRM import. The spec
 > gaps here — no KHR gaze origin / `referenceNode`, no KHR look vocabulary, the "1 at 90°" rule living only in
-> VRMC — are routed to PR #2512 (see `pr2512_feedback.md`, items 10–12).
+> VRMC — are routed to the glTF PR #2512 discussion.
 
 ## Expression authoring
 
