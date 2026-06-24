@@ -275,6 +275,10 @@ namespace UnityGLTF.KhrCharacter
                 }
             }
 
+            // Track which nested expression sub-extensions are actually emitted, so each can be declared once in
+            // extensionsUsed (B1: nested KHR_character_expression_* were written on items but never declared).
+            bool anyMorph = false, anyJoint = false, anyTexture = false, anyMask = false;
+
             // Process each expression track
             foreach (var track in set.Expressions)
             {
@@ -340,18 +344,21 @@ namespace UnityGLTF.KhrCharacter
                 {
                     expressionItem.Morphtarget =
                         new KHR_character_expression_morphtarget { Channels = morphChannels.ToArray() };
+                    anyMorph = true;
                 }
 
                 if (jointChannels.Count > 0)
                 {
                     expressionItem.Joint =
                         new KHR_character_expression_joint { Channels = jointChannels.ToArray() };
+                    anyJoint = true;
                 }
 
                 if (texChannels.Count > 0)
                 {
                     expressionItem.Texture =
                         new KHR_character_expression_texture { Channels = texChannels.ToArray() };
+                    anyTexture = true;
                 }
 
                 if (track.Masks != null && track.Masks.Length > 0)
@@ -372,6 +379,7 @@ namespace UnityGLTF.KhrCharacter
                     {
                         expressionItem.Mask =
                             new KHR_character_expression_mask { Masks = masks };
+                        anyMask = true;
                     }
                 }
 
@@ -389,6 +397,14 @@ namespace UnityGLTF.KhrCharacter
                 };
                 gltfRoot.AddExtension(KHR_character_expression.EXTENSION_NAME, rootExtension);
                 exporter.DeclareExtensionUsage(KHR_character_expression.EXTENSION_NAME);
+
+                // B1 fix: declare each emitted nested sub-extension in extensionsUsed (deduped by
+                // DeclareExtensionUsage), never required — consistent with the parent KHR_character_expression.
+                // Only those actually emitted on at least one expression item are declared.
+                if (anyMorph) exporter.DeclareExtensionUsage(KHR_character_expression_morphtarget.EXTENSION_NAME);
+                if (anyJoint) exporter.DeclareExtensionUsage(KHR_character_expression_joint.EXTENSION_NAME);
+                if (anyTexture) exporter.DeclareExtensionUsage(KHR_character_expression_texture.EXTENSION_NAME);
+                if (anyMask) exporter.DeclareExtensionUsage(KHR_character_expression_mask.EXTENSION_NAME);
             }
 
             if (mappingDict.Count > 0)

@@ -582,6 +582,157 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
+        public void ExtensionsUsed_DeclaresEmittedNestedExpressionSubExtensions()
+        {
+            // B1: every nested KHR_character_expression_* sub-extension actually emitted on an expression item must be
+            // declared in extensionsUsed (deduped, exactly once), and NONE of them in extensionsRequired (they stay
+            // non-required, consistent with the parent KHR_character_expression). Exercises morph + joint + texture +
+            // mask in one character so all four nested tokens are emitted.
+            var shader = Shader.Find("Unlit/Texture");
+            if (shader == null) { Assert.Ignore("No suitable built-in shader available in this project."); return; }
+
+            var root = MakeUvCharacter(shader, out var mr); // root + quad + material (texture domain)
+
+            // Morph: a boneless SMR with one blendshape (the exporter still exports the mesh + morph target).
+            var mesh = new Mesh { name = "face" };
+            mesh.vertices = new[] { Vector3.zero, Vector3.right, Vector3.up };
+            mesh.triangles = new[] { 0, 1, 2 };
+            mesh.RecalculateNormals();
+            mesh.AddBlendShapeFrame("blink", 100f, new[] { Vector3.up, Vector3.up, Vector3.up }, null, null);
+            _created.Add(mesh);
+            var smrGo = new GameObject("face", typeof(SkinnedMeshRenderer));
+            smrGo.transform.SetParent(root.transform, false);
+            smrGo.GetComponent<SkinnedMeshRenderer>().sharedMesh = mesh;
+            var smr = smrGo.GetComponent<SkinnedMeshRenderer>();
+
+            var jaw = new GameObject("jaw").transform; jaw.SetParent(root.transform, false);
+            var ctrl = new GameObject("ctrl").transform; ctrl.SetParent(root.transform, false);
+
+            var set = new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack // 0: morph
+                    {
+                        Name = "blink", Domains = ExpressionDomain.Morph,
+                        MorphDrivers = new[]
+                        {
+                            new MorphDriver
+                            {
+                                Smr = smr, BlendShapeIndex = 0, BaseValue = 0f,
+                                Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Step, SingleKey = false },
+                                DeltaValues = new[] { 0f, 1f },
+                            },
+                        },
+                    },
+                    new ExpressionTrack // 1: joint
+                    {
+                        Name = "jawOpen", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(jaw) },
+                    },
+                    new ExpressionTrack // 2: texture (UV transform)
+                    {
+                        Name = "scroll", Domains = ExpressionDomain.Texture,
+                        TextureDrivers = new[]
+                        {
+                            new TextureDriver
+                            {
+                                Renderer = mr, SubmeshSlot = 0, Kind = TexKind.UvTransform,
+                                PropertyId = Shader.PropertyToID("_MainTex_ST"), PropertyName = "_MainTex",
+                                GltfTextureSlot = "pbrMetallicRoughness/baseColorTexture",
+                                Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Linear, SingleKey = false },
+                                StValues = new[] { Vector4.zero, new Vector4(0f, 0f, 1f, 0f) },
+                                BaseSt = new Vector4(1f, 1f, 0f, 0f),
+                            },
+                        },
+                    },
+                    new ExpressionTrack // 3: the masked target (joint so its item is emitted)
+                    {
+                        Name = "aa", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
+                    },
+                    new ExpressionTrack // 4: joint + a blend mask on "aa" (emits both _joint and _mask)
+                    {
+                        Name = "happy", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
+                        Masks = new[] { new MaskEntry { TargetIndex = 3, Type = MaskType.Blend, Amount = 0.5f, Threshold = 0f } },
+                    },
+                },
+            };
+            root.AddComponent<ExpressionController>().Initialize(set);
+
+            var gltf = ExportToGltfRoot(root);
+
+            Assert.IsNotNull(gltf.ExtensionsUsed, "extensionsUsed must be populated");
+            var nestedTokens = new[]
+            {
+                KHR_character_expression.EXTENSION_NAME,
+                KHR_character_expression_morphtarget.EXTENSION_NAME,
+                KHR_character_expression_joint.EXTENSION_NAME,
+                KHR_character_expression_texture.EXTENSION_NAME,
+                KHR_character_expression_mask.EXTENSION_NAME,
+            };
+            foreach (var token in nestedTokens)
+            {
+                Assert.IsTrue(gltf.ExtensionsUsed.Contains(token), $"{token} must be declared in extensionsUsed");
+                Assert.AreEqual(1, gltf.ExtensionsUsed.FindAll(e => e == token).Count,
+                    $"{token} must be declared exactly once (DeclareExtensionUsage dedups)");
+                Assert.IsTrue(gltf.ExtensionsRequired == null || !gltf.ExtensionsRequired.Contains(token),
+                    $"{token} must NOT be in extensionsRequired (non-required, like the parent)");
+            }
+        }
+
+        [Test]
+        public void ExtensionsUsed_MorphOnly_DeclaresOnlyMorphtargetNested()
+        {
+            // B1 guard: a morph-only character declares KHR_character_expression_morphtarget but NONE of the other
+            // nested tokens (no spurious _joint / _texture / _mask declarations).
+            var root = new GameObject("char");
+            _created.Add(root);
+
+            var mesh = new Mesh { name = "face" };
+            mesh.vertices = new[] { Vector3.zero, Vector3.right, Vector3.up };
+            mesh.triangles = new[] { 0, 1, 2 };
+            mesh.RecalculateNormals();
+            mesh.AddBlendShapeFrame("blink", 100f, new[] { Vector3.up, Vector3.up, Vector3.up }, null, null);
+            _created.Add(mesh);
+            var smrGo = new GameObject("face", typeof(SkinnedMeshRenderer));
+            smrGo.transform.SetParent(root.transform, false);
+            smrGo.GetComponent<SkinnedMeshRenderer>().sharedMesh = mesh;
+            var smr = smrGo.GetComponent<SkinnedMeshRenderer>();
+
+            var set = new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack
+                    {
+                        Name = "blink", Domains = ExpressionDomain.Morph,
+                        MorphDrivers = new[]
+                        {
+                            new MorphDriver
+                            {
+                                Smr = smr, BlendShapeIndex = 0, BaseValue = 0f,
+                                Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Step, SingleKey = false },
+                                DeltaValues = new[] { 0f, 1f },
+                            },
+                        },
+                    },
+                },
+            };
+            root.AddComponent<ExpressionController>().Initialize(set);
+
+            var gltf = ExportToGltfRoot(root);
+
+            Assert.IsNotNull(gltf.ExtensionsUsed);
+            Assert.IsTrue(gltf.ExtensionsUsed.Contains(KHR_character_expression_morphtarget.EXTENSION_NAME),
+                "morph-only must declare KHR_character_expression_morphtarget");
+            Assert.IsFalse(gltf.ExtensionsUsed.Contains(KHR_character_expression_joint.EXTENSION_NAME),
+                "morph-only must NOT declare KHR_character_expression_joint");
+            Assert.IsFalse(gltf.ExtensionsUsed.Contains(KHR_character_expression_texture.EXTENSION_NAME),
+                "morph-only must NOT declare KHR_character_expression_texture");
+            Assert.IsFalse(gltf.ExtensionsUsed.Contains(KHR_character_expression_mask.EXTENSION_NAME),
+                "morph-only must NOT declare KHR_character_expression_mask");
+        }
+
+        [Test]
         public void SkeletonMappingExport_WritesRigVocabularyDictionary()
         {
             // KHR_character_skeleton_mapping exports as skeletalRigMappings[rigName][canonicalJoint] = sourceNodeName,
