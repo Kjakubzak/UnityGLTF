@@ -1,6 +1,6 @@
 # KHR Character / Avatar Extensions (UnityGLTF)
 
-Runtime + import support for the Khronos Character/Avatar extension set (glTF **PR #2512**):
+Runtime, import, and export support for the Khronos Character/Avatar extension set (glTF **PR #2512**):
 `KHR_character`, `KHR_character_expression` (+ `_morphtarget` / `_joint` / `_texture` / `_mapping` /
 `_mask`), `KHR_character_reference_pose`, `KHR_character_skeleton_mapping`, `KHR_node_camera_hint`, and
 `KHR_node_lookat_target`.
