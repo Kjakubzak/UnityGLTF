@@ -114,7 +114,7 @@ namespace UnityGLTF.KhrCharacter
         public string Name;
         public ExpressionDomain Domains;     // set only for the sub-extensions present
         public ExpressionBlendMode BlendMode = ExpressionBlendMode.Additive;
-        public bool IsBinary;                // all driver channels are STEP (UI + fast path)
+        public bool IsBinary;                // every morph/joint/texture channel is STEP (>=1 driver); UI uses a 0/1-snapping control
         public MorphDriver[] MorphDrivers;
         public JointDriver[] JointDrivers;
         public TextureDriver[] TextureDrivers;

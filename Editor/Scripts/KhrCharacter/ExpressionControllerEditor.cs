@@ -45,9 +45,9 @@ namespace UnityGLTF.KhrCharacter.Editor
                 var handle = handles[i];
                 if (string.IsNullOrEmpty(handle.Name)) continue;
                 float current = controller.GetWeight(handle.Name);
-                float next = handle.IsBinary
-                    ? (EditorGUILayout.Toggle(handle.Name, current >= 0.5f) ? 1f : 0f)
-                    : EditorGUILayout.Slider(handle.Name, current, 0f, 1f);
+                float raw = EditorGUILayout.Slider(handle.Name, current, 0f, 1f);
+                // Binary (all-STEP) expressions snap to 0/1 -- the weight only resolves to discrete states.
+                float next = handle.IsBinary ? Mathf.Round(raw) : raw;
                 if (!Mathf.Approximately(next, current))
                     controller.SetWeight(handle.Name, next);
             }

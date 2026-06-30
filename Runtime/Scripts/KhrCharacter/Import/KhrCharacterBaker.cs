@@ -58,7 +58,6 @@ namespace UnityGLTF.KhrCharacter
                 {
                     track.MorphDrivers = morphDrivers.ToArray();
                     track.Domains |= ExpressionDomain.Morph;
-                    track.IsBinary = AllStep(track.MorphDrivers);
                 }
 
                 var jointDrivers = new List<JointDriver>();
@@ -78,6 +77,11 @@ namespace UnityGLTF.KhrCharacter
                     track.TextureDrivers = textureDrivers.ToArray();
                     track.Domains |= ExpressionDomain.Texture;
                 }
+
+                // Binary = every animated channel this expression carries (morph/joint/texture) is STEP, so the
+                // weight only ever resolves to discrete states -> a 0/1-snapping control fits. Spans all domains,
+                // not morph-only.
+                track.IsBinary = AllStep(track);
 
                 rawMasks.Add(item.Mask);
                 tracks.Add(track);
@@ -770,11 +774,18 @@ namespace UnityGLTF.KhrCharacter
             }
         }
 
-        private static bool AllStep(MorphDriver[] drivers)
+        // True when the track carries at least one driver and every driver -- across morph, joint, and texture
+        // domains -- uses STEP interpolation. Used to present binary (on/off) expressions as a 0/1-snapping control.
+        internal static bool AllStep(ExpressionTrack track)
         {
-            foreach (var d in drivers)
-                if (d.Sampler.Interp != Interp.Step) return false;
-            return drivers.Length > 0;
+            int count = 0;
+            if (track.MorphDrivers != null)
+                foreach (var d in track.MorphDrivers) { count++; if (d.Sampler.Interp != Interp.Step) return false; }
+            if (track.JointDrivers != null)
+                foreach (var d in track.JointDrivers) { count++; if (d.Sampler.Interp != Interp.Step) return false; }
+            if (track.TextureDrivers != null)
+                foreach (var d in track.TextureDrivers) { count++; if (d.Sampler.Interp != Interp.Step) return false; }
+            return count > 0;
         }
 
         private static Accessor GetAccessor(GLTFRoot root, AccessorId id)
