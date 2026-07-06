@@ -1,0 +1,20 @@
+{
+    "name": "UnityGLTF.VisibilityHints.Editor",
+    "rootNamespace": "",
+    "references": [
+        "UnityGLTF.VisibilityHints.Runtime",
+        "UnityGLTF.VisibilityHints.Schema",
+        "UnityGLTFScripts"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

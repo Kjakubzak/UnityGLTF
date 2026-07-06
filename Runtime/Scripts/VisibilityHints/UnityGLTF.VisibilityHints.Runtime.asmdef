@@ -1,0 +1,18 @@
+{
+    "name": "UnityGLTF.VisibilityHints.Runtime",
+    "rootNamespace": "",
+    "references": [
+        "GLTFSerialization",
+        "UnityGLTFScripts",
+        "UnityGLTF.VisibilityHints.Schema"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
