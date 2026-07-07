@@ -372,15 +372,14 @@ namespace UnityGLTF.KhrCharacter.Tests
             }
         }
 
-        // ── X4: duplicate Unity bone names still produce a mapping that references real exported nodes ──
+        // ── X4: node-index mapping is unambiguous even when two bound bones share a Unity name ──
 
         [Test]
-        public void SkeletonMappingExport_DuplicateNodeNames_ValuesResolveToRealNodes()
+        public void SkeletonMappingExport_DuplicateNodeNames_ValuesResolveToDistinctNodeIndices()
         {
-            // X4: the skeleton mapping emits the actual exported node name (gltfRoot.Nodes[idx].Name), so even
-            // when two bound bones share a Unity name the values still reference real exported nodes (no empty
-            // or dangling value). UnityGLTF does not uniquify node names, so duplicate-named bones round-trip
-            // ambiguously by design -- documented as a limitation; this test pins that export does not break.
+            // X4: the skeleton mapping emits each bound bone's glTF node INDEX, so even when two bound bones share
+            // a Unity name the mapping is unambiguous — each joint resolves to its own distinct node index (the
+            // former name-based ambiguity is gone entirely).
             var root = new GameObject("char");
             _created.Add(root);
             var b1 = new GameObject("Joint").transform; b1.SetParent(root.transform, false);
@@ -401,17 +400,22 @@ namespace UnityGLTF.KhrCharacter.Tests
             var rig = ext.SkeletalRigMappings["unityHumanoid"];
             Assert.AreEqual(3, rig.Count);
 
-            // The unique-named control bone passes through verbatim and resolves.
-            Assert.AreEqual("Spine", rig["spine"]);
-
-            // Every mapping value -- including the colliding ones -- names a real exported node (never empty).
+            // Every value is a valid, non-negative index into nodes[].
             foreach (var kv in rig)
             {
-                Assert.IsFalse(string.IsNullOrEmpty(kv.Value), $"mapping value for '{kv.Key}' must not be empty");
-                Assert.IsTrue(gltf.Nodes.Exists(n => n.Name == kv.Value),
-                    $"mapping value '{kv.Value}' for '{kv.Key}' must reference a real exported node");
+                Assert.GreaterOrEqual(kv.Value, 0, $"mapping value for '{kv.Key}' must be a non-negative node index");
+                Assert.Less(kv.Value, gltf.Nodes.Count, $"mapping value for '{kv.Key}' must index a real exported node");
             }
-            // Both colliding bones were exported as nodes (the collision is faithfully represented, not dropped).
+
+            // The unique-named control bone resolves to the node actually named "Spine".
+            Assert.AreEqual("Spine", gltf.Nodes[rig["spine"]].Name);
+
+            // The two same-named bones resolve to DISTINCT node indices — no ambiguity despite the shared name.
+            Assert.AreNotEqual(rig["hips"], rig["head"], "same-named bound bones still map to distinct node indices");
+            Assert.AreEqual("Joint", gltf.Nodes[rig["hips"]].Name);
+            Assert.AreEqual("Joint", gltf.Nodes[rig["head"]].Name);
+
+            // Both colliding bones were exported as distinct nodes.
             int jointNodes = gltf.Nodes.FindAll(n => n.Name == "Joint").Count;
             Assert.AreEqual(2, jointNodes, "both same-named bones export as distinct nodes");
         }

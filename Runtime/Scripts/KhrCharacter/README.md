@@ -52,7 +52,7 @@ When enabled, the plugin writes the following extensions from a Unity character 
   - `KHR_character_expression_texture`: Texture (UV transform or index swap) drivers.
   - `KHR_character_expression_mask`: Mask entries for attenuating other expressions.
   - `KHR_character_expression_mapping`: Vocabulary mapping sets.
-- **`KHR_character_skeleton_mapping`**: Rig vocabulary → bone mapping dictionary.
+- **`KHR_character_skeleton_mapping`**: Rig vocabulary → glTF node-index mapping dictionary (`{ vocabularyJoint: nodeIndex }`).
 - **`KHR_character_reference_pose`**: Reference pose animation (e.g., T-Pose) with bone TRS channels.
 
 ### Scope rule (facial expressions only)
@@ -95,11 +95,7 @@ loading in a third-party viewer; they are documented so consumers know what is a
   renderers share a material but carry different texture animations, both resolve to the same material index and
   collapse to a single animated material on export. Give renderers distinct materials when they need independent
   texture animation.
-- **Duplicate node names are ambiguous for skeleton mapping.** `KHR_character_skeleton_mapping` values are
-  exported as node *names* (UnityGLTF does not uniquify node names). If two bound bones share a name, the mapping
-  cannot distinguish them on re-import; the humanoid build guards this with a warning
-  (`SkeletonMap.HasDuplicateBoundName`). Use unique bone names for a clean round-trip.
-- **`blendMode` / per-driver `priority` are not exported.** The schema has no ratified field for them, and the
+- **`blendMode` / per-driver `priority` are not exported.**
   import baker reconstructs `Additive` + priority `0` regardless, so the exporter writes **no** vendor `extras`
   at all — the expression wire is fully Khronos-neutral. They may return later via a ratified representation. Each
   sub-extension lists its animation channels under the `channels` (plural) key.
@@ -154,13 +150,13 @@ These are honest, documented gaps (raised in the glTF PR #2512 discussion):
 The joint additive rest is the **node neutral** local TRS — **not** `reference_pose` (a retarget pose) and
 not the skin bind pose.
 
-## Skeleton direction auto-detect
+## Skeleton mapping
 
-`KHR_character_skeleton_mapping` is `rigName -> { jointA -> jointB }` with an ambiguous direction. The baker
-(`KhrCharacterSkeletonBaker`) resolves both interpretations and picks the one that resolves **more real
-transforms** — the reliable signal — using the known-vocabulary token count only as a **tiebreaker**. This
-makes both the spec layout and the inverted layout resolve even when bones are literally named
-with vocabulary tokens (`Hips`, `Head`, …). The resolved `MappingDirection` is surfaced in Character Health.
+`KHR_character_skeleton_mapping` is `rigName -> { vocabularyJoint -> nodeIndex }`: the key is a known
+vocabulary joint (`hips`, `head`, …) and the value is a glTF node index (a `glTFid` into the document's
+global `nodes[]`), exactly like `KHR_character.rootNode`. The baker (`KhrCharacterSkeletonBaker`) resolves
+each joint via a direct node-index → GameObject lookup, so there is no name coupling and no direction to
+detect. When more than one rig is present, the baker keeps the one that resolves the most bones.
 
 Building a Unity **humanoid Avatar** is opt-in (`SkeletonMap.BuildHumanoidOnAwake`); it self-validates
 required bones and falls back to the generic rig.
@@ -253,9 +249,9 @@ dropped with a warning).
 ## Character Health
 
 `CharacterHealthReport` (`Components/CharacterHealth.cs`) reports, per capability/expression, whether it is
-**Active / Degraded / Inert**, plus the resolved skeleton direction and expression count. This surfaces the
-"loads but is silently wrong" states (inert sliders when `KHR_animation_pointer` is unavailable, dropped
-name-couplings, humanoid-available-but-not-built, over-driven targets). `KhrCharacterDebugHUD` renders it.
+**Active / Degraded / Inert**, plus the expression count. This surfaces the "loads but is silently wrong"
+states (inert sliders when `KHR_animation_pointer` is unavailable, unresolved skeleton joints,
+humanoid-available-but-not-built, over-driven targets). `KhrCharacterDebugHUD` renders it.
 
 ## Serialize → rehydrate
 

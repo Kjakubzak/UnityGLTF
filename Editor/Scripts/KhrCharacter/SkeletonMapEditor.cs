@@ -5,9 +5,9 @@ using UnityEngine;
 namespace UnityGLTF.KhrCharacter.Editor
 {
     /// <summary>
-    /// Inspector for <see cref="SkeletonMap"/>: the build-on-awake toggle, detected mapping direction, the
-    /// resolved vocab-&gt;bone table (read from the serialized mapping so it shows at edit time), humanoid
-    /// availability, and a Play-mode "Build Humanoid Avatar" button.
+    /// Inspector for <see cref="SkeletonMap"/>: the build-on-awake toggle, the resolved vocab-&gt;bone table
+    /// (read from the serialized mapping so it shows at edit time), humanoid availability, and a Play-mode
+    /// "Build Humanoid Avatar" button.
     /// </summary>
     [CustomEditor(typeof(SkeletonMap))]
     public class SkeletonMapEditor : UnityEditor.Editor
@@ -24,13 +24,11 @@ namespace UnityGLTF.KhrCharacter.Editor
 
             var mappingProp = serializedObject.FindProperty("_serializedMapping");
             var rigProp = mappingProp?.FindPropertyRelative("SelectedRig");
-            var dirProp = mappingProp?.FindPropertyRelative("Direction");
             var bonesProp = mappingProp?.FindPropertyRelative("Bones");
 
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("Skeleton Mapping", EditorStyles.boldLabel);
             EditorGUILayout.LabelField("Selected Rig", rigProp != null ? StringOrNone(rigProp.stringValue) : "—");
-            EditorGUILayout.LabelField("Direction", EnumName(dirProp));
 
             int boneCount = bonesProp != null ? bonesProp.arraySize : 0;
             _showBones = EditorGUILayout.Foldout(_showBones, $"Bones ({boneCount})", true);
@@ -85,16 +83,6 @@ namespace UnityGLTF.KhrCharacter.Editor
         }
 
         private static string StringOrNone(string s) => string.IsNullOrEmpty(s) ? "—" : s;
-
-        // SerializedProperty.enumValueIndex is -1 when the stored value isn't a named enum constant; guard the
-        // display-name lookup so it can't throw IndexOutOfRange (mirrors KhrCharacterEditor's capability readout).
-        private static string EnumName(SerializedProperty prop)
-        {
-            if (prop == null) return "—";
-            var names = prop.enumDisplayNames;
-            int i = prop.enumValueIndex;
-            return (i >= 0 && i < names.Length) ? names[i] : prop.intValue.ToString();
-        }
     }
 }
 #endif

@@ -10,10 +10,9 @@ namespace UnityGLTF.KhrCharacter
     /// <summary>
     /// Resolves <c>KHR_character_skeleton_mapping</c> to concrete bone transforms and bakes the
     /// <c>KHR_character_reference_pose</c> animation into a retarget pose. The mapping JSON is
-    /// <c>rigName -&gt; { jointA -&gt; jointB }</c> with an ambiguous direction: one side is a known vocabulary
-    /// joint (hips/head/leftUpperArm/...), the other is a model node name. We auto-detect which side is the
-    /// vocabulary by counting matches against a known token set, so both the spec layout and the inverted
-    /// layout resolve. Also maps vocabulary joints to Unity humanoid bone names.
+    /// <c>rigName -&gt; { vocabularyJoint -&gt; nodeIndex }</c>: the key is a known vocabulary joint
+    /// (hips/head/leftUpperArm/...) and the value is a glTF node index, resolved directly via the importer's
+    /// node-index -&gt; GameObject map. Also maps vocabulary joints to Unity humanoid bone names.
     /// </summary>
     internal static class KhrCharacterSkeletonBaker
     {
@@ -50,15 +49,13 @@ namespace UnityGLTF.KhrCharacter
 
         public static SkeletonMappingResult BakeSkeleton(GLTFRoot root, IReadOnlyDictionary<int, GameObject> nodeIndexToGo, KHR_character_skeleton_mapping ext)
         {
-            if (root == null || ext?.SkeletalRigMappings == null || ext.SkeletalRigMappings.Count == 0) return null;
-
-            var nameToTransform = BuildNameToTransform(root, nodeIndexToGo);
+            if (root == null || nodeIndexToGo == null || ext?.SkeletalRigMappings == null || ext.SkeletalRigMappings.Count == 0) return null;
 
             // Choose the rig that resolves the most bones.
             SkeletonMappingResult best = null;
             foreach (var rig in ext.SkeletalRigMappings)
             {
-                var result = ResolveRig(rig.Key, rig.Value, nameToTransform);
+                var result = ResolveRig(rig.Key, rig.Value, nodeIndexToGo);
                 if (result != null && (best == null || result.Bones.Count > best.Bones.Count))
                     best = result;
             }
@@ -158,67 +155,43 @@ namespace UnityGLTF.KhrCharacter
             public Vector3? Scale;
         }
 
-        private static SkeletonMappingResult ResolveRig(string rigName, Dictionary<string, string> mapping, Dictionary<string, Transform> nameToTransform)
+        // The mapping is rigName -> { vocabularyJoint -> nodeIndex }. Each entry is unambiguous: the key is a
+        // target vocabulary joint and the value is a glTF node index into the document's global nodes[] array.
+        // Resolve each via a direct node-index -> GameObject lookup (the map the importer builds in
+        // OnAfterImportNode), so there is no name coupling and no direction to detect.
+        private static SkeletonMappingResult ResolveRig(string rigName, Dictionary<string, int> mapping, IReadOnlyDictionary<int, GameObject> nodeIndexToGo)
         {
             if (mapping == null || mapping.Count == 0) return null;
 
-            // The mapping is rigName -> { jointA -> jointB } with an ambiguous direction: one side is a vocabulary
-            // joint, the other a model node name. Resolve it under BOTH interpretations and keep whichever maps
-            // more actual transforms. Counting vocabulary tokens alone is unreliable when model node names happen
-            // to equal vocabulary tokens (e.g. bones literally named "Hips"/"Head"), so resolved-bone count is the
-            // real signal; the vocab count is only the tie-breaker (bias toward the spec's target-key order).
-            var asTargetKey = ResolveDirection(mapping, nameToTransform, keyIsVocab: true,  out var targetKeyReport);
-            var asNodeKey   = ResolveDirection(mapping, nameToTransform, keyIsVocab: false, out var nodeKeyReport);
-
-            int keyVocab = 0, valueVocab = 0;
-            foreach (var kv in mapping)
-            {
-                if (kv.Key != null && VocabToHumanBone.ContainsKey(kv.Key)) keyVocab++;
-                if (kv.Value != null && VocabToHumanBone.ContainsKey(kv.Value)) valueVocab++;
-            }
-
-            bool preferTargetKey = asTargetKey.Count != asNodeKey.Count
-                ? asTargetKey.Count > asNodeKey.Count   // more resolved bones wins
-                : keyVocab >= valueVocab;               // tie -> vocab-count heuristic
-
-            var bones = preferTargetKey ? asTargetKey : asNodeKey;
-            if (bones.Count == 0) return null;
-            return new SkeletonMappingResult
-            {
-                Bones = bones,
-                SelectedRig = rigName,
-                Direction = preferTargetKey ? MappingDirection.TargetKeyToNodeValue : MappingDirection.NodeKeyToTargetValue,
-                Report = preferTargetKey ? targetKeyReport : nodeKeyReport,
-            };
-        }
-
-        // Resolve the mapping under one interpretation: when keyIsVocab the key is the vocabulary joint and the
-        // value is the model node name (spec / TargetKeyToNodeValue), otherwise the roles are swapped.
-        private static Dictionary<string, Transform> ResolveDirection(
-            Dictionary<string, string> mapping, Dictionary<string, Transform> nameToTransform, bool keyIsVocab, out ValidationReport report)
-        {
             var bones = new Dictionary<string, Transform>();
-            report = new ValidationReport();
+            var report = new ValidationReport();
             foreach (var kv in mapping)
             {
-                string vocab = keyIsVocab ? kv.Key : kv.Value;
-                string nodeName = keyIsVocab ? kv.Value : kv.Key;
-                if (string.IsNullOrEmpty(vocab) || string.IsNullOrEmpty(nodeName)) continue;
+                string vocab = kv.Key;
+                int nodeIndex = kv.Value;
+                if (string.IsNullOrEmpty(vocab)) continue;
 
-                if (nameToTransform.TryGetValue(nodeName, out var t) && t != null)
-                    bones[vocab] = t;
+                if (nodeIndex >= 0 && nodeIndexToGo.TryGetValue(nodeIndex, out var go) && go != null)
+                    bones[vocab] = go.transform;
                 else
                 {
-                    report.Warnings.Add($"[KHR_character] skeleton joint '{vocab}' -> node '{nodeName}' was not found.");
+                    report.Warnings.Add($"[KHR_character] skeleton joint '{vocab}' -> node index {nodeIndex} was not found.");
                     // Distinguish a broken *required* humanoid coupling from a merely-absent optional joint
                     // (jaw/eyes/toes/...). Only the former should mark the rig degraded/invalid downstream.
                     if (IsRequiredHumanoidJoint(vocab))
                         report.MissingRequiredBones.Add(vocab);
                 }
             }
+
+            if (bones.Count == 0) return null;
             // Valid when at least one bone resolved and no *required* humanoid joint was left unbound.
-            report.IsValid = bones.Count > 0 && report.MissingRequiredBones.Count == 0;
-            return bones;
+            report.IsValid = report.MissingRequiredBones.Count == 0;
+            return new SkeletonMappingResult
+            {
+                Bones = bones,
+                SelectedRig = rigName,
+                Report = report,
+            };
         }
 
         // A vocabulary joint is "required" when it maps to a Unity humanoid bone that Mecanim marks required
@@ -228,25 +201,6 @@ namespace UnityGLTF.KhrCharacter
             => vocab != null
                && VocabToHumanBone.TryGetValue(vocab, out var bone)
                && HumanTrait.RequiredBone((int)bone);
-
-        private static Dictionary<string, Transform> BuildNameToTransform(GLTFRoot root, IReadOnlyDictionary<int, GameObject> nodeIndexToGo)
-        {
-            var map = new Dictionary<string, Transform>();
-            if (nodeIndexToGo == null) return map;
-            foreach (var kv in nodeIndexToGo)
-            {
-                if (kv.Value == null) continue;
-                var t = kv.Value.transform;
-                if (!string.IsNullOrEmpty(kv.Value.name)) map[kv.Value.name] = t;
-                // The glTF node name is authoritative, so let it win over the (possibly de-duplicated) GameObject name.
-                if (root.Nodes != null && kv.Key >= 0 && kv.Key < root.Nodes.Count)
-                {
-                    var nodeName = root.Nodes[kv.Key].Name;
-                    if (!string.IsNullOrEmpty(nodeName)) map[nodeName] = t;
-                }
-            }
-            return map;
-        }
 
         private static string ExtractPoseType(GLTFRoot root, IExtension ext)
         {

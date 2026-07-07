@@ -31,7 +31,6 @@ namespace UnityGLTF.KhrCharacter.Tests
             {
                 Bones = bones,
                 SelectedRig = "unityHumanoid",
-                Direction = MappingDirection.TargetKeyToNodeValue,
             });
         }
 
@@ -148,7 +147,6 @@ namespace UnityGLTF.KhrCharacter.Tests
                     // Missing spine, head, limbs - not enough for humanoid
                 },
                 SelectedRig = "unityHumanoid",
-                Direction = MappingDirection.TargetKeyToNodeValue,
             };
             invalidSkeleton.Bind(invalidResult);
 

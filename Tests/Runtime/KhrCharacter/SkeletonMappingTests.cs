@@ -6,8 +6,8 @@ using UnityEngine;
 namespace UnityGLTF.KhrCharacter.Tests
 {
     /// <summary>
-    /// Tests skeleton-mapping direction auto-detection (spec and inverted layouts both resolve to the same
-    /// bones) and the humanoid build's required-bone guard.
+    /// Tests skeleton-mapping resolution by glTF node index (including missing-index handling and multi-rig
+    /// selection) and the humanoid build's required-bone guard.
     /// </summary>
     public class SkeletonMappingTests
     {
@@ -28,74 +28,61 @@ namespace UnityGLTF.KhrCharacter.Tests
             return go;
         }
 
-        private static KHR_character_skeleton_mapping Mapping(Dictionary<string, string> rig)
+        private static KHR_character_skeleton_mapping Mapping(Dictionary<string, int> rig)
             => new KHR_character_skeleton_mapping
             {
-                SkeletalRigMappings = new Dictionary<string, Dictionary<string, string>> { { "rig", rig } }
+                SkeletalRigMappings = new Dictionary<string, Dictionary<string, int>> { { "rig", rig } }
             };
 
         [Test]
-        public void BakeSkeleton_SpecDirection_Resolves()
+        public void BakeSkeleton_ResolvesByNodeIndex()
         {
             var hips = NewGo("Hips_node");
             var head = NewGo("Head_node");
             var nodeMap = new Dictionary<int, GameObject> { { 0, hips }, { 1, head } };
-            var ext = Mapping(new Dictionary<string, string> { { "hips", "Hips_node" }, { "head", "Head_node" } });
+            var ext = Mapping(new Dictionary<string, int> { { "hips", 0 }, { "head", 1 } });
 
             var result = KhrCharacterSkeletonBaker.BakeSkeleton(new GLTFRoot(), nodeMap, ext);
 
             Assert.IsNotNull(result);
-            Assert.AreEqual(MappingDirection.TargetKeyToNodeValue, result.Direction);
             Assert.AreSame(hips.transform, result.Bones["hips"]);
             Assert.AreSame(head.transform, result.Bones["head"]);
+            Assert.IsTrue(result.Report.IsValid);
         }
 
         [Test]
-        public void BakeSkeleton_InvertedDirection_Resolves()
+        public void BakeSkeleton_MultipleRigs_PicksRigResolvingMostBones()
         {
             var hips = NewGo("Hips_node");
             var head = NewGo("Head_node");
             var nodeMap = new Dictionary<int, GameObject> { { 0, hips }, { 1, head } };
-            var ext = Mapping(new Dictionary<string, string> { { "Hips_node", "hips" }, { "Head_node", "head" } });
+
+            var ext = new KHR_character_skeleton_mapping
+            {
+                SkeletalRigMappings = new Dictionary<string, Dictionary<string, int>>
+                {
+                    { "sparse", new Dictionary<string, int> { { "hips", 0 } } },
+                    { "full", new Dictionary<string, int> { { "hips", 0 }, { "head", 1 } } },
+                }
+            };
 
             var result = KhrCharacterSkeletonBaker.BakeSkeleton(new GLTFRoot(), nodeMap, ext);
 
             Assert.IsNotNull(result);
-            Assert.AreEqual(MappingDirection.NodeKeyToTargetValue, result.Direction);
-            Assert.AreSame(hips.transform, result.Bones["hips"]);
-            Assert.AreSame(head.transform, result.Bones["head"]);
-        }
-
-        [Test]
-        public void BakeSkeleton_InvertedWithConventionalNodeNames_PicksDirectionByResolvedBones()
-        {
-            // Inverted layout {nodeName: vocab} where the node names are conventional tokens that ALSO look like
-            // vocabulary (Hips/Head). The vocab-count heuristic is a tie here, so the old code mis-detected the
-            // direction and resolved nothing. Resolving both directions and keeping the one that maps more real
-            // transforms picks the correct NodeKeyToTargetValue reading.
-            var hips = NewGo("Hips");
-            var head = NewGo("Head");
-            var nodeMap = new Dictionary<int, GameObject> { { 0, hips }, { 1, head } };
-            var ext = Mapping(new Dictionary<string, string> { { "Hips", "hips" }, { "Head", "head" } });
-
-            var result = KhrCharacterSkeletonBaker.BakeSkeleton(new GLTFRoot(), nodeMap, ext);
-
-            Assert.IsNotNull(result);
-            Assert.AreEqual(MappingDirection.NodeKeyToTargetValue, result.Direction);
-            Assert.AreSame(hips.transform, result.Bones["hips"]);
-            Assert.AreSame(head.transform, result.Bones["head"]);
+            Assert.AreEqual("full", result.SelectedRig);
+            Assert.AreEqual(2, result.Bones.Count);
         }
 
         [Test]
         public void BakeSkeleton_UnresolvedRequiredJoint_FlagsMissingRequiredAndInvalid()
         {
-            // hips resolves; leftFoot (a REQUIRED humanoid bone) is mapped but its node is absent.
+            // hips resolves; leftFoot (a REQUIRED humanoid bone) maps to an index with no node.
             var hips = NewGo("Hips_node");
             var nodeMap = new Dictionary<int, GameObject> { { 0, hips } };
-            var ext = Mapping(new Dictionary<string, string>
+            var ext = Mapping(new Dictionary<string, int>
             {
-                { "hips", "Hips_node" },
-                { "leftFoot", "LeftFoot_node" }, // no such node
+                { "hips", 0 },
+                { "leftFoot", 99 }, // no such node index
             });
 
             var result = KhrCharacterSkeletonBaker.BakeSkeleton(new GLTFRoot(), nodeMap, ext);
@@ -110,16 +97,16 @@ namespace UnityGLTF.KhrCharacter.Tests
         [Test]
         public void BakeSkeleton_UnresolvedOptionalJoint_StaysValid()
         {
-            // hips + head resolve; jaw (an OPTIONAL humanoid bone) is mapped but its node is absent. The mapping
-            // is still valid with no missing *required* bone — only a warning is recorded.
+            // hips + head resolve; jaw (an OPTIONAL humanoid bone) maps to an absent index. The mapping is still
+            // valid with no missing *required* bone — only a warning is recorded.
             var hips = NewGo("Hips_node");
             var head = NewGo("Head_node");
             var nodeMap = new Dictionary<int, GameObject> { { 0, hips }, { 1, head } };
-            var ext = Mapping(new Dictionary<string, string>
+            var ext = Mapping(new Dictionary<string, int>
             {
-                { "hips", "Hips_node" },
-                { "head", "Head_node" },
-                { "jaw", "Jaw_node" }, // no such node
+                { "hips", 0 },
+                { "head", 1 },
+                { "jaw", 99 }, // no such node index
             });
 
             var result = KhrCharacterSkeletonBaker.BakeSkeleton(new GLTFRoot(), nodeMap, ext);
@@ -130,25 +117,6 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(0, result.Report.MissingRequiredBones.Count, "jaw is optional, not a required bone");
             Assert.IsTrue(result.Report.IsValid, "an unresolved optional joint must not invalidate the mapping");
             Assert.Greater(result.Report.Warnings.Count, 0, "the unresolved jaw still records a warning");
-        }
-
-        [Test]
-        public void BakeSkeleton_EqualResolvedCounts_TieBreaksToTargetKeyByVocab()
-        {
-            // Both directions resolve exactly one bone, so resolved-count can't decide; the vocab-count tie-break
-            // (bias toward the spec's target-key order) selects TargetKeyToNodeValue.
-            var nodeA = NewGo("NodeA");
-            var nodeB = NewGo("NodeB");
-            var nodeMap = new Dictionary<int, GameObject> { { 0, nodeA }, { 1, nodeB } };
-            // "hips" (vocab key) resolves under target-key; "NodeB" (node-name key) resolves under node-key.
-            var ext = Mapping(new Dictionary<string, string> { { "hips", "NodeA" }, { "NodeB", "head" } });
-
-            var result = KhrCharacterSkeletonBaker.BakeSkeleton(new GLTFRoot(), nodeMap, ext);
-
-            Assert.IsNotNull(result);
-            Assert.AreEqual(1, result.Bones.Count);
-            Assert.AreEqual(MappingDirection.TargetKeyToNodeValue, result.Direction);
-            Assert.AreSame(nodeA.transform, result.Bones["hips"]);
         }
 
         [Test]

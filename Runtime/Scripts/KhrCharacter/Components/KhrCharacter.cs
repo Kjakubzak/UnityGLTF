@@ -91,14 +91,13 @@ namespace UnityGLTF.KhrCharacter
         private CharacterHealthReport _healthReport;
 
         /// <summary>
-        /// Snapshot of which capabilities are active vs present-but-inert, plus the resolved skeleton direction.
-        /// Drives the Character Health inspector/HUD and helps diagnose dropped name-couplings. The returned
-        /// report instance is reused on each call (overwritten on the next call); copy it to retain a snapshot.
+        /// Snapshot of which capabilities are active vs present-but-inert, plus the expression count. Drives the
+        /// Character Health inspector/HUD. The returned report instance is reused on each call (overwritten on
+        /// the next call); copy it to retain a snapshot.
         /// </summary>
         public CharacterHealthReport GetHealth()
         {
             var report = _healthReport ?? (_healthReport = new CharacterHealthReport());
-            report.SkeletonDirection = Skeleton != null ? Skeleton.DetectedDirection : MappingDirection.Unknown;
             report.ExpressionCount = Expressions != null ? Expressions.Count : 0;
             report.Capabilities.Clear();
             foreach (var capability in _capabilities)

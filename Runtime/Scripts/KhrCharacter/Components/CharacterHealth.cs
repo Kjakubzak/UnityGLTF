@@ -17,13 +17,11 @@ namespace UnityGLTF.KhrCharacter
 
     /// <summary>
     /// Per-capability runtime health for a character, suitable for a "Character Health" inspector/HUD: which
-    /// capabilities are active vs present-but-inert, the resolved skeleton-mapping direction, and the
-    /// expression count.
+    /// capabilities are active vs present-but-inert, and the expression count.
     /// </summary>
     public class CharacterHealthReport
     {
         public readonly List<CapabilityHealth> Capabilities = new List<CapabilityHealth>();
-        public MappingDirection SkeletonDirection = MappingDirection.Unknown;
         public int ExpressionCount;
     }
 }

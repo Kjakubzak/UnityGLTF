@@ -735,10 +735,10 @@ namespace UnityGLTF.KhrCharacter.Tests
         [Test]
         public void SkeletonMappingExport_WritesRigVocabularyDictionary()
         {
-            // KHR_character_skeleton_mapping exports as skeletalRigMappings[rigName][canonicalJoint] = sourceNodeName,
+            // KHR_character_skeleton_mapping exports as skeletalRigMappings[rigName][canonicalJoint] = sourceNodeIndex,
             // using the canonical humanoid vocabulary (leftUpperLeg/head/hips — the same set the rig switcher uses).
-            // Keys are the target-vocabulary joint names; values name real glTF nodes (the model's own rig). Direction
-            // is NOT serialized (spec gap, recovered by import auto-detect).
+            // Keys are the target-vocabulary joint names; values are glTF node indices (a glTFid into nodes[]) for
+            // the model's own rig.
             var root = new GameObject("char");
             _created.Add(root);
             var hips = new GameObject("Hips").transform; hips.SetParent(root.transform, false);
@@ -764,16 +764,21 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsTrue(ext.SkeletalRigMappings.ContainsKey("unityHumanoid"), "the selected rig name keys the mapping");
             var rig = ext.SkeletalRigMappings["unityHumanoid"];
 
-            // Canonical target-vocabulary joint names (keys) -> model's own node names (values).
+            // Canonical target-vocabulary joint names (keys) -> source node INDICES (values) into nodes[].
             Assert.AreEqual(3, rig.Count);
-            Assert.AreEqual("Hips", rig["hips"]);
-            Assert.AreEqual("LeftUpperLeg", rig["leftUpperLeg"]);
-            Assert.AreEqual("Head", rig["head"]);
+            Assert.AreEqual("Hips", gltf.Nodes[rig["hips"]].Name);
+            Assert.AreEqual("LeftUpperLeg", gltf.Nodes[rig["leftUpperLeg"]].Name);
+            Assert.AreEqual("Head", gltf.Nodes[rig["head"]].Name);
 
-            // Each source value must name an actual exported glTF node (spec: values refer to nodes[]).
-            foreach (var sourceNodeName in rig.Values)
-                Assert.IsTrue(gltf.Nodes.Exists(n => n.Name == sourceNodeName),
-                    $"skeleton mapping source '{sourceNodeName}' must reference a real glTF node");
+            // Each value must be a valid, non-negative 0-based index into the exported nodes[] (spec: glTFid).
+            foreach (var nodeIndex in rig.Values)
+            {
+                Assert.GreaterOrEqual(nodeIndex, 0, "skeleton mapping values are non-negative node indices");
+                Assert.Less(nodeIndex, gltf.Nodes.Count, "skeleton mapping value must index a real glTF node");
+            }
+
+            // Distinct joints bind distinct transforms, so they resolve to distinct node indices.
+            CollectionAssert.AllItemsAreUnique(rig.Values);
         }
 
         [Test]

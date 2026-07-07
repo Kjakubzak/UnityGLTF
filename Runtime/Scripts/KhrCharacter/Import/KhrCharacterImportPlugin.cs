@@ -375,7 +375,7 @@ namespace UnityGLTF.KhrCharacter
             if (result == null && referencePose == null) return;
 
             // A reference pose with no skeleton mapping still gets a holder so it can be applied later.
-            result = result ?? new SkeletonMappingResult { Bones = new Dictionary<string, Transform>(), Direction = MappingDirection.Unknown };
+            result = result ?? new SkeletonMappingResult { Bones = new Dictionary<string, Transform>() };
             result.ReferencePose = referencePose;
 
             var skeleton = sceneObject.GetComponent<SkeletonMap>() ?? sceneObject.AddComponent<SkeletonMap>();

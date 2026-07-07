@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
@@ -67,26 +68,71 @@ namespace UnityGLTF.KhrCharacter.Tests
             {
                 Bones = new Dictionary<string, Transform> { { "hips", hips }, { "head", head } },
                 SelectedRig = "unityHumanoid",
-                Direction = MappingDirection.TargetKeyToNodeValue,
             };
 
             var serializable = SerializableSkeletonMapping.FromResult(source);
             Assert.AreEqual(2, serializable.Bones.Length);
             Assert.AreEqual("unityHumanoid", serializable.SelectedRig);
-            Assert.AreEqual(MappingDirection.TargetKeyToNodeValue, serializable.Direction);
 
             var restored = serializable.ToResult();
             Assert.AreEqual(2, restored.Bones.Count);
             Assert.AreSame(hips, restored.Bones["hips"]);
             Assert.AreSame(head, restored.Bones["head"]);
             Assert.AreEqual("unityHumanoid", restored.SelectedRig);
-            Assert.AreEqual(MappingDirection.TargetKeyToNodeValue, restored.Direction);
         }
 
         [Test]
         public void SerializableSkeletonMapping_FromNull_ReturnsNull()
         {
             Assert.IsNull(SerializableSkeletonMapping.FromResult(null));
+        }
+
+        // ── KHR_character_skeleton_mapping JSON wire (int node indices) ────────────
+
+        [Test]
+        public void SkeletonMappingSchema_SerializeDeserialize_PreservesIntegerNodeIndices()
+        {
+            var ext = new GLTF.Schema.KHR_character_skeleton_mapping
+            {
+                SkeletalRigMappings = new Dictionary<string, Dictionary<string, int>>
+                {
+                    { "unityHumanoid", new Dictionary<string, int> { { "hips", 1 }, { "head", 5 } } },
+                },
+            };
+
+            // Serialize to the glTF JProperty, then read it back through the factory (the import path).
+            var token = ext.Serialize();
+            var restored = new GLTF.Schema.KHR_character_skeleton_mapping_Factory()
+                .Deserialize(new GLTF.Schema.GLTFRoot(), token) as GLTF.Schema.KHR_character_skeleton_mapping;
+
+            Assert.IsNotNull(restored);
+            var rig = restored.SkeletalRigMappings["unityHumanoid"];
+            Assert.AreEqual(1, rig["hips"]);
+            Assert.AreEqual(5, rig["head"]);
+        }
+
+        [Test]
+        public void SkeletonMappingSchema_Deserialize_DropsLegacyNameStringValues()
+        {
+            // Hard cut: a pre-change asset carried node-name strings. Those entries are dropped (they simply do
+            // not resolve) rather than throwing and failing the whole document load; integer entries are kept.
+            var token = new JProperty(GLTF.Schema.KHR_character_skeleton_mapping.EXTENSION_NAME,
+                new JObject
+                {
+                    { "skeletalRigMappings", new JObject
+                        {
+                            { "unityHumanoid", new JObject { { "hips", 2 }, { "head", "Head" } } },
+                        }
+                    },
+                });
+
+            var ext = new GLTF.Schema.KHR_character_skeleton_mapping_Factory()
+                .Deserialize(new GLTF.Schema.GLTFRoot(), token) as GLTF.Schema.KHR_character_skeleton_mapping;
+
+            Assert.IsNotNull(ext);
+            var rig = ext.SkeletalRigMappings["unityHumanoid"];
+            Assert.AreEqual(2, rig["hips"], "integer node-index values are kept");
+            Assert.IsFalse(rig.ContainsKey("head"), "legacy string values are dropped, not throwing");
         }
 
         // ── ExpressionController rehydration on Awake ───────────────────────────────
@@ -359,7 +405,6 @@ namespace UnityGLTF.KhrCharacter.Tests
             {
                 Bones = new Dictionary<string, Transform> { { "hips", bone } },
                 SelectedRig = "rig",
-                Direction = MappingDirection.NodeKeyToTargetValue,
                 ReferencePose = new ReferencePose
                 {
                     PoseType = "APose",

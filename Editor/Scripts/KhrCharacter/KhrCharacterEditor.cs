@@ -6,8 +6,8 @@ namespace UnityGLTF.KhrCharacter.Editor
 {
     /// <summary>
     /// Inspector for <see cref="KhrCharacter"/>: readiness plus a per-capability health readout
-    /// (Active / Degraded / Inert), expression count and resolved skeleton direction. In Play mode it shows
-    /// the live <see cref="KhrCharacter.GetHealth"/> snapshot; at edit time it lists the baked capabilities
+    /// (Active / Degraded / Inert) and expression count. In Play mode it shows the live
+    /// <see cref="KhrCharacter.GetHealth"/> snapshot; at edit time it lists the baked capabilities
     /// from the serialized data (the runtime lists only populate on Awake).
     /// </summary>
     [CustomEditor(typeof(KhrCharacter))]
@@ -36,7 +36,6 @@ namespace UnityGLTF.KhrCharacter.Editor
             {
                 var health = character.GetHealth();
                 EditorGUILayout.LabelField("Expressions", health.ExpressionCount.ToString());
-                EditorGUILayout.LabelField("Skeleton Direction", health.SkeletonDirection.ToString());
                 DrawLiveCapabilities(health);
                 Repaint();
             }

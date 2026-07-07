@@ -734,21 +734,20 @@ namespace UnityGLTF.KhrCharacter
 
         private void ExportSkeletonMapping(GLTFSceneExporter exporter, GLTFRoot gltfRoot, SkeletonMappingResult result)
         {
-            var rigDict = new Dictionary<string, string>();
+            var rigDict = new Dictionary<string, int>();
             foreach (var kv in result.Bones)
             {
                 if (kv.Value == null) continue;
                 int nodeIdx = exporter.GetTransformIndex(kv.Value);
                 if (nodeIdx < 0) continue;
-                string nodeName = gltfRoot.Nodes[nodeIdx].Name;
-                rigDict[kv.Key] = nodeName;
+                rigDict[kv.Key] = nodeIdx;
             }
 
             if (rigDict.Count == 0) return;
 
             var mapping = new KHR_character_skeleton_mapping
             {
-                SkeletalRigMappings = new Dictionary<string, Dictionary<string, string>>
+                SkeletalRigMappings = new Dictionary<string, Dictionary<string, int>>
                 {
                     [result.SelectedRig ?? "default"] = rigDict
                 }

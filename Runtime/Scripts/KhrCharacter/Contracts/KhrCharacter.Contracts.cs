@@ -28,8 +28,6 @@ namespace UnityGLTF.KhrCharacter
 
     public enum MaskType { Blend, Block }
 
-    public enum MappingDirection { Unknown, TargetKeyToNodeValue, NodeKeyToTargetValue }
-
     public enum CharacterCapability
     {
         Character, Expression, Morphtarget, Joint, Texture, Mapping, Mask,
@@ -178,7 +176,6 @@ namespace UnityGLTF.KhrCharacter
         public Dictionary<string, Transform> Bones;   // vocab joint name -> resolved Transform
         public string SelectedRig;                    // e.g. "vrmHumanoid" / "unityHumanoid"
         public ReferencePose ReferencePose;
-        public MappingDirection Direction;            // resolved when the rig is consumed
         public ValidationReport Report = new ValidationReport();
     }
 
@@ -198,7 +195,6 @@ namespace UnityGLTF.KhrCharacter
         public SerializableBoneEntry[] Bones;
         public string SelectedRig;
         public ReferencePose ReferencePose;   // already [Serializable]
-        public MappingDirection Direction;
         public ValidationReport Report = new ValidationReport();   // already [Serializable]
 
         public static SerializableSkeletonMapping FromResult(SkeletonMappingResult result)
@@ -214,7 +210,6 @@ namespace UnityGLTF.KhrCharacter
                 Bones = entries.ToArray(),
                 SelectedRig = result.SelectedRig,
                 ReferencePose = result.ReferencePose,
-                Direction = result.Direction,
                 Report = result.Report ?? new ValidationReport(),
             };
         }
@@ -230,7 +225,6 @@ namespace UnityGLTF.KhrCharacter
                 Bones = bones,
                 SelectedRig = SelectedRig,
                 ReferencePose = ReferencePose,
-                Direction = Direction,
                 Report = Report ?? new ValidationReport(),
             };
         }

@@ -38,7 +38,6 @@ namespace UnityGLTF.KhrCharacter
 
         public IReadOnlyList<string> RigVocabularies { get; private set; } = new List<string>();
         public bool HumanoidAvailable { get; private set; }
-        public MappingDirection DetectedDirection => _result?.Direction ?? MappingDirection.Unknown;
         public SkeletonMappingResult Result => _result;
 
         // Internal access to the last built avatar for runtime rig switching (avoids exposing the field publicly).
