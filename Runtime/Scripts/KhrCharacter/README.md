@@ -172,6 +172,13 @@ The selection is **vendor-neutral** — it operates over whatever rig vocabulari
 `KHR_character_skeleton_mapping` (no rig name such as `vrmHumanoid` is privileged). The gating decision is
 `KhrCharacterImportContext.ShouldBuildHumanoid`.
 
+**Edit-time visibility.** Editor-imported prefabs persist the built humanoid Avatar as a sub-asset of the
+`.glb` (named `KhrCharacterAvatar`) and assign it to the `Animator` at import — the Avatar slot is populated
+at pure edit time (no need to enter Play). At runtime, `SkeletonMap` treats an already-assigned
+`Animator.avatar` as authoritative: the runtime build path only runs when the slot is empty, so a manually-
+or importer-assigned Avatar wins. Runtime `GLTFSceneImporter` loads (no editor import context) fall through
+to the existing runtime build path unchanged.
+
 ## Runtime rig switching
 
 `SkeletonMap.SwitchRigMode(RigImportMode)` allows switching a character between **Generic** and **Humanoid**

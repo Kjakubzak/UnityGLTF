@@ -353,6 +353,49 @@ namespace UnityGLTF.KhrCharacter.Tests
                 "the Animator pre-added for a humanoid build must be removed when the build fails");
         }
 
+        [UnityTest]
+        public IEnumerator SkeletonMap_RehydratedWithAvatarAssigned_SkipsRuntimeBuild()
+        {
+            // Editor-imported prefabs get the humanoid Avatar assigned to the Animator at import time (persisted
+            // as a sub-asset via ctx.AddObjectToAsset in KhrCharacterImportContext.OnAfterImport). When the
+            // prefab rehydrates in Play, SkeletonMap must treat the already-assigned Avatar as authoritative
+            // and skip the runtime build: no _lastBuiltAvatar, no redundant runtime Avatar object, no duplicate
+            // work each Play. The same rule also respects a user's manual Avatar assignment.
+            var src = NewGo("char");
+            var bones = BuildHumanoidRig(src.transform);
+            var animator = src.AddComponent<Animator>();
+            var skel = src.AddComponent<SkeletonMap>();
+            skel.Bind(new SkeletonMappingResult { Bones = bones, SelectedRig = "unityHumanoid" });
+
+            yield return null; // let the source's Animator initialize before we build an Avatar for it
+
+            // Pre-build the Avatar and pre-assign it: this reproduces the state a rehydrated import-produced
+            // prefab reaches (Animator.avatar already populated by the OnAfterImport sub-asset path).
+            var preAvatar = skel.BuildHumanoidAvatar();
+            Assert.IsNotNull(preAvatar, "sanity: the 15-bone rig can build a humanoid avatar");
+            _created.Add(preAvatar);
+            animator.avatar = preAvatar;
+
+            // Flag the build so the clone's Awake would normally queue it, then deactivate + Instantiate so the
+            // rehydrate path runs on the clone. Awake's defense-in-depth (Animator has an Avatar) must clear
+            // the queued flag and Start must not build a fresh Avatar.
+            skel.BuildHumanoidOnAwake = true;
+            src.SetActive(false);
+
+            var clone = Object.Instantiate(src);
+            _created.Add(clone);
+            clone.SetActive(true);
+            yield return null; // Awake + Start run
+
+            var cloneSkel = clone.GetComponent<SkeletonMap>();
+            var cloneAnimator = clone.GetComponent<Animator>();
+            Assert.IsNotNull(cloneAnimator, "the clone kept its Animator");
+            Assert.AreSame(preAvatar, cloneAnimator.avatar,
+                "the pre-assigned Avatar remains authoritative — the runtime path must not replace it");
+            Assert.IsNull(cloneSkel.LastBuiltAvatar,
+                "no runtime Avatar was built when the Animator already had one");
+        }
+
         // ── Degraded report + serialized-state determinism across rehydrate ──────────
 
         private static CapabilityStatus StatusOfCap(CharacterHealthReport report, CharacterCapability cap)

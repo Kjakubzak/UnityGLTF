@@ -127,6 +127,31 @@ namespace UnityGLTF.KhrCharacter
             hub.MarkReady();
         }
 
+#if UNITY_EDITOR
+        // Editor-only: after every built-in sub-asset (Meshes/Materials/Textures/Avatar/etc.) has been registered
+        // and ctx.SetMainObject was called, build the humanoid Avatar once and persist it as a sub-asset of the
+        // imported prefab. This makes the Animator's Avatar slot populated at pure edit time (without pressing
+        // Play). The runtime rebuild path in SkeletonMap.Start respects an already-assigned Avatar and skips.
+        public override void OnAfterImport()
+        {
+            if (!_isCharacter || _context?.AssetContext == null) return;
+            var root = _context.AssetContext.mainObject as GameObject;
+            if (root == null) return;
+            var skeleton = root.GetComponent<SkeletonMap>();
+            if (skeleton == null) return;
+            if (!ShouldBuildHumanoid(_rigMode, skeleton.EditorBakedResult)) return;
+
+            var avatar = skeleton.BuildHumanoidAvatar();
+            if (avatar == null) return;
+
+            avatar.name = "KhrCharacterAvatar";
+            _context.AssetContext.AddObjectToAsset("khrCharacterAvatar", avatar);
+
+            var animator = root.GetComponent<Animator>() ?? root.AddComponent<Animator>();
+            animator.avatar = avatar;
+        }
+#endif
+
         private CharacterExpressionSet TryBakeExpressions(GameObject sceneObject, KhrCharacter hub, KHR_character_expression expressionExt)
         {
             var root = _context?.Root;

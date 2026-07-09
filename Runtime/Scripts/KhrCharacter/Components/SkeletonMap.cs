@@ -101,10 +101,20 @@ namespace UnityGLTF.KhrCharacter
             // Pre-add the Animator now so it attaches/initializes during this activation (assigning the avatar to
             // a component AddComponent'd and used within the same Start call throws). Remember we added it so Start
             // can remove it if the build fails — don't leave an orphan Animator on a non-humanoid rig.
-            if (_buildHumanoidQueued && GetComponent<Animator>() == null)
+            // Defense-in-depth: if an Animator already has an Avatar (import sub-asset path, or a user manual
+            // assignment), drop the queued flag now so Start doesn't build a redundant runtime Avatar.
+            if (_buildHumanoidQueued)
             {
-                gameObject.AddComponent<Animator>();
-                _animatorPreAdded = true;
+                var existing = GetComponent<Animator>();
+                if (existing != null && existing.avatar != null)
+                {
+                    _buildHumanoidQueued = false;
+                }
+                else if (existing == null)
+                {
+                    gameObject.AddComponent<Animator>();
+                    _animatorPreAdded = true;
+                }
             }
         }
 
@@ -112,6 +122,16 @@ namespace UnityGLTF.KhrCharacter
         {
             if (!_buildHumanoidQueued) return;
             _buildHumanoidQueued = false;
+
+            // Respect an already-assigned Avatar (importer sub-asset path or a manual assignment): the queued
+            // build is a no-op when the Animator's Avatar slot is populated. Avoids redundant work each Play and
+            // keeps the sub-asset Avatar authoritative across edit -> Play transitions.
+            var preAssigned = GetComponent<Animator>();
+            if (preAssigned != null && preAssigned.avatar != null)
+            {
+                _animatorPreAdded = false;
+                return;
+            }
 
             var avatar = BuildAndAssignAvatar();
 
