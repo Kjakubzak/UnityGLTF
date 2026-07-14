@@ -5,7 +5,7 @@ namespace GLTF.Schema
     /// <summary>
     /// glTF node extension <c>KHR_node_visibility_hint</c>: a view-context visibility hint that applies to a node
     /// and its subtree. <c>role</c> selects the view context in which the subtree should render
-    /// (<c>both</c> | <c>first_person_only</c> | <c>third_person_only</c>, plus custom vocabulary); <c>label</c> is
+    /// (<c>always</c> | <c>first_person</c> | <c>third_person</c>, plus custom vocabulary); <c>label</c> is
     /// an optional UI string. This is an advisory hint that <b>composes on top of</b> core
     /// <c>KHR_node_visibility</c> — it never overrides a node hidden by <c>KHR_node_visibility</c>.
     /// Modeled on <see cref="KHR_node_camera_hint"/>.

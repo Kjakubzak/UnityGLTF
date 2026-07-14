@@ -93,7 +93,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             var head = MakeMeshChild(src, "head", out _);
             src.AddComponent<NodeVisibilityHintSet>().Bind(new List<NodeVisibilityHintSet.NodeVisibilityEntry>
             {
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = head.transform, Role = "third_person_only", Label = "Head" },
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = head.transform, Role = "third_person", Label = "Head" },
             });
 
             var gltf = ExportToGltfRoot(src);
@@ -116,14 +116,14 @@ namespace UnityGLTF.VisibilityHints.Tests
             var set = dst.GetComponent<NodeVisibilityHintSet>();
             Assert.IsNotNull(set, "re-import should add a NodeVisibilityHintSet");
             Assert.AreEqual(1, set.Entries.Count);
-            Assert.AreEqual("third_person_only", set.Entries[0].Role, "role survives export -> import");
+            Assert.AreEqual("third_person", set.Entries[0].Role, "role survives export -> import");
             Assert.AreEqual("Head", set.Entries[0].Label, "label survives export -> import");
 
             var view = dst.GetComponent<ViewContextController>();
             Assert.IsNotNull(view);
-            Assert.IsTrue(head2Renderer.enabled, "third_person_only visible in default third-person");
+            Assert.IsTrue(head2Renderer.enabled, "third_person visible in default third-person");
             view.Mode = ViewContextController.ViewContext.FirstPerson;
-            Assert.IsFalse(head2Renderer.enabled, "third_person_only hidden in first-person after round-trip");
+            Assert.IsFalse(head2Renderer.enabled, "third_person hidden in first-person after round-trip");
         }
 
         [Test]
@@ -134,7 +134,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             MakeMeshChild(src, "body", out var srcMesh);
             src.AddComponent<PrimitiveVisibilityHintSet>().Bind(new List<PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry>
             {
-                new PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry { Mesh = srcMesh, SubMesh = 0, Role = "first_person_only", Label = "BodyPrim" },
+                new PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry { Mesh = srcMesh, SubMesh = 0, Role = "first_person", Label = "BodyPrim" },
             });
 
             var gltf = ExportToGltfRoot(src);
@@ -163,13 +163,13 @@ namespace UnityGLTF.VisibilityHints.Tests
             var set = dst.GetComponent<PrimitiveVisibilityHintSet>();
             Assert.IsNotNull(set, "re-import should add a PrimitiveVisibilityHintSet");
             Assert.AreEqual(1, set.Entries.Count);
-            Assert.AreEqual("first_person_only", set.Entries[0].Role, "role survives export -> import");
+            Assert.AreEqual("first_person", set.Entries[0].Role, "role survives export -> import");
             Assert.AreSame(dstMesh, set.Entries[0].Mesh);
             Assert.AreEqual(0, set.Entries[0].SubMesh);
 
             var view = dst.GetComponent<ViewContextController>();
             Assert.IsNotNull(view);
-            Assert.AreNotSame(original, renderer.sharedMaterials[0], "first_person_only hidden in third-person -> invisible material");
+            Assert.AreNotSame(original, renderer.sharedMaterials[0], "first_person hidden in third-person -> invisible material");
             view.Mode = ViewContextController.ViewContext.FirstPerson;
             Assert.AreSame(original, renderer.sharedMaterials[0], "restored in first-person after round-trip");
         }

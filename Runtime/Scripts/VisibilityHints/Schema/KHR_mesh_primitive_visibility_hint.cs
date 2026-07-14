@@ -5,7 +5,7 @@ namespace GLTF.Schema
     /// <summary>
     /// glTF mesh-primitive extension <c>KHR_mesh_primitive_visibility_hint</c>: a view-context visibility hint that
     /// applies to a single mesh primitive (self-only, no subtree inheritance). <c>role</c> selects the view context
-    /// in which the primitive should render (<c>both</c> | <c>first_person_only</c> | <c>third_person_only</c>, plus
+    /// in which the primitive should render (<c>always</c> | <c>first_person</c> | <c>third_person</c>, plus
     /// custom vocabulary); <c>label</c> is an optional UI string. Advisory; composes on top of core
     /// <c>KHR_node_visibility</c>. Because the extension lives on the shared <c>meshes[m].primitives[i]</c>, it
     /// applies to every node that references that mesh.

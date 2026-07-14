@@ -78,7 +78,7 @@ namespace UnityGLTF.VisibilityHints
                     int subMesh = kv.Key;
                     if (subMesh < 0 || subMesh >= materials.Length) continue;
                     var viewRole = ViewContextController.ParseRole(kv.Value);
-                    if (viewRole == ViewContextController.ViewRole.Both) continue; // always visible -> no swap needed
+                    if (viewRole == ViewContextController.ViewRole.Always) continue; // always visible -> no swap needed
                     controller.RegisterPrimitiveSlot(renderer, subMesh, materials[subMesh], invisible, viewRole);
                 }
             }

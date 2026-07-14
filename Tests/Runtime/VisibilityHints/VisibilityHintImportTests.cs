@@ -66,7 +66,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             var ctx = new VisibilityHintImportContext(null);
             var node = new Node { Name = "head" };
             node.AddExtension(KHR_node_visibility_hint.EXTENSION_NAME,
-                new KHR_node_visibility_hint { Role = "third_person_only", Label = "Head" });
+                new KHR_node_visibility_hint { Role = "third_person", Label = "Head" });
 
             ctx.OnAfterImportNode(node, 0, head);
             ctx.OnAfterImportScene(null, 0, scene);
@@ -74,15 +74,15 @@ namespace UnityGLTF.VisibilityHints.Tests
             var set = scene.GetComponent<NodeVisibilityHintSet>();
             Assert.IsNotNull(set, "import should add a NodeVisibilityHintSet to the scene root");
             Assert.AreEqual(1, set.Entries.Count);
-            Assert.AreEqual("third_person_only", set.Entries[0].Role);
+            Assert.AreEqual("third_person", set.Entries[0].Role);
             Assert.AreEqual("Head", set.Entries[0].Label);
             Assert.AreSame(head.transform, set.Entries[0].Node);
 
             var view = scene.GetComponent<ViewContextController>();
             Assert.IsNotNull(view, "import should add a ViewContextController");
-            Assert.IsTrue(headRenderer.enabled, "third_person_only is visible in the default third-person context");
+            Assert.IsTrue(headRenderer.enabled, "third_person is visible in the default third-person context");
             view.Mode = ViewContextController.ViewContext.FirstPerson;
-            Assert.IsFalse(headRenderer.enabled, "third_person_only hides in first-person");
+            Assert.IsFalse(headRenderer.enabled, "third_person hides in first-person");
         }
 
         [Test]
@@ -101,7 +101,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             var gltf = new GLTFRoot { Meshes = new List<GLTFMesh>(), Nodes = new List<Node>() };
             var prim = new MeshPrimitive();
             prim.AddExtension(KHR_mesh_primitive_visibility_hint.EXTENSION_NAME,
-                new KHR_mesh_primitive_visibility_hint { Role = "first_person_only", Label = "BodyPrim" });
+                new KHR_mesh_primitive_visibility_hint { Role = "first_person", Label = "BodyPrim" });
             gltf.Meshes.Add(new GLTFMesh { Primitives = new List<MeshPrimitive> { prim } });
             var node = new Node { Name = "body", Mesh = new MeshId { Id = 0, Root = gltf } };
 
@@ -114,11 +114,11 @@ namespace UnityGLTF.VisibilityHints.Tests
             Assert.AreEqual(1, set.Entries.Count);
             Assert.AreSame(unityMesh, set.Entries[0].Mesh);
             Assert.AreEqual(0, set.Entries[0].SubMesh);
-            Assert.AreEqual("first_person_only", set.Entries[0].Role);
+            Assert.AreEqual("first_person", set.Entries[0].Role);
 
             var view = scene.GetComponent<ViewContextController>();
             Assert.IsNotNull(view);
-            // first_person_only is hidden in the default third-person context -> swapped to the invisible material.
+            // first_person is hidden in the default third-person context -> swapped to the invisible material.
             Assert.AreNotSame(original, renderer.sharedMaterials[0], "hidden slot swaps to the invisible material");
             view.Mode = ViewContextController.ViewContext.FirstPerson;
             Assert.AreSame(original, renderer.sharedMaterials[0], "slot restores the original material in first-person");
@@ -150,7 +150,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             var headRenderer = head.AddComponent<MeshRenderer>();
             var headNode = new Node { Name = "head" };
             headNode.AddExtension(KHR_node_visibility_hint.EXTENSION_NAME,
-                new KHR_node_visibility_hint { Role = "third_person_only" });
+                new KHR_node_visibility_hint { Role = "third_person" });
 
             // Primitive hint on "body".
             var body = NewChild(scene, "body");
@@ -164,7 +164,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             var gltf = new GLTFRoot { Meshes = new List<GLTFMesh>(), Nodes = new List<Node>() };
             var prim = new MeshPrimitive();
             prim.AddExtension(KHR_mesh_primitive_visibility_hint.EXTENSION_NAME,
-                new KHR_mesh_primitive_visibility_hint { Role = "third_person_only" });
+                new KHR_mesh_primitive_visibility_hint { Role = "third_person" });
             gltf.Meshes.Add(new GLTFMesh { Primitives = new List<MeshPrimitive> { prim } });
             var bodyNode = new Node { Name = "body", Mesh = new MeshId { Id = 0, Root = gltf } };
 
@@ -179,7 +179,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             Assert.AreEqual(1, controllers.Length, "both sets must share a single ViewContextController");
 
             var view = controllers[0];
-            // Both are third_person_only: visible now, both hidden in first-person (renderer disabled + material swap).
+            // Both are third_person: visible now, both hidden in first-person (renderer disabled + material swap).
             Assert.IsTrue(headRenderer.enabled);
             Assert.AreSame(original, bodyRenderer.sharedMaterials[0]);
 

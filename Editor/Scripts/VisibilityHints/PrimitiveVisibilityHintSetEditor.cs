@@ -9,7 +9,7 @@ namespace UnityGLTF.VisibilityHints.Editor
     /// Editable inspector for <see cref="PrimitiveVisibilityHintSet"/>. Lists per-primitive hints (shared Mesh +
     /// sub-mesh index, role, optional label) and lets you add / edit / remove them. A "Collect child renderers"
     /// button (in the style of <c>MaterialVariants</c>) scans the subtree and appends any missing
-    /// <c>(mesh, sub-mesh)</c> slots defaulting to role <c>both</c> for you to set. Entries are written through
+    /// <c>(mesh, sub-mesh)</c> slots defaulting to role <c>always</c> for you to set. Entries are written through
     /// the serialized backing list, so edits are undoable and never trigger runtime resolution.
     /// </summary>
     [CustomEditor(typeof(PrimitiveVisibilityHintSet))]
@@ -56,8 +56,8 @@ namespace UnityGLTF.VisibilityHints.Editor
             EditorGUILayout.Space();
             EditorGUILayout.HelpBox(
                 "A primitive hint targets a shared Mesh + sub-mesh index, so it applies to every renderer that uses " +
-                "that mesh. \"Collect child renderers\" appends any missing (mesh, sub-mesh) slots as role \"both\"; " +
-                "set the ones you want to first_person_only / third_person_only. Enable the \"KHR Visibility Hints " +
+                "that mesh. \"Collect child renderers\" appends any missing (mesh, sub-mesh) slots as role \"always\"; " +
+                "set the ones you want to first_person / third_person. Enable the \"KHR Visibility Hints " +
                 "(View Context)\" export plugin to write these hints to glTF.",
                 MessageType.Info);
         }
@@ -69,12 +69,12 @@ namespace UnityGLTF.VisibilityHints.Editor
             var el = entriesProp.GetArrayElementAtIndex(idx);
             el.FindPropertyRelative("Mesh").objectReferenceValue = null;
             el.FindPropertyRelative("SubMesh").intValue = 0;
-            el.FindPropertyRelative("Role").stringValue = VisibilityHintExtensionNames.RoleBoth;
+            el.FindPropertyRelative("Role").stringValue = VisibilityHintExtensionNames.RoleAlways;
             el.FindPropertyRelative("Label").stringValue = string.Empty;
         }
 
         // Append every (mesh, sub-mesh) slot reachable in the subtree that isn't already present, defaulting to
-        // role "both" (a no-op the user then edits). Mirrors MaterialVariants' Collect, but writes through the
+        // role "always" (a no-op the user then edits). Mirrors MaterialVariants' Collect, but writes through the
         // serialized list so the operation is undoable.
         private static void CollectChildRenderers(PrimitiveVisibilityHintSet target, SerializedProperty entriesProp)
         {
@@ -98,7 +98,7 @@ namespace UnityGLTF.VisibilityHints.Editor
                     var el = entriesProp.GetArrayElementAtIndex(idx);
                     el.FindPropertyRelative("Mesh").objectReferenceValue = mesh;
                     el.FindPropertyRelative("SubMesh").intValue = sub;
-                    el.FindPropertyRelative("Role").stringValue = VisibilityHintExtensionNames.RoleBoth;
+                    el.FindPropertyRelative("Role").stringValue = VisibilityHintExtensionNames.RoleAlways;
                     el.FindPropertyRelative("Label").stringValue = string.Empty;
                 }
             }

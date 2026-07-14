@@ -2,7 +2,7 @@
 
 Runtime, import, and export support for two view-context visibility extensions:
 
-- **`KHR_node_visibility_hint`** (node): a `role` (`both` | `first_person_only` | `third_person_only`, plus
+- **`KHR_node_visibility_hint`** (node): a `role` (`always` | `first_person` | `third_person`, plus
   custom vocabulary) + optional `label`, applying to a node **and its subtree**.
 - **`KHR_mesh_primitive_visibility_hint`** (mesh primitive): the same `role`/`label`, self-only (per primitive).
 
@@ -57,7 +57,7 @@ and are never rejected.
 // After importing (or on a rehydrated prefab) the scene root carries a ViewContextController.
 var view = importedRoot.GetComponent<ViewContextController>();
 
-view.Mode = ViewContextController.ViewContext.FirstPerson; // hide third_person_only, show first_person_only
+view.Mode = ViewContextController.ViewContext.FirstPerson; // hide third_person, show first_person
 view.OnViewContextChanged += ctx => Debug.Log($"View context is now {ctx}");
 ```
 
@@ -70,10 +70,10 @@ components and makes **no** changes to core UnityGLTF.
 - **Authorable inspectors** on the hint-set components — the same inspector shows imported entries and lets you
   add / edit / remove them:
   - `NodeVisibilityHintSet` — a list of `(Node, role, label)` rows. The **role** is a popup of
-    `both` / `first_person_only` / `third_person_only` with a **Custom…** option that reveals a text field for
+    `always` / `first_person` / `third_person` with a **Custom…** option that reveals a text field for
     the open role vocabulary.
   - `PrimitiveVisibilityHintSet` — a list of `(Mesh, sub-mesh, role, label)` rows, plus a **"Collect child
-    renderers"** button that scans the subtree and appends any missing `(mesh, sub-mesh)` slots as role `both`
+    renderers"** button that scans the subtree and appends any missing `(mesh, sub-mesh)` slots as role `always`
     for you to set (in the style of `MaterialVariants`).
   - Edits are written through the serialized backing list (undoable) and never toggle a live renderer/material,
     so editing an imported hint changes the serialized `Entries` (hence export and the next Play-mode resolve).
@@ -81,15 +81,15 @@ components and makes **no** changes to core UnityGLTF.
   in Play mode, so you can flip the view context live and watch third-person-only renderers disable and hinted
   sub-meshes swap to the invisible material (and restore).
 - **Sample generator:** **GameObject → UnityGLTF → Generate Visibility Hints Sample** builds a small
-  Head + Body hierarchy (Head → `third_person_only`; a Body sub-mesh → `first_person_only`), leaves it in the
+  Head + Body hierarchy (Head → `third_person`; a Body sub-mesh → `first_person`), leaves it in the
   scene for inspection, and exports a `VisibilityHintsSample.glb` (with the export plugin enabled on a fresh,
   isolated default-settings instance) to a folder you choose. Re-import it with the import plugin enabled to see
   the components restored.
 
 ## Round-trip notes
 
-- **Roles are open vocabulary.** `both` / `first_person_only` / `third_person_only` map to the runtime view
-  roles; any unrecognized role is treated as `both` (never hidden) with a warning
+- **Roles are open vocabulary.** `always` / `first_person` / `third_person` map to the runtime view
+  roles; any unrecognized role is treated as `always` (never hidden) with a warning
   (`ViewContextController.ParseRole`). Unknown fields on the extension survive via lossless `RawData` passthrough.
 - **`role` is required, `label` is optional (minLength:1).** Export skips a hint with an empty/missing role
   (with a warning) and omits an empty label from the wire.

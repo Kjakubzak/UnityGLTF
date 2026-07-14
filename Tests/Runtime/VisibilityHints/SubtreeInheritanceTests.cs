@@ -45,7 +45,7 @@ namespace UnityGLTF.VisibilityHints.Tests
         [Test]
         public void SubtreeInheritance_DescendantOverridesAncestor()
         {
-            // root > A(third_person_only) > B(inherits A) > C(first_person_only, overrides A)
+            // root > A(third_person) > B(inherits A) > C(first_person, overrides A)
             var root = NewGo("root");
             var a = NewChild(root, "A"); var aR = a.AddComponent<MeshRenderer>();
             var b = NewChild(a, "B"); var bR = b.AddComponent<MeshRenderer>();
@@ -54,22 +54,22 @@ namespace UnityGLTF.VisibilityHints.Tests
             var set = root.AddComponent<NodeVisibilityHintSet>();
             set.Bind(new List<NodeVisibilityHintSet.NodeVisibilityEntry>
             {
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = a.transform, Role = "third_person_only" },
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = c.transform, Role = "first_person_only" },
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = a.transform, Role = "third_person" },
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = c.transform, Role = "first_person" },
             });
 
             var view = root.GetComponent<ViewContextController>();
             Assert.IsNotNull(view, "Bind must add a ViewContextController to the scene root");
 
             // Default ThirdPerson.
-            Assert.IsTrue(aR.enabled, "A (third_person_only) is visible in third-person");
-            Assert.IsTrue(bR.enabled, "B inherits A's third_person_only -> visible in third-person");
-            Assert.IsFalse(cR.enabled, "C (first_person_only override) is hidden in third-person");
+            Assert.IsTrue(aR.enabled, "A (third_person) is visible in third-person");
+            Assert.IsTrue(bR.enabled, "B inherits A's third_person -> visible in third-person");
+            Assert.IsFalse(cR.enabled, "C (first_person override) is hidden in third-person");
 
             view.Mode = ViewContextController.ViewContext.FirstPerson;
             Assert.IsFalse(aR.enabled, "A hidden in first-person");
             Assert.IsFalse(bR.enabled, "B inherits A -> hidden in first-person");
-            Assert.IsTrue(cR.enabled, "C (first_person_only) visible in first-person");
+            Assert.IsTrue(cR.enabled, "C (first_person) visible in first-person");
         }
 
         [Test]
@@ -82,7 +82,7 @@ namespace UnityGLTF.VisibilityHints.Tests
 
             root.AddComponent<NodeVisibilityHintSet>().Bind(new List<NodeVisibilityHintSet.NodeVisibilityEntry>
             {
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = a.transform, Role = "third_person_only" },
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = a.transform, Role = "third_person" },
             });
 
             var view = root.GetComponent<ViewContextController>();
@@ -102,8 +102,8 @@ namespace UnityGLTF.VisibilityHints.Tests
 
             root.AddComponent<NodeVisibilityHintSet>().Bind(new List<NodeVisibilityHintSet.NodeVisibilityEntry>
             {
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = a.transform, Role = "third_person_only" },
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = c.transform, Role = "first_person_only" },
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = a.transform, Role = "third_person" },
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = c.transform, Role = "first_person" },
             });
 
             // Instantiate reproduces serialize -> deserialize: entries are deep-copied (intra-hierarchy Transform

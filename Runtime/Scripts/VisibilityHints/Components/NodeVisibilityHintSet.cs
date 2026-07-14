@@ -67,7 +67,7 @@ namespace UnityGLTF.VisibilityHints
                 var role = ResolveRoleFor(renderer.transform, roleByNode);
                 if (role == null) continue; // no hint applies to this renderer -> leave it at its default visibility
                 var viewRole = ViewContextController.ParseRole(role);
-                if (viewRole == ViewContextController.ViewRole.Both) continue; // always visible -> nothing to manage
+                if (viewRole == ViewContextController.ViewRole.Always) continue; // always visible -> nothing to manage
                 controller.RegisterRenderer(renderer, viewRole);
             }
         }

@@ -25,11 +25,11 @@ namespace UnityGLTF.VisibilityHints.Editor
             var root = new GameObject("VisibilityHintsSample");
             Undo.RegisterCreatedObjectUndo(root, "Generate Visibility Hints Sample");
 
-            // Head: a single-sub-mesh node, hinted third_person_only (hidden when the view context is first person).
+            // Head: a single-sub-mesh node, hinted third_person (hidden when the view context is first person).
             var head = MakeMeshChild(root, "Head", SingleTriangleMesh("HeadMesh"), NewMaterial("HeadMat"));
             head.transform.localPosition = new Vector3(0f, 1f, 0f);
 
-            // Body: two sub-meshes; sub-mesh 1 is hinted first_person_only (e.g. arms visible only in first person).
+            // Body: two sub-meshes; sub-mesh 1 is hinted first_person (e.g. arms visible only in first person).
             var bodyMesh = TwoSubMeshMesh("BodyMesh");
             MakeMeshChild(root, "Body", bodyMesh, NewMaterial("BodyMat0"), NewMaterial("BodyMat1"));
 
@@ -40,7 +40,7 @@ namespace UnityGLTF.VisibilityHints.Editor
                 new NodeVisibilityHintSet.NodeVisibilityEntry
                 {
                     Node = head.transform,
-                    Role = VisibilityHintExtensionNames.RoleThirdPersonOnly,
+                    Role = VisibilityHintExtensionNames.RoleThirdPerson,
                     Label = "Head",
                 },
             });
@@ -51,7 +51,7 @@ namespace UnityGLTF.VisibilityHints.Editor
                 {
                     Mesh = bodyMesh,
                     SubMesh = 1,
-                    Role = VisibilityHintExtensionNames.RoleFirstPersonOnly,
+                    Role = VisibilityHintExtensionNames.RoleFirstPerson,
                     Label = "BodyArms",
                 },
             });

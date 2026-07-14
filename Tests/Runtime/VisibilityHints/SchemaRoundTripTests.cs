@@ -17,22 +17,22 @@ namespace UnityGLTF.VisibilityHints.Tests
         [Test]
         public void NodeHint_AuthoredRoundTrip_PreservesRoleAndLabel()
         {
-            var ext = new KHR_node_visibility_hint { Role = "third_person_only", Label = "Head" };
+            var ext = new KHR_node_visibility_hint { Role = "third_person", Label = "Head" };
             var reparsed = new KHR_node_visibility_hint_Factory().Deserialize(null, ext.Serialize()) as KHR_node_visibility_hint;
 
             Assert.IsNotNull(reparsed);
-            Assert.AreEqual("third_person_only", reparsed.Role);
+            Assert.AreEqual("third_person", reparsed.Role);
             Assert.AreEqual("Head", reparsed.Label);
         }
 
         [Test]
         public void PrimitiveHint_AuthoredRoundTrip_PreservesRoleAndLabel()
         {
-            var ext = new KHR_mesh_primitive_visibility_hint { Role = "first_person_only", Label = "Arms" };
+            var ext = new KHR_mesh_primitive_visibility_hint { Role = "first_person", Label = "Arms" };
             var reparsed = new KHR_mesh_primitive_visibility_hint_Factory().Deserialize(null, ext.Serialize()) as KHR_mesh_primitive_visibility_hint;
 
             Assert.IsNotNull(reparsed);
-            Assert.AreEqual("first_person_only", reparsed.Role);
+            Assert.AreEqual("first_person", reparsed.Role);
             Assert.AreEqual("Arms", reparsed.Label);
         }
 
@@ -59,7 +59,7 @@ namespace UnityGLTF.VisibilityHints.Tests
         public void PrimitiveHint_RawData_PassesThroughUnknownFieldsLosslessly()
         {
             var json = new JProperty(KHR_mesh_primitive_visibility_hint.EXTENSION_NAME, new JObject(
-                new JProperty("role", "third_person_only"),
+                new JProperty("role", "third_person"),
                 new JProperty("extra", "keepme")));
 
             var ext = new KHR_mesh_primitive_visibility_hint_Factory().Deserialize(null, json) as KHR_mesh_primitive_visibility_hint;
@@ -73,7 +73,7 @@ namespace UnityGLTF.VisibilityHints.Tests
         public void NodeHint_EmptyLabel_OmittedFromWire()
         {
             // label is optional but minLength:1: an authored empty label (Unity coerces null -> "") must be omitted.
-            var ext = new KHR_node_visibility_hint { Role = "both", Label = "" };
+            var ext = new KHR_node_visibility_hint { Role = "always", Label = "" };
             var obj = (JObject)ext.Serialize().Value;
 
             Assert.IsTrue(obj.ContainsKey("role"), "role must be present on the wire");
@@ -83,7 +83,7 @@ namespace UnityGLTF.VisibilityHints.Tests
         [Test]
         public void PrimitiveHint_EmptyLabel_OmittedFromWire()
         {
-            var ext = new KHR_mesh_primitive_visibility_hint { Role = "both", Label = null };
+            var ext = new KHR_mesh_primitive_visibility_hint { Role = "always", Label = null };
             var obj = (JObject)ext.Serialize().Value;
 
             Assert.IsFalse(obj.ContainsKey("label"), "a null label must be omitted (schema minLength:1)");

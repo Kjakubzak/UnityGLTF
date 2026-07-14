@@ -7,7 +7,7 @@ namespace UnityGLTF.VisibilityHints.Editor
     /// <summary>
     /// Editable inspector for <see cref="NodeVisibilityHintSet"/>. Lists the authored node-hint entries (whether
     /// imported or hand-authored) and lets you add / edit / remove them: a Transform reference, a role popup
-    /// (both / first_person_only / third_person_only / Custom…), and an optional label. Entries are written
+    /// (always / first_person / third_person / Custom…), and an optional label. Entries are written
     /// through the serialized backing list, so edits are undoable and never trigger runtime resolution.
     /// </summary>
     [CustomEditor(typeof(NodeVisibilityHintSet))]
@@ -16,11 +16,11 @@ namespace UnityGLTF.VisibilityHints.Editor
         // Standard role vocabulary, index-aligned with the first three popup labels below.
         private static readonly string[] StandardRoles =
         {
-            VisibilityHintExtensionNames.RoleBoth,
-            VisibilityHintExtensionNames.RoleFirstPersonOnly,
-            VisibilityHintExtensionNames.RoleThirdPersonOnly,
+            VisibilityHintExtensionNames.RoleAlways,
+            VisibilityHintExtensionNames.RoleFirstPerson,
+            VisibilityHintExtensionNames.RoleThirdPerson,
         };
-        private static readonly string[] RolePopupLabels = { "both", "first_person_only", "third_person_only", "Custom…" };
+        private static readonly string[] RolePopupLabels = { "always", "first_person", "third_person", "Custom…" };
         private const int CustomRoleIndex = 3;
 
         public override void OnInspectorGUI()
@@ -71,7 +71,7 @@ namespace UnityGLTF.VisibilityHints.Editor
             entriesProp.arraySize++; // appends a duplicate of the last element, so reset every field explicitly
             var el = entriesProp.GetArrayElementAtIndex(idx);
             el.FindPropertyRelative("Node").objectReferenceValue = null;
-            el.FindPropertyRelative("Role").stringValue = VisibilityHintExtensionNames.RoleBoth;
+            el.FindPropertyRelative("Role").stringValue = VisibilityHintExtensionNames.RoleAlways;
             el.FindPropertyRelative("Label").stringValue = string.Empty;
         }
 

@@ -45,21 +45,21 @@ namespace UnityGLTF.VisibilityHints.Tests
             var view = NewGo("char").AddComponent<ViewContextController>();
             var third = NewGo("third").AddComponent<MeshRenderer>();
             var first = NewGo("first").AddComponent<MeshRenderer>();
-            var both = NewGo("both").AddComponent<MeshRenderer>();
+            var always = NewGo("always").AddComponent<MeshRenderer>();
 
-            view.RegisterRenderer(third, ViewContextController.ViewRole.ThirdPersonOnly);
-            view.RegisterRenderer(first, ViewContextController.ViewRole.FirstPersonOnly);
-            view.RegisterRenderer(both, ViewContextController.ViewRole.Both);
+            view.RegisterRenderer(third, ViewContextController.ViewRole.ThirdPerson);
+            view.RegisterRenderer(first, ViewContextController.ViewRole.FirstPerson);
+            view.RegisterRenderer(always, ViewContextController.ViewRole.Always);
 
             // Default mode is ThirdPerson.
             Assert.IsTrue(third.enabled);
             Assert.IsFalse(first.enabled);
-            Assert.IsTrue(both.enabled);
+            Assert.IsTrue(always.enabled);
 
             view.Mode = ViewContextController.ViewContext.FirstPerson;
             Assert.IsFalse(third.enabled);
             Assert.IsTrue(first.enabled);
-            Assert.IsTrue(both.enabled);
+            Assert.IsTrue(always.enabled);
         }
 
         [Test]
@@ -71,7 +71,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             var invisible = NewMaterial("invisible");
             rend.sharedMaterials = new[] { original };
 
-            view.RegisterPrimitiveSlot(rend, 0, original, invisible, ViewContextController.ViewRole.ThirdPersonOnly);
+            view.RegisterPrimitiveSlot(rend, 0, original, invisible, ViewContextController.ViewRole.ThirdPerson);
 
             // Default ThirdPerson -> the third-person-only slot is visible (original material).
             Assert.AreSame(original, rend.sharedMaterials[0]);
@@ -94,7 +94,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             var invisible = NewMaterial("invisible");
             rend.sharedMaterials = new[] { slot0, slot1 };
 
-            view.RegisterPrimitiveSlot(rend, 1, slot1, invisible, ViewContextController.ViewRole.FirstPersonOnly);
+            view.RegisterPrimitiveSlot(rend, 1, slot1, invisible, ViewContextController.ViewRole.FirstPerson);
 
             // ThirdPerson: the first-person-only slot 1 is hidden; slot 0 is never touched.
             Assert.AreSame(slot0, rend.sharedMaterials[0]);
@@ -124,16 +124,16 @@ namespace UnityGLTF.VisibilityHints.Tests
         [Test]
         public void ParseRole_MapsKnownRoles()
         {
-            Assert.AreEqual(ViewContextController.ViewRole.FirstPersonOnly, ViewContextController.ParseRole("first_person_only"));
-            Assert.AreEqual(ViewContextController.ViewRole.ThirdPersonOnly, ViewContextController.ParseRole("third_person_only"));
-            Assert.AreEqual(ViewContextController.ViewRole.Both, ViewContextController.ParseRole("both"));
+            Assert.AreEqual(ViewContextController.ViewRole.FirstPerson, ViewContextController.ParseRole("first_person"));
+            Assert.AreEqual(ViewContextController.ViewRole.ThirdPerson, ViewContextController.ParseRole("third_person"));
+            Assert.AreEqual(ViewContextController.ViewRole.Always, ViewContextController.ParseRole("always"));
         }
 
         [Test]
-        public void ParseRole_UnknownRole_FallsBackToBothAndWarns()
+        public void ParseRole_UnknownRole_FallsBackToAlwaysAndWarns()
         {
             LogAssert.Expect(LogType.Warning, new Regex("Unknown visibility role"));
-            Assert.AreEqual(ViewContextController.ViewRole.Both, ViewContextController.ParseRole("wibble"));
+            Assert.AreEqual(ViewContextController.ViewRole.Always, ViewContextController.ParseRole("wibble"));
         }
 
         [Test]
@@ -145,7 +145,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             var view = NewGo("char").AddComponent<ViewContextController>();
             var go = NewGo("body");
             var rend = go.AddComponent<MeshRenderer>();
-            view.RegisterRenderer(rend, ViewContextController.ViewRole.ThirdPersonOnly);
+            view.RegisterRenderer(rend, ViewContextController.ViewRole.ThirdPerson);
 
             go.SetActive(false); // core visibility: hidden
 

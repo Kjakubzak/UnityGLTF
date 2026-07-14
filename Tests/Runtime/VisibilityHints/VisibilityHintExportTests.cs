@@ -112,7 +112,7 @@ namespace UnityGLTF.VisibilityHints.Tests
 
             root.AddComponent<NodeVisibilityHintSet>().Bind(new List<NodeVisibilityHintSet.NodeVisibilityEntry>
             {
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = head.transform, Role = "third_person_only", Label = "Head" },
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = head.transform, Role = "third_person", Label = "Head" },
             });
 
             var gltf = ExportToGltfRoot(root);
@@ -121,7 +121,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             Assert.GreaterOrEqual(idx, 0, "the hinted node should be exported");
             var ext = NodeExtension<KHR_node_visibility_hint>(gltf, idx, KHR_node_visibility_hint.EXTENSION_NAME);
             Assert.IsNotNull(ext, "the hinted node should carry KHR_node_visibility_hint");
-            Assert.AreEqual("third_person_only", ext.Role);
+            Assert.AreEqual("third_person", ext.Role);
             Assert.AreEqual("Head", ext.Label);
 
             Assert.IsTrue(gltf.ExtensionsUsed != null && gltf.ExtensionsUsed.Contains(KHR_node_visibility_hint.EXTENSION_NAME),
@@ -138,14 +138,14 @@ namespace UnityGLTF.VisibilityHints.Tests
 
             root.AddComponent<PrimitiveVisibilityHintSet>().Bind(new List<PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry>
             {
-                new PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry { Mesh = mesh, SubMesh = 0, Role = "third_person_only", Label = "BodyPrim" },
+                new PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry { Mesh = mesh, SubMesh = 0, Role = "third_person", Label = "BodyPrim" },
             });
 
             var gltf = ExportToGltfRoot(root);
 
             var hint = FindPrimitiveHint(gltf);
             Assert.IsNotNull(hint, "the hinted primitive should carry KHR_mesh_primitive_visibility_hint");
-            Assert.AreEqual("third_person_only", hint.Role);
+            Assert.AreEqual("third_person", hint.Role);
             Assert.AreEqual("BodyPrim", hint.Label);
 
             Assert.IsTrue(gltf.ExtensionsUsed != null && gltf.ExtensionsUsed.Contains(KHR_mesh_primitive_visibility_hint.EXTENSION_NAME),
@@ -157,22 +157,22 @@ namespace UnityGLTF.VisibilityHints.Tests
         [Test]
         public void PrimitiveHint_ExportReadsAuthoredRole_NotLiveMaterialState()
         {
-            // A first_person_only slot is swapped to the invisible material in the default ThirdPerson context at
-            // Bind time. Export must still emit role "first_person_only" from the authored entry — never inferring
+            // A first_person slot is swapped to the invisible material in the default ThirdPerson context at
+            // Bind time. Export must still emit role "first_person" from the authored entry — never inferring
             // visibility from the (now invisible) live material.
             var root = NewGo("root");
             MakeMeshChild(root, "arms", out var mesh);
 
             root.AddComponent<PrimitiveVisibilityHintSet>().Bind(new List<PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry>
             {
-                new PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry { Mesh = mesh, SubMesh = 0, Role = "first_person_only" },
+                new PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry { Mesh = mesh, SubMesh = 0, Role = "first_person" },
             });
 
             var gltf = ExportToGltfRoot(root);
 
             var hint = FindPrimitiveHint(gltf);
             Assert.IsNotNull(hint, "the hint must still export even though the slot is currently swapped to invisible");
-            Assert.AreEqual("first_person_only", hint.Role, "export reads the authored role, not live material state");
+            Assert.AreEqual("first_person", hint.Role, "export reads the authored role, not live material state");
         }
     }
 }

@@ -24,7 +24,7 @@ namespace UnityGLTF.VisibilityHints
     public class ViewContextController : MonoBehaviour
     {
         public enum ViewContext { ThirdPerson, FirstPerson }
-        public enum ViewRole { Both, FirstPersonOnly, ThirdPersonOnly }
+        public enum ViewRole { Always, FirstPerson, ThirdPerson }
 
         [SerializeField] private ViewContext _mode = ViewContext.ThirdPerson;
 
@@ -111,26 +111,26 @@ namespace UnityGLTF.VisibilityHints
         {
             switch (role)
             {
-                case ViewRole.ThirdPersonOnly: return mode == ViewContext.ThirdPerson;
-                case ViewRole.FirstPersonOnly: return mode == ViewContext.FirstPerson;
-                default: return true; // Both
+                case ViewRole.ThirdPerson: return mode == ViewContext.ThirdPerson;
+                case ViewRole.FirstPerson: return mode == ViewContext.FirstPerson;
+                default: return true; // Always
             }
         }
 
         /// <summary>
         /// Maps a glTF <c>role</c> string to a <see cref="ViewRole"/>. Unknown/custom roles fall back to
-        /// <see cref="ViewRole.Both"/> (never hidden) with a warning, per the spec's open role vocabulary.
+        /// <see cref="ViewRole.Always"/> (never hidden) with a warning, per the spec's open role vocabulary.
         /// </summary>
         public static ViewRole ParseRole(string role)
         {
             switch (role)
             {
-                case VisibilityHintExtensionNames.RoleFirstPersonOnly: return ViewRole.FirstPersonOnly;
-                case VisibilityHintExtensionNames.RoleThirdPersonOnly: return ViewRole.ThirdPersonOnly;
-                case VisibilityHintExtensionNames.RoleBoth: return ViewRole.Both;
+                case VisibilityHintExtensionNames.RoleFirstPerson: return ViewRole.FirstPerson;
+                case VisibilityHintExtensionNames.RoleThirdPerson: return ViewRole.ThirdPerson;
+                case VisibilityHintExtensionNames.RoleAlways: return ViewRole.Always;
                 default:
-                    Debug.LogWarning($"[VisibilityHints] Unknown visibility role '{role}'; treating as '{VisibilityHintExtensionNames.RoleBoth}'.");
-                    return ViewRole.Both;
+                    Debug.LogWarning($"[VisibilityHints] Unknown visibility role '{role}'; treating as '{VisibilityHintExtensionNames.RoleAlways}'.");
+                    return ViewRole.Always;
             }
         }
     }
