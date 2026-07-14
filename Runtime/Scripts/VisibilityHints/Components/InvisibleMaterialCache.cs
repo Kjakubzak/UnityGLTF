@@ -14,9 +14,21 @@ namespace UnityGLTF.VisibilityHints
     {
         private static Material _invisible;
 
-        /// <summary>Returns the shared invisible material, creating it on first use.</summary>
+        /// <summary>
+        /// Optional project-supplied invisible material. When non-null, <see cref="Get"/> returns it instead of
+        /// the built-in runtime material. The built-in one is a best-effort transparent material found via
+        /// <see cref="Shader.Find"/>, which is fragile in player builds (a miss falls back to the magenta error
+        /// shader) and isn't a guaranteed no-op. A consuming project can set this to a material backed by a
+        /// dedicated ColorMask-0 shader it ships (build-safe, renders truly nothing). Set it before the first
+        /// hidden primitive is resolved — e.g. from a <c>[RuntimeInitializeOnLoadMethod]</c> BeforeSceneLoad.
+        /// </summary>
+        public static Material Override { get; set; }
+
+        /// <summary>Returns the invisible material: the project <see cref="Override"/> when set, otherwise a
+        /// shared runtime-created one (built on first use).</summary>
         public static Material Get()
         {
+            if (Override != null) return Override;
             if (_invisible != null) return _invisible;
             _invisible = CreateInvisibleMaterial();
             return _invisible;
