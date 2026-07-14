@@ -18,6 +18,15 @@ UnityGLTF doesn't have any native dependencies (pure C#) and thus works on all p
 
 The library is designed to be easy to extend with additional extensions to the glTF specification. Both import and export allow attaching custom plugins and callbacks and can be heavily modified to fit into specific pipelines. Many glTF extensions are supported.
 
+## KHR Character & Visibility Hints (this fork)
+
+This fork (`catsg_khr_character_testbed`) adds import/export plugins for the **KHR Character / Avatar** extension family ([glTF PR #2512](https://github.com/KhronosGroup/glTF/pull/2512)) and two view-context **visibility-hint** extensions, on top of upstream UnityGLTF. All are **disabled by default** and vendor-neutral (canonical `KHR_*` only).
+
+- **`KHR_character`** (+ `_expression` [morphtarget / joint / texture / mask], `_expression_mapping`, `_reference_pose`, `_skeleton_mapping`) — `KhrCharacterImportPlugin` / `KhrCharacterExportPlugin` reconstruct a `KhrCharacter` hub, expressions, a humanoid `Avatar`, gaze/camera hints, and a reference pose. See `Runtime/Scripts/KhrCharacter/`.
+- **`KHR_node_visibility_hint`** / **`KHR_mesh_primitive_visibility_hint`** — first/third-person view-context visibility via `VisibilityHintImportPlugin` (+ export). A `ViewContextController` toggles whole-node renderers and swaps a hidden sub-mesh to an invisible material (`InvisibleMaterialCache`, overridable per project). See `Runtime/Scripts/VisibilityHints/`.
+
+Exercised by the [`khr_character_testbed`](https://github.com/kenjimeta/khr_character_testbed) project and authored by the [`khr_character_blender`](https://github.com/kenjimeta/khr_character_blender) addon.
+
 ## Contents <!-- omit from toc -->
 - [Installation](#installation)
 - [Unity Version and Render Pipeline Compatibility](#unity-version-and-render-pipeline-compatibility)
