@@ -618,10 +618,7 @@ namespace UnityGLTF.KhrCharacter
                 return;
             }
 
-            if (driver.Kind == TexKind.UvTransform)
-                WriteUvTransformChannels(exporter, gltfRoot, anim, driver, matId.Id, times);
-            else
-                WriteIndexSwapChannel(exporter, gltfRoot, anim, driver, matId.Id, times);
+            WriteUvTransformChannels(exporter, gltfRoot, anim, driver, matId.Id, times);
         }
 
         // UV transform: reconstruct the absolute Unity _ST per key (inverse of the import bake), unpack into glTF
@@ -666,43 +663,6 @@ namespace UnityGLTF.KhrCharacter
             exporter.DeclareExtensionUsage(KHR_animation_pointer.EXTENSION_NAME);
             // Additive (never required): a plain viewer must still load the asset.
             exporter.DeclareExtensionUsage(ExtTextureTransformExtensionFactory.EXTENSION_NAME);
-        }
-
-        // Index swap: swap targets are runtime-only texture refs usually not bound to the material, so we export
-        // each one proactively (GetTextureId alone would dangle). Emits one STEP KHR_animation_pointer channel to
-        //   /materials/{m}/{slot}/index   whose output is the per-key glTF texture index.
-        private void WriteIndexSwapChannel(GLTFSceneExporter exporter, GLTFRoot gltfRoot, GLTFAnimation anim,
-            TextureDriver driver, int materialIndex, float[] times)
-        {
-            int n = times.Length;
-            if (driver.SwapTextures == null || driver.SwapTextures.Length == 0) return;
-
-            // The slot leaf (e.g. "baseColorTexture") is the export color-space hint (GLTFSceneExporter.TextureMapType.*).
-            string slotHint = driver.GltfTextureSlot;
-            int lastSlash = slotHint.LastIndexOf('/');
-            if (lastSlash >= 0 && lastSlash < slotHint.Length - 1) slotHint = slotHint.Substring(lastSlash + 1);
-
-            var indexValues = new float[n];
-            for (int k = 0; k < n; k++)
-            {
-                var tex = (k < driver.SwapTextures.Length) ? driver.SwapTextures[k] : null;
-                if (tex == null)
-                {
-                    Debug.LogWarning($"[KHR_character] Index-swap key {k} for '{driver.GltfTextureSlot}' has no texture; skipping this driver.");
-                    return;
-                }
-                var texId = exporter.ExportTexture(tex, slotHint);
-                if (texId == null)
-                {
-                    Debug.LogWarning($"[KHR_character] Index-swap texture '{tex.name}' could not be exported; skipping this driver.");
-                    return;
-                }
-                indexValues[k] = texId.Id;
-            }
-
-            EmitPointerChannel(exporter, gltfRoot, anim, times, exporter.ExportAccessor(indexValues),
-                $"/materials/{materialIndex}/{driver.GltfTextureSlot}/index", Interp.Step);
-            exporter.DeclareExtensionUsage(KHR_animation_pointer.EXTENSION_NAME);
         }
 
         // Builds a KHR_animation_pointer AnimationSampler + AnimationChannel (target.Path = "pointer") and appends

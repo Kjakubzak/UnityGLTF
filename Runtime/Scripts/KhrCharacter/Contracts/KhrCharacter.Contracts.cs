@@ -24,8 +24,6 @@ namespace UnityGLTF.KhrCharacter
 
     public enum TrsChannel { Translation, Rotation, Scale }
 
-    public enum TexKind { IndexSwap, UvTransform }
-
     public enum MaskType { Blend, Block }
 
     public enum CharacterCapability
@@ -85,12 +83,10 @@ namespace UnityGLTF.KhrCharacter
         public int PropertyId;           // resolved per pipeline (Shader.PropertyToID) at bake
         public string PropertyName;      // human-readable shader property name (e.g., "_BaseMap") — required for export
         public string GltfTextureSlot;   // glTF texture slot name (e.g., "baseColorTexture") — required for export
-        public TexKind Kind;
         public Sampler Sampler;
-        public Texture[] SwapTextures;   // IndexSwap: resolved texture per STEP key
-        public Vector4[] StValues;       // UvTransform: frame-0-relative _ST (tiling.xy, offset.zw) deltas
-        public Vector4 BaseSt;           // UvTransform: the material's base _ST (runtime rest anchor)
-        public Vector4 Frame0St;         // UvTransform: animation frame-0 absolute _ST; multi-key export anchor when HasFrame0St
+        public Vector4[] StValues;       // Frame-0-relative _ST (tiling.xy, offset.zw) deltas
+        public Vector4 BaseSt;           // The material's base _ST (runtime rest anchor)
+        public Vector4 Frame0St;         // Animation frame-0 absolute _ST; multi-key export anchor when HasFrame0St
         public bool HasFrame0St;         // true once import captured the authored frame-0 absolute; else export anchors on BaseSt
         public int Priority;             // same-slot conflict resolution
     }
@@ -254,9 +250,6 @@ namespace UnityGLTF.KhrCharacter
         Vector3 SampleVectorDelta(Sampler s, Vector3[] deltaVec, Vector3 baseVec, float d);
         Quaternion SampleRotationDelta(Sampler s, Quaternion[] deltaQuat, Quaternion baseQuat, float d);
         Vector4 SampleVector4Delta(Sampler s, Vector4[] deltaVec, Vector4 baseVec, float d);
-
-        // STEP keyframe index at normalized phase d (used for discrete texture-index swaps).
-        int SampleStepIndex(Sampler s, float d);
 
         // Mask: returns the masked input for a target track given raw inputs (blend/block, commutative).
         float ResolveMaskedInput(int trackIndex, IReadOnlyList<float> rawInputs, ExpressionTrack[] tracks);

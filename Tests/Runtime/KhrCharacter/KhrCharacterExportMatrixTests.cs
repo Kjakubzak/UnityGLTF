@@ -121,36 +121,10 @@ namespace UnityGLTF.KhrCharacter.Tests
             return mat;
         }
 
-        // A CPU-readable 2x2 texture: the index-swap export path encodes real pixels in a headless run.
-        private Texture2D MakeReadableTexture(string name, Color color)
-        {
-            var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false) { name = name };
-            var px = new Color[4];
-            for (int i = 0; i < px.Length; i++) px[i] = color;
-            tex.SetPixels(px);
-            tex.Apply();
-            _created.Add(tex);
-            return tex;
-        }
-
-        private TextureDriver IndexSwapDriver(Renderer mr, int priority)
-        {
-            var texA = MakeReadableTexture("swapA", Color.red);
-            var texB = MakeReadableTexture("swapB", Color.green);
-            return new TextureDriver
-            {
-                Renderer = mr, SubmeshSlot = 0, Kind = TexKind.IndexSwap,
-                PropertyId = Shader.PropertyToID("_MainTex"), PropertyName = "_MainTex",
-                GltfTextureSlot = "pbrMetallicRoughness/baseColorTexture",
-                Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Step, SingleKey = false },
-                SwapTextures = new Texture[] { texA, texB }, Priority = priority,
-            };
-        }
-
         private static TextureDriver UvTransformDriver(Renderer mr)
             => new TextureDriver
             {
-                Renderer = mr, SubmeshSlot = 0, Kind = TexKind.UvTransform,
+                Renderer = mr, SubmeshSlot = 0,
                 PropertyId = Shader.PropertyToID("_MainTex_ST"), PropertyName = "_MainTex",
                 GltfTextureSlot = "pbrMetallicRoughness/baseColorTexture",
                 Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Linear, SingleKey = false },
@@ -208,7 +182,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                             },
                         },
                         JointDrivers = new[] { RotationDriver(jaw) },
-                        TextureDrivers = new[] { IndexSwapDriver(mr, 0) },
+                        TextureDrivers = new[] { UvTransformDriver(mr) },
                     },
                 },
             };
@@ -225,11 +199,11 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsNotNull(item.Texture, "texture sub-extension present");
             Assert.AreEqual(1, item.Morphtarget.Channels.Length, "one morph driver -> one channel");
             Assert.AreEqual(1, item.Joint.Channels.Length, "one joint rotation driver -> one channel");
-            Assert.AreEqual(1, item.Texture.Channels.Length, "one index-swap driver -> one channel");
+            Assert.AreEqual(2, item.Texture.Channels.Length, "one UV-transform driver -> scale and offset channels");
 
             var anim = gltf.Animations[item.Animation];
 
-            // Disjoint + total partition: the three domains index distinct channels, together covering all three.
+            // Disjoint + total partition: the three domains index distinct channels.
             var morph = new HashSet<int>(item.Morphtarget.Channels);
             var joint = new HashSet<int>(item.Joint.Channels);
             var tex = new HashSet<int>(item.Texture.Channels);
@@ -237,7 +211,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(0, CountIntersect(morph, tex), "morph and texture channels must be disjoint");
             Assert.AreEqual(0, CountIntersect(joint, tex), "joint and texture channels must be disjoint");
             var union = new HashSet<int>(morph); union.UnionWith(joint); union.UnionWith(tex);
-            Assert.AreEqual(3, union.Count, "the partition must cover exactly the three emitted channels");
+            Assert.AreEqual(4, union.Count, "the partition must cover the four emitted channels");
             foreach (var ci in union)
                 Assert.IsTrue(ci >= 0 && ci < anim.Channels.Count, "every referenced channel index must be valid");
 
@@ -451,7 +425,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                         {
                             new TextureDriver
                             {
-                                Renderer = mr, SubmeshSlot = 0, Kind = TexKind.UvTransform,
+                                Renderer = mr, SubmeshSlot = 0,
                                 PropertyId = Shader.PropertyToID("_MainTex_ST"), PropertyName = "_MainTex",
                                 GltfTextureSlot = "", // <- missing slot
                                 Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Linear, SingleKey = false },

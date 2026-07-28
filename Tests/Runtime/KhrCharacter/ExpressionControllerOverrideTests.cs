@@ -73,19 +73,6 @@ namespace UnityGLTF.KhrCharacter.Tests
             Priority = priority,
         };
 
-        // Index-swap driver that selects 'tex' whenever it is active (both STEP keys map to the same texture, so
-        // the test isolates the winner selection from the STEP-index phase).
-        private static TextureDriver Index(Renderer r, int propId, Texture tex, int priority) => new TextureDriver
-        {
-            Renderer = r,
-            SubmeshSlot = 0,
-            Kind = TexKind.IndexSwap,
-            PropertyId = propId,
-            Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Step, SingleKey = false },
-            SwapTextures = new[] { tex, tex },
-            Priority = priority,
-        };
-
         private static CharacterExpressionSet SetWith(params ExpressionTrack[] tracks)
         {
             var set = new CharacterExpressionSet { Expressions = tracks };
@@ -192,45 +179,5 @@ namespace UnityGLTF.KhrCharacter.Tests
 
         // ── Texture index swap (H3) ──────────────────────────────────────────
 
-        [UnityTest]
-        public IEnumerator IndexSwap_PriorityWins_RegardlessOfWeightOrder()
-        {
-            var shader = Shader.Find("Unlit/Texture");
-            if (shader == null) { Assert.Ignore("No suitable built-in shader available in this project."); yield break; }
-
-            var go = new GameObject("quad", typeof(MeshFilter), typeof(MeshRenderer));
-            _created.Add(go);
-            var mr = go.GetComponent<MeshRenderer>();
-            var mat = new Material(shader);
-            _created.Add(mat);
-            mr.sharedMaterial = mat;
-
-            var texA = new Texture2D(1, 1) { name = "A" };
-            var texB = new Texture2D(1, 1) { name = "B" };
-            _created.Add(texA);
-            _created.Add(texB);
-
-            int propId = Shader.PropertyToID("_MainTex");
-            var set = SetWith(
-                new ExpressionTrack { Name = "a", Domains = ExpressionDomain.Texture, TextureDrivers = new[] { Index(mr, propId, texA, 1) } },
-                new ExpressionTrack { Name = "b", Domains = ExpressionDomain.Texture, TextureDrivers = new[] { Index(mr, propId, texB, 5) } });
-            var ec = go.AddComponent<ExpressionController>();
-            ec.Initialize(set);
-
-            // 'a' has the higher weight but the lower priority; 'b' (priority 5) must win.
-            ec.SetWeight("a", 1f);
-            ec.SetWeight("b", 0.6f);
-            yield return null;
-            var mpb = new MaterialPropertyBlock();
-            mr.GetPropertyBlock(mpb, 0);
-            Assert.AreSame(texB, mpb.GetTexture(propId));
-
-            // Reverse the weights: priority still decides, so the winner is independent of weight order.
-            ec.SetWeight("a", 0.6f);
-            ec.SetWeight("b", 1f);
-            yield return null;
-            mr.GetPropertyBlock(mpb, 0);
-            Assert.AreSame(texB, mpb.GetTexture(propId));
-        }
     }
 }

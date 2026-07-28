@@ -120,7 +120,7 @@ namespace UnityGLTF.KhrCharacter
                     binding.JointBindings = joints.ToArray();
                 }
 
-                // Texture drivers → renderer path (PropertyId kept as-is; SwapTextures are project assets).
+                // Texture drivers → renderer path (PropertyId kept as-is).
                 if (src.TextureDrivers != null)
                 {
                     var textures = new List<TextureBinding>(src.TextureDrivers.Length);
@@ -144,9 +144,7 @@ namespace UnityGLTF.KhrCharacter
                             PropertyId = d.PropertyId,
                             PropertyName = d.PropertyName,
                             GltfTextureSlot = d.GltfTextureSlot,
-                            Kind = d.Kind,
                             Sampler = d.Sampler,
-                            SwapTextures = d.SwapTextures,
                             StValues = d.StValues,
                             BaseSt = d.BaseSt,
                             Frame0St = d.Frame0St,
@@ -270,9 +268,7 @@ namespace UnityGLTF.KhrCharacter
                             PropertyId = b.PropertyId,
                             PropertyName = b.PropertyName,
                             GltfTextureSlot = b.GltfTextureSlot,
-                            Kind = b.Kind,
                             Sampler = b.Sampler,
-                            SwapTextures = b.SwapTextures,
                             StValues = b.StValues,
                             BaseSt = b.BaseSt,
                             Frame0St = b.Frame0St,

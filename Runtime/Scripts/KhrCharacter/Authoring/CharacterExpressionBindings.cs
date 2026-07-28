@@ -9,7 +9,7 @@
 // between the two lives in CharacterExpressionSetAsset.Extract/Resolve.
 //
 // Reused portable contract types (already [Serializable]): Sampler, MaskEntry, ExpressionMappingSet, TrsChannel,
-// TexKind, ExpressionDomain, ExpressionBlendMode.
+// ExpressionDomain and ExpressionBlendMode.
 
 using System;
 using UnityEngine;
@@ -67,8 +67,8 @@ namespace UnityGLTF.KhrCharacter
         public int Priority;
     }
 
-    // Mirror of TextureDriver: the live Renderer becomes RendererPath. SwapTextures are project assets and
-    // serialize fine. PropertyId (a stable Shader.PropertyToID hash, already persisted in prefabs) is kept as-is;
+    // Mirror of TextureDriver: the live Renderer becomes RendererPath. PropertyId (a stable
+    // Shader.PropertyToID hash, already persisted in prefabs) is kept as-is;
     // PropertyName and GltfTextureSlot are captured for glTF export (required for KHR_animation_pointer).
     [Serializable]
     public class TextureBinding
@@ -78,12 +78,10 @@ namespace UnityGLTF.KhrCharacter
         public int PropertyId;           // resolved per pipeline (Shader.PropertyToID) at bake
         public string PropertyName;      // human-readable shader property name (e.g., "_BaseMap") — required for export
         public string GltfTextureSlot;   // glTF texture slot name (e.g., "baseColorTexture") — required for export
-        public TexKind Kind;
         public Sampler Sampler;
-        public Texture[] SwapTextures;   // IndexSwap: resolved texture per STEP key (project assets)
-        public Vector4[] StValues;       // UvTransform: frame-0-relative _ST deltas
-        public Vector4 BaseSt;           // UvTransform: the material's base _ST
-        public Vector4 Frame0St;         // UvTransform: animation frame-0 absolute _ST; export anchor when HasFrame0St
+        public Vector4[] StValues;       // Frame-0-relative _ST deltas
+        public Vector4 BaseSt;           // The material's base _ST
+        public Vector4 Frame0St;         // Animation frame-0 absolute _ST; export anchor when HasFrame0St
         public bool HasFrame0St;         // true when the captured driver carried a frame-0 absolute; else export uses BaseSt
         public int Priority;
     }

@@ -8,8 +8,8 @@ using UnityEngine.TestTools;
 namespace UnityGLTF.KhrCharacter.Tests
 {
     /// <summary>
-    /// Golden-value tests for the texture baker seams (the _ST V-flip packing, the delta-over-rest UV driver,
-    /// and the STEP index-swap driver) plus an end-to-end MaterialPropertyBlock UV drive.
+    /// Golden-value tests for the texture baker seams (the _ST V-flip packing and the delta-over-rest UV driver)
+    /// plus an end-to-end MaterialPropertyBlock UV drive.
     /// </summary>
     public class KhrCharacterBakerTextureTests
     {
@@ -54,26 +54,9 @@ namespace UnityGLTF.KhrCharacter.Tests
             KhrCharacterBaker.BuildUvTransformDriver(r, 0, propId, times, st, baseSt, InterpolationType.LINEAR, drivers);
 
             Assert.AreEqual(1, drivers.Count);
-            Assert.AreEqual(TexKind.UvTransform, drivers[0].Kind);
             Assert.AreEqual(baseSt, drivers[0].BaseSt);
             AssertV4(Vector4.zero, drivers[0].StValues[0]);
             AssertV4(new Vector4(0f, 0f, 0.5f, 0f), drivers[0].StValues[1]);
-        }
-
-        [Test]
-        public void IndexSwap_IsStepWithTextures()
-        {
-            var r = MakeRenderer();
-            int propId = Shader.PropertyToID("_BaseMap");
-            var textures = new Texture[] { null, null };
-
-            var drivers = new List<TextureDriver>();
-            KhrCharacterBaker.BuildIndexSwapDriver(r, 0, propId, new[] { 0f, 1f }, textures, drivers);
-
-            Assert.AreEqual(1, drivers.Count);
-            Assert.AreEqual(TexKind.IndexSwap, drivers[0].Kind);
-            Assert.AreEqual(Interp.Step, drivers[0].Sampler.Interp);
-            Assert.AreEqual(2, drivers[0].SwapTextures.Length);
         }
 
         [UnityTest]
@@ -94,7 +77,6 @@ namespace UnityGLTF.KhrCharacter.Tests
             {
                 Renderer = mr,
                 SubmeshSlot = 0,
-                Kind = TexKind.UvTransform,
                 PropertyId = propId,
                 Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Linear, SingleKey = false },
                 StValues = new[] { Vector4.zero, new Vector4(0f, 0f, 1f, 0f) },

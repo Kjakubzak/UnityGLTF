@@ -4,8 +4,8 @@ namespace GLTF.Schema
 {
     /// <summary>
     /// <c>KHR_character_expression_texture</c> sub-extension of <c>KHR_character_expression</c>.
-    /// Lists indices into the referenced animation's <c>channels[]</c> that drive texture-index swaps and/or
-    /// UV transforms (via <c>KHR_animation_pointer</c> + <c>KHR_texture_transform</c>).
+    /// Lists indices into the referenced animation's <c>channels[]</c> that drive UV transforms via
+    /// <c>KHR_animation_pointer</c> and <c>KHR_texture_transform</c>.
     /// </summary>
     public class KHR_character_expression_texture : IExtension
     {

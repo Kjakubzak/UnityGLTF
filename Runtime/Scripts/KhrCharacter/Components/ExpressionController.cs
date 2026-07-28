@@ -13,8 +13,6 @@ namespace UnityGLTF.KhrCharacter
     [DefaultExecutionOrder(100)]
     public class ExpressionController : MonoBehaviour
     {
-        private const float IndexSwapThreshold = 0.5f;
-
         public struct ExpressionHandle
         {
             public string Name;
@@ -54,23 +52,13 @@ namespace UnityGLTF.KhrCharacter
             public readonly List<TextureDriver> Drivers = new List<TextureDriver>();
         }
 
-        // Winner-takes texture-index property within a render target.
-        private sealed class IndexProp
-        {
-            public int PropId;
-            public Texture BaseTexture;
-            public readonly List<int> ExprIndices = new List<int>();
-            public readonly List<TextureDriver> Drivers = new List<TextureDriver>();
-        }
-
-        // One MaterialPropertyBlock per (renderer, submesh slot), aggregating its UV + index properties.
+        // One MaterialPropertyBlock per (renderer, submesh slot), aggregating its UV properties.
         private sealed class TextureRenderTarget
         {
             public Renderer Renderer;
             public int Slot;
             public MaterialPropertyBlock Mpb;
             public readonly List<UvProp> Uv = new List<UvProp>();
-            public readonly List<IndexProp> Index = new List<IndexProp>();
         }
 
         // Persisted so an editor-imported prefab can rehydrate on Awake (the live import calls Initialize,
@@ -227,28 +215,14 @@ namespace UnityGLTF.KhrCharacter
                 _textureTargets.Add(target);
             }
 
-            if (driver.Kind == TexKind.UvTransform)
+            var uv = target.Uv.Find(p => p.PropId == driver.PropertyId);
+            if (uv == null)
             {
-                var uv = target.Uv.Find(p => p.PropId == driver.PropertyId);
-                if (uv == null)
-                {
-                    uv = new UvProp { PropId = driver.PropertyId, BaseSt = driver.BaseSt };
-                    target.Uv.Add(uv);
-                }
-                uv.ExprIndices.Add(expr);
-                uv.Drivers.Add(driver);
+                uv = new UvProp { PropId = driver.PropertyId, BaseSt = driver.BaseSt };
+                target.Uv.Add(uv);
             }
-            else // IndexSwap
-            {
-                var idx = target.Index.Find(p => p.PropId == driver.PropertyId);
-                if (idx == null)
-                {
-                    idx = new IndexProp { PropId = driver.PropertyId, BaseTexture = GetBaseTexture(driver.Renderer, driver.SubmeshSlot, driver.PropertyId) };
-                    target.Index.Add(idx);
-                }
-                idx.ExprIndices.Add(expr);
-                idx.Drivers.Add(driver);
-            }
+            uv.ExprIndices.Add(expr);
+            uv.Drivers.Add(driver);
         }
 
         public void SetWeight(string name, float driver)
@@ -433,34 +407,6 @@ namespace UnityGLTF.KhrCharacter
                     target.Mpb.SetVector(uv.PropId, st);
                 }
 
-                // Index swaps: among drivers active above threshold, pick the winner by Priority desc, then
-                // driver weight, then declaration order (earliest). With equal priorities (the baker default)
-                // this is identical to the prior most-active-wins rule. Otherwise re-base to the slot's texture.
-                for (int x = 0; x < target.Index.Count; x++)
-                {
-                    var idx = target.Index[x];
-                    int best = -1, bestPrio = 0;
-                    float bestWeight = 0f;
-                    for (int k = 0; k < idx.Drivers.Count; k++)
-                    {
-                        float di = _d[idx.ExprIndices[k]];
-                        if (di <= IndexSwapThreshold) continue;
-                        int prio = idx.Drivers[k].Priority;
-                        if (best < 0 || prio > bestPrio || (prio == bestPrio && di > bestWeight))
-                        { best = k; bestPrio = prio; bestWeight = di; }
-                    }
-
-                    Texture tex = idx.BaseTexture;
-                    if (best >= 0)
-                    {
-                        var driver = idx.Drivers[best];
-                        int ki = _semantics.SampleStepIndex(driver.Sampler, _d[idx.ExprIndices[best]]);
-                        if (driver.SwapTextures != null && ki >= 0 && ki < driver.SwapTextures.Length && driver.SwapTextures[ki] != null)
-                            tex = driver.SwapTextures[ki];
-                    }
-                    if (tex != null) target.Mpb.SetTexture(idx.PropId, tex);
-                }
-
                 target.Renderer.SetPropertyBlock(target.Mpb, target.Slot);
             }
         }
@@ -498,11 +444,5 @@ namespace UnityGLTF.KhrCharacter
             return mesh.GetBlendShapeFrameWeight(blendShapeIndex, 0);
         }
 
-        private static Texture GetBaseTexture(Renderer renderer, int slot, int propId)
-        {
-            var mats = renderer.sharedMaterials;
-            if (mats == null || slot < 0 || slot >= mats.Length || mats[slot] == null) return null;
-            return mats[slot].HasProperty(propId) ? mats[slot].GetTexture(propId) : null;
-        }
     }
 }

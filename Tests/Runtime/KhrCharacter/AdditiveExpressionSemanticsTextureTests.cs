@@ -4,16 +4,13 @@ using UnityEngine;
 namespace UnityGLTF.KhrCharacter.Tests
 {
     /// <summary>
-    /// Golden-value tests for the additive policy's Vector4 (_ST) sampling and STEP-index selection used by
-    /// the texture domain.
+    /// Golden-value tests for the additive policy's Vector4 (_ST) sampling used by the texture domain.
     /// </summary>
     public class AdditiveExpressionSemanticsTextureTests
     {
         private readonly IExpressionSemantics _s = AdditiveExpressionSemantics.Default;
 
         private static Sampler Linear(float[] t) => new Sampler { Times = t, Interp = Interp.Linear, SingleKey = t.Length <= 1 };
-        private static Sampler Step(float[] t) => new Sampler { Times = t, Interp = Interp.Step, SingleKey = t.Length <= 1 };
-
         [Test]
         public void Vector4_Linear_GoldenAtPhases()
         {
@@ -29,16 +26,6 @@ namespace UnityGLTF.KhrCharacter.Tests
             var s = new Sampler { Times = new[] { 0f }, Interp = Interp.Linear, SingleKey = true };
             var dv = new[] { new Vector4(1f, 1f, 1f, 1f) }; // absolute target
             AssertV4(new Vector4(0.5f, 0.5f, 0.5f, 0.5f), _s.SampleVector4Delta(s, dv, Vector4.zero, 0.5f)); // (1-0)*0.5
-        }
-
-        [Test]
-        public void StepIndex_PicksKeyframeIncludingEndpoint()
-        {
-            var s = Step(new[] { 0f, 0.5f, 1f });
-            Assert.AreEqual(0, _s.SampleStepIndex(s, 0f));
-            Assert.AreEqual(0, _s.SampleStepIndex(s, 0.4f));
-            Assert.AreEqual(1, _s.SampleStepIndex(s, 0.6f));
-            Assert.AreEqual(2, _s.SampleStepIndex(s, 1f));
         }
 
         private static void AssertV4(Vector4 e, Vector4 a)

@@ -59,14 +59,6 @@ namespace UnityGLTF.KhrCharacter
             return Vector4.Lerp(deltaVec[i], deltaVec[i + 1], u);
         }
 
-        public int SampleStepIndex(Sampler s, float d)
-        {
-            int n = s.Times != null ? s.Times.Length : 0;
-            if (n <= 1) return 0;
-            int i = FindInterval(s.Times, Clamp01(d), out float u);
-            return (u >= 1f) ? i + 1 : i;
-        }
-
         public float ResolveMaskedInput(int trackIndex, IReadOnlyList<float> rawInputs, ExpressionTrack[] tracks)
         {
             if (rawInputs == null || trackIndex < 0 || trackIndex >= rawInputs.Count) return 0f;

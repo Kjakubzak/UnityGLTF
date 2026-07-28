@@ -441,19 +441,7 @@ namespace UnityGLTF.KhrCharacter
                     var times = DecodeScalar(importer, GetAccessor(root, sampler.Input));
                     if (times.Length == 0) continue;
 
-                    if (gltfProperty.EndsWith("/index"))
-                    {
-                        // Texture-index swap: not handled by UnityGLTF's pointer importer, so resolve here.
-                        var indices = DecodeScalar(importer, GetAccessor(root, sampler.Output));
-                        if (indices.Length == 0) continue;
-                        if (!TryResolveTextureProperty(remapper, mat, gltfProperty, out int texPropId, out string texName)) continue;
-                        var swaps = new Texture[indices.Length];
-                        for (int k = 0; k < indices.Length; k++) swaps[k] = ResolveTexture(importer, Mathf.RoundToInt(indices[k]));
-                        // Export-only metadata (G-B): texture property + full glTF slot path (strip the "/index" leaf).
-                        var indexSlot = gltfProperty.Substring(0, gltfProperty.Length - "/index".Length);
-                        BuildIndexSwapDriver(renderer, slot, texPropId, times, swaps, output, texName, indexSlot);
-                    }
-                    else if (gltfProperty.Contains("KHR_texture_transform"))
+                    if (gltfProperty.Contains("KHR_texture_transform"))
                     {
                         if (!remapper.GetUnityPropertyName(mat, gltfProperty, out string unityName, out var map, out bool isSecondary)) continue;
                         if (map.PropertyType != MaterialPointerPropertyMap.PropertyTypeOption.TextureTransform) continue;
@@ -541,7 +529,6 @@ namespace UnityGLTF.KhrCharacter
             {
                 Renderer = renderer,
                 SubmeshSlot = slot,
-                Kind = TexKind.UvTransform,
                 PropertyId = propId,
                 PropertyName = propertyName,
                 GltfTextureSlot = gltfTextureSlot,
@@ -554,28 +541,6 @@ namespace UnityGLTF.KhrCharacter
                 // skip this path — hand-authored sets — leave it false and export falls back to BaseSt).
                 Frame0St = stValues[0],
                 HasFrame0St = true,
-                Priority = 0,
-            });
-        }
-
-        /// <summary>Builds a STEP texture-index-swap <see cref="TextureDriver"/> from resolved textures.</summary>
-        internal static void BuildIndexSwapDriver(
-            Renderer renderer, int slot, int propId, float[] times, Texture[] swapTextures, List<TextureDriver> output,
-            string propertyName = null, string gltfTextureSlot = null)
-        {
-            int n = times?.Length ?? 0;
-            if (renderer == null || swapTextures == null || n == 0) return;
-
-            output.Add(new TextureDriver
-            {
-                Renderer = renderer,
-                SubmeshSlot = slot,
-                Kind = TexKind.IndexSwap,
-                PropertyId = propId,
-                PropertyName = propertyName,
-                GltfTextureSlot = gltfTextureSlot,
-                Sampler = new Sampler { Times = times, Interp = Interp.Step, SingleKey = n <= 1 }, // swaps are always discrete
-                SwapTextures = swapTextures,
                 Priority = 0,
             });
         }

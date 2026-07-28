@@ -80,20 +80,6 @@ namespace UnityGLTF.KhrCharacter.Tests
             DeltaQuat = new[] { Quaternion.Euler(10f, 0f, 0f) }, BaseQuat = Quaternion.identity,
         };
 
-        // A small CPU-readable Texture2D so the index-swap export path (exporter.ExportTexture) can encode real
-        // pixels in a headless PlayMode run (there is no on-disk asset to fall back to). Distinct names + distinct
-        // objects -> distinct exported glTF texture ids.
-        private Texture2D MakeReadableTexture(string name, Color color)
-        {
-            var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false) { name = name };
-            var px = new Color[4];
-            for (int i = 0; i < px.Length; i++) px[i] = color;
-            tex.SetPixels(px);
-            tex.Apply();
-            _created.Add(tex);
-            return tex;
-        }
-
         [Test]
         public void ExportPlugin_IsDisabledByDefault()
         {
@@ -360,7 +346,6 @@ namespace UnityGLTF.KhrCharacter.Tests
                             {
                                 Renderer = mr,
                                 SubmeshSlot = 0,
-                                Kind = TexKind.UvTransform,
                                 PropertyId = Shader.PropertyToID("_MainTex_ST"),
                                 PropertyName = "_MainTex",
                                 GltfTextureSlot = "pbrMetallicRoughness/baseColorTexture",
@@ -636,7 +621,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                         {
                             new TextureDriver
                             {
-                                Renderer = mr, SubmeshSlot = 0, Kind = TexKind.UvTransform,
+                                Renderer = mr, SubmeshSlot = 0,
                                 PropertyId = Shader.PropertyToID("_MainTex_ST"), PropertyName = "_MainTex",
                                 GltfTextureSlot = "pbrMetallicRoughness/baseColorTexture",
                                 Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Linear, SingleKey = false },
@@ -1044,104 +1029,6 @@ namespace UnityGLTF.KhrCharacter.Tests
             }
         }
 
-        [Test]
-        public void ExpressionMetadataExport_IncludesIndexSwapTextureChannel()
-        {
-            // FU1 (matrix P2): an IndexSwap TextureDriver exports each swap texture via exporter.ExportTexture and
-            // emits a single STEP KHR_animation_pointer channel to /materials/{m}/{slot}/index whose per-key output
-            // is the resolved glTF texture index. Mirrors the UV-transform test but exercises the texture-encode
-            // path, so the swap textures must be CPU-readable, distinct, and non-null.
-            var shader = Shader.Find("Unlit/Texture");
-            if (shader == null) { Assert.Ignore("No suitable built-in shader available in this project."); return; }
-
-            var root = new GameObject("char");
-            _created.Add(root);
-
-            // A child renderer with a real mesh + material so the material is exported and GetMaterialId resolves.
-            var quad = new GameObject("quad", typeof(MeshFilter), typeof(MeshRenderer));
-            quad.transform.SetParent(root.transform, false);
-            var mesh = new Mesh { name = "quad" };
-            mesh.vertices = new[] { new Vector3(0f, 0f, 0f), new Vector3(1f, 0f, 0f), new Vector3(0f, 1f, 0f) };
-            mesh.uv = new[] { new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0f, 1f) };
-            mesh.triangles = new[] { 0, 1, 2 };
-            mesh.RecalculateNormals();
-            _created.Add(mesh);
-            quad.GetComponent<MeshFilter>().sharedMesh = mesh;
-            var mat = new Material(shader) { name = "mat" };
-            _created.Add(mat);
-            var mr = quad.GetComponent<MeshRenderer>();
-            mr.sharedMaterial = mat;
-
-            // Two distinct, CPU-readable swap textures -> two distinct exported glTF texture ids.
-            var texA = MakeReadableTexture("swapA", Color.red);
-            var texB = MakeReadableTexture("swapB", Color.green);
-
-            var set = new CharacterExpressionSet
-            {
-                Expressions = new[]
-                {
-                    new ExpressionTrack
-                    {
-                        Name = "swap",
-                        Domains = ExpressionDomain.Texture,
-                        TextureDrivers = new[]
-                        {
-                            new TextureDriver
-                            {
-                                Renderer = mr,
-                                SubmeshSlot = 0,
-                                Kind = TexKind.IndexSwap,
-                                PropertyId = Shader.PropertyToID("_MainTex"),
-                                PropertyName = "_MainTex",
-                                GltfTextureSlot = "pbrMetallicRoughness/baseColorTexture",
-                                Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Step, SingleKey = false },
-                                SwapTextures = new Texture[] { texA, texB },
-                            },
-                        },
-                    },
-                },
-            };
-            root.AddComponent<ExpressionController>().Initialize(set);
-
-            var gltf = ExportToGltfRoot(root);
-
-            Assert.IsTrue(gltf.Extensions != null && gltf.Extensions.ContainsKey(KHR_character_expression.EXTENSION_NAME),
-                "KHR_character_expression root extension should be present");
-            var ext = gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
-            Assert.IsNotNull(ext);
-            var item = ext.Expressions.Find(e => e.Expression == "swap");
-            Assert.IsNotNull(item, "the exported expression item should be present");
-            Assert.IsNotNull(item.Texture, "the expression should have a KHR_character_expression_texture sub-extension");
-            Assert.AreEqual(1, item.Texture.Channels.Length, "an index-swap exports a single channel");
-
-            var anim = gltf.Animations[item.Animation];
-            var ch = anim.Channels[item.Texture.Channels[0]];
-
-            // KHR_animation_pointer channel to /materials/{m}/{slot}/index.
-            Assert.AreEqual("pointer", ch.Target.Path, "index-swap exports via KHR_animation_pointer");
-            var path = PointerPath(ch);
-            Assert.IsNotNull(path, "index-swap channel must carry a KHR_animation_pointer path");
-            StringAssert.StartsWith("/materials/", path);
-            StringAssert.EndsWith("/pbrMetallicRoughness/baseColorTexture/index", path);
-
-            // Discrete texture swap -> STEP interpolation.
-            var sampler = anim.Samplers[ch.Sampler.Id];
-            Assert.AreEqual(InterpolationType.STEP, sampler.Interpolation, "index swaps are discrete -> STEP");
-
-            // Output accessor: SCALAR, two keys, each a valid + distinct texture index (both swaps were exported).
-            var outAcc = OutputAccessor(gltf, anim, ch);
-            Assert.AreEqual(GLTFAccessorAttributeType.SCALAR, outAcc.Type);
-            Assert.AreEqual(2, (int)outAcc.Count);
-            Assert.IsNotNull(outAcc.Min);
-            Assert.IsNotNull(outAcc.Max);
-            Assert.IsNotNull(gltf.Textures);
-            Assert.GreaterOrEqual(gltf.Textures.Count, 2, "both distinct swap textures must be exported");
-            Assert.GreaterOrEqual(outAcc.Min[0], 0d, "texture indices are non-negative");
-            Assert.Less(outAcc.Max[0], (double)gltf.Textures.Count, "texture indices must be in range");
-            Assert.AreNotEqual(outAcc.Min[0], outAcc.Max[0],
-                "the two keys reference two distinct textures (both swaps exported)");
-        }
-
         // Builds a character root with one quad MeshRenderer + material, ready to carry a UV-transform texture
         // driver. Mirrors the inline setup in ExpressionMetadataExport_IncludesTextureChannels; the caller adds the
         // ExpressionController. Registers created objects for teardown.
@@ -1212,7 +1099,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                         {
                             new TextureDriver
                             {
-                                Renderer = mr, SubmeshSlot = 0, Kind = TexKind.UvTransform,
+                                Renderer = mr, SubmeshSlot = 0,
                                 PropertyId = Shader.PropertyToID("_MainTex_ST"),
                                 PropertyName = "_MainTex",
                                 GltfTextureSlot = "pbrMetallicRoughness/baseColorTexture",
@@ -1263,7 +1150,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                         {
                             new TextureDriver
                             {
-                                Renderer = mr, SubmeshSlot = 0, Kind = TexKind.UvTransform,
+                                Renderer = mr, SubmeshSlot = 0,
                                 PropertyId = Shader.PropertyToID("_MainTex_ST"),
                                 PropertyName = "_MainTex",
                                 GltfTextureSlot = "pbrMetallicRoughness/baseColorTexture",
