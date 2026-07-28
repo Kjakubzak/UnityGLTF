@@ -95,7 +95,8 @@ namespace UnityGLTF.KhrCharacter
     public class MaskEntry
     {
         public int TargetIndex;          // expression index this mask attenuates
-        public MaskType Type;            // Blend | Block (unknown spelling -> Blend)
+        public MaskType Type;            // Runtime behavior; custom types fall back to Blend
+        public string CustomType;        // Preserved application-defined type; null for blend/block
         public float Amount;             // [0..1], default 1
         public float Threshold;          // [0..1], Block only, default 0
         public int SourceIndex;          // owning expression by default; explicit if the schema allows it

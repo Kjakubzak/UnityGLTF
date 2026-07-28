@@ -154,6 +154,9 @@ namespace UnityGLTF.KhrCharacter
             // Additive metadata: declare as USED (not REQUIRED) so plain glTF viewers that don't
             // understand KHR_character still load the asset; KHR-aware importers detect it by presence.
             exporter.DeclareExtensionUsage(KHR_character.EXTENSION_NAME, isRequired: false);
+            // KHR_character has a declaration-only dependency on KHR_xmp_json_ld. Metadata-free
+            // assets declare support without emitting a packet definition or packet reference.
+            exporter.DeclareExtensionUsage(KhrCharacterExtensionNames.XmpJsonLd, isRequired: false);
         }
 
         // F6: emits the node-level KHR character extensions (KHR_node_camera_hint / KHR_node_lookat_target) from the
@@ -370,7 +373,9 @@ namespace UnityGLTF.KhrCharacter
                         masks.Add(new KHR_character_expression_mask.Mask
                         {
                             Target = set.Expressions[mask.TargetIndex].Name,
-                            Type = mask.Type == MaskType.Block ? "block" : "blend",
+                            Type = !string.IsNullOrEmpty(mask.CustomType)
+                                ? mask.CustomType
+                                : mask.Type == MaskType.Block ? "block" : "blend",
                             Amount = mask.Amount,
                             Threshold = mask.Threshold
                         });

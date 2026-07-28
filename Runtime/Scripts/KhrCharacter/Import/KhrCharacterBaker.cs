@@ -661,11 +661,16 @@ namespace UnityGLTF.KhrCharacter
                         Debug.LogWarning($"[KHR_character] Mask references unknown expression '{m.Target}'; dropping.");
                         continue;
                     }
+                    string maskType = m.Type?.Trim();
+                    bool isBlock = string.Equals(maskType, "block", StringComparison.OrdinalIgnoreCase);
+                    bool isBlend = string.IsNullOrEmpty(maskType) ||
+                        string.Equals(maskType, "blend", StringComparison.OrdinalIgnoreCase);
                     list.Add(new MaskEntry
                     {
                         TargetIndex = targetIndex,
                         SourceIndex = sourceIndex,
-                        Type = string.Equals(m.Type?.Trim(), "block", StringComparison.OrdinalIgnoreCase) ? MaskType.Block : MaskType.Blend,
+                        Type = isBlock ? MaskType.Block : MaskType.Blend,
+                        CustomType = isBlend || isBlock ? null : maskType,
                         Amount = m.Amount,
                         Threshold = m.Threshold,
                     });

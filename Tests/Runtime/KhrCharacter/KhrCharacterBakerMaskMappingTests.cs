@@ -34,6 +34,29 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
+        public void BuildMaskEntries_PreservesCustomTypeWithBlendFallback()
+        {
+            var mask = new KHR_character_expression_mask
+            {
+                Masks = new List<KHR_character_expression_mask.Mask>
+                {
+                    new KHR_character_expression_mask.Mask
+                    {
+                        Target = "b", Type = "soft_block", Amount = 0.5f
+                    },
+                }
+            };
+
+            var entries = KhrCharacterBaker.BuildMaskEntries(mask, sourceIndex: 0, NameToIndex);
+
+            Assert.AreEqual(1, entries.Length);
+            Assert.AreEqual(MaskType.Blend, entries[0].Type,
+                "application-defined mask types use blend as the runtime fallback");
+            Assert.AreEqual("soft_block", entries[0].CustomType,
+                "the application-defined vocabulary value must survive import and re-export");
+        }
+
+        [Test]
         public void BuildMappingSets_ResolvesSourceIndices()
         {
             var mapping = new KHR_character_expression_mapping();

@@ -49,7 +49,7 @@ When enabled, the plugin writes the following extensions from a Unity character 
 - **`KHR_character_expression`** (+ sub-extensions): Expression metadata (names, drivers, masks, mappings).
   - `KHR_character_expression_morphtarget`: Morph target (blendshape) drivers.
   - `KHR_character_expression_joint`: Joint (TRS) animation drivers.
-  - `KHR_character_expression_texture`: Texture (UV transform or index swap) drivers.
+  - `KHR_character_expression_texture`: Texture UV-transform drivers.
   - `KHR_character_expression_mask`: Mask entries for attenuating other expressions.
   - `KHR_character_expression_mapping`: Vocabulary mapping sets.
 - **`KHR_character_skeleton_mapping`**: Rig vocabulary → glTF node-index mapping dictionary (`{ vocabularyJoint: nodeIndex }`).

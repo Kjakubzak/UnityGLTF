@@ -10,6 +10,7 @@ namespace UnityGLTF.KhrCharacter
     public static class KhrCharacterExtensionNames
     {
         public const string Character             = "KHR_character";
+        public const string XmpJsonLd             = "KHR_xmp_json_ld";
         public const string Expression            = "KHR_character_expression";
         public const string ExpressionMorphtarget = "KHR_character_expression_morphtarget";
         public const string ExpressionJoint       = "KHR_character_expression_joint";

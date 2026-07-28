@@ -440,6 +440,11 @@ namespace UnityGLTF.KhrCharacter.Tests
                         Name = "angry", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
                         Masks = new[] { new MaskEntry { TargetIndex = 0, Type = MaskType.Block, Amount = 1f, Threshold = 0.2f } },
                     },
+                    new ExpressionTrack // index 3: application-defined mask type, with blend fallback at runtime
+                    {
+                        Name = "soft", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
+                        Masks = new[] { new MaskEntry { TargetIndex = 0, Type = MaskType.Blend, CustomType = "soft_block", Amount = 0.25f } },
+                    },
                 },
             };
             root.AddComponent<ExpressionController>().Initialize(set);
@@ -488,6 +493,14 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(nameToIndex["aa"], angryEntries[0].TargetIndex);
             Assert.AreEqual(MaskType.Block, angryEntries[0].Type);
             Assert.AreEqual(0.2f, angryEntries[0].Threshold, 1e-5f);
+
+            var soft = ext.Expressions.Find(e => e.Expression == "soft");
+            Assert.IsNotNull(soft?.Mask);
+            Assert.AreEqual("soft_block", soft.Mask.Masks[0].Type,
+                "application-defined mask type must be preserved on export");
+            var softEntries = KhrCharacterBaker.BuildMaskEntries(soft.Mask, nameToIndex["soft"], nameToIndex);
+            Assert.AreEqual(MaskType.Blend, softEntries[0].Type);
+            Assert.AreEqual("soft_block", softEntries[0].CustomType);
         }
 
         [Test]
@@ -648,6 +661,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsNotNull(gltf.ExtensionsUsed, "extensionsUsed must be populated");
             var nestedTokens = new[]
             {
+                KhrCharacterExtensionNames.Character,
+                KhrCharacterExtensionNames.XmpJsonLd,
                 KHR_character_expression.EXTENSION_NAME,
                 KHR_character_expression_morphtarget.EXTENSION_NAME,
                 KHR_character_expression_joint.EXTENSION_NAME,
@@ -662,6 +677,8 @@ namespace UnityGLTF.KhrCharacter.Tests
                 Assert.IsTrue(gltf.ExtensionsRequired == null || !gltf.ExtensionsRequired.Contains(token),
                     $"{token} must NOT be in extensionsRequired (non-required, like the parent)");
             }
+            Assert.IsFalse(gltf.Extensions.ContainsKey(KhrCharacterExtensionNames.XmpJsonLd),
+                "the KHR_character dependency is declaration-only when no XMP metadata is authored");
         }
 
         [Test]
@@ -707,6 +724,10 @@ namespace UnityGLTF.KhrCharacter.Tests
             var gltf = ExportToGltfRoot(root);
 
             Assert.IsNotNull(gltf.ExtensionsUsed);
+            Assert.IsTrue(gltf.ExtensionsUsed.Contains(KhrCharacterExtensionNames.XmpJsonLd),
+                "all KHR_character assets must declare the transitive XMP dependency");
+            Assert.IsFalse(gltf.Extensions.ContainsKey(KhrCharacterExtensionNames.XmpJsonLd),
+                "metadata-free assets must not synthesize an XMP packet object");
             Assert.IsTrue(gltf.ExtensionsUsed.Contains(KHR_character_expression_morphtarget.EXTENSION_NAME),
                 "morph-only must declare KHR_character_expression_morphtarget");
             Assert.IsFalse(gltf.ExtensionsUsed.Contains(KHR_character_expression_joint.EXTENSION_NAME),
