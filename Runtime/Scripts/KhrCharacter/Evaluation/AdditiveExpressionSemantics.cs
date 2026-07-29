@@ -65,7 +65,7 @@ namespace UnityGLTF.KhrCharacter
             float result = rawInputs[trackIndex];
             if (tracks == null) return result;
 
-            // A mask lives on the source expression and names the target it attenuates.
+            // A mask lives on the source expression and references the target it attenuates.
             for (int s = 0; s < tracks.Length; s++)
             {
                 var masks = tracks[s]?.Masks;

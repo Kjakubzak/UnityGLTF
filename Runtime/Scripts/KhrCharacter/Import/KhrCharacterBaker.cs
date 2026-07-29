@@ -30,9 +30,11 @@ namespace UnityGLTF.KhrCharacter
             remapper = remapper ?? new DefaultMaterialPropertiesRemapper();
             var tracks = new List<ExpressionTrack>();
             var rawMasks = new List<KHR_character_expression_mask>(); // aligned with tracks, for the post-pass
+            var wireToTrackIndex = new Dictionary<int, int>();
 
-            foreach (var item in expressionExt.Expressions)
+            for (int expressionIndex = 0; expressionIndex < expressionExt.Expressions.Count; expressionIndex++)
             {
+                var item = expressionExt.Expressions[expressionIndex];
                 if (item == null || string.IsNullOrEmpty(item.Expression)) continue;
                 if (root.Animations == null || item.Animation < 0 || item.Animation >= root.Animations.Count)
                 {
@@ -84,23 +86,25 @@ namespace UnityGLTF.KhrCharacter
                 track.IsBinary = AllStep(track);
 
                 rawMasks.Add(item.Mask);
+                wireToTrackIndex[expressionIndex] = tracks.Count;
                 tracks.Add(track);
             }
 
             var set = new CharacterExpressionSet { Expressions = tracks.ToArray() };
             set.RebuildIndex();
 
-            // Masks and mappings resolve expression NAMES to track indices, so they run after the index exists.
+            // Wire references target expression-array indices. Remap them because invalid expressions may have
+            // been skipped while baking runtime tracks.
             for (int i = 0; i < tracks.Count; i++)
             {
                 if (rawMasks[i] == null) continue;
-                var masks = BuildMaskEntries(rawMasks[i], i, set.NameToIndex);
+                var masks = BuildMaskEntries(rawMasks[i], i, wireToTrackIndex);
                 if (masks.Length > 0) tracks[i].Masks = masks;
             }
 
             var mappingExt = GetMappingExtension(root);
             if (mappingExt != null)
-                set.MappingSets = BuildMappingSets(mappingExt, set.NameToIndex);
+                set.MappingSets = BuildMappingSets(mappingExt, wireToTrackIndex);
 
             return set;
         }
@@ -646,19 +650,18 @@ namespace UnityGLTF.KhrCharacter
             return importer.TextureCache[textureIndex]?.Texture;
         }
 
-        // ── Mask + mapping resolution (expression names -> track indices) ────
+        // ── Mask + mapping resolution (wire expression indices -> track indices) ────
 
-        internal static MaskEntry[] BuildMaskEntries(KHR_character_expression_mask mask, int sourceIndex, IReadOnlyDictionary<string, int> nameToIndex)
+        internal static MaskEntry[] BuildMaskEntries(KHR_character_expression_mask mask, int sourceIndex, IReadOnlyDictionary<int, int> wireToTrackIndex)
         {
             var list = new List<MaskEntry>();
             if (mask?.Masks != null)
             {
                 foreach (var m in mask.Masks)
                 {
-                    if (m?.Target == null) continue;
-                    if (!nameToIndex.TryGetValue(m.Target, out int targetIndex))
+                    if (m == null || !wireToTrackIndex.TryGetValue(m.Target, out int targetIndex))
                     {
-                        Debug.LogWarning($"[KHR_character] Mask references unknown expression '{m.Target}'; dropping.");
+                        Debug.LogWarning($"[KHR_character] Mask references invalid expression index {m?.Target ?? -1}; dropping.");
                         continue;
                     }
                     string maskType = m.Type?.Trim();
@@ -679,7 +682,7 @@ namespace UnityGLTF.KhrCharacter
             return list.ToArray();
         }
 
-        internal static ExpressionMappingSet[] BuildMappingSets(KHR_character_expression_mapping mappingExt, IReadOnlyDictionary<string, int> nameToIndex)
+        internal static ExpressionMappingSet[] BuildMappingSets(KHR_character_expression_mapping mappingExt, IReadOnlyDictionary<int, int> wireToTrackIndex)
         {
             if (mappingExt?.ExpressionSetMappings == null) return null;
             var sets = new List<ExpressionMappingSet>();
@@ -695,10 +698,9 @@ namespace UnityGLTF.KhrCharacter
                         {
                             foreach (var sw in targetKv.Value)
                             {
-                                if (sw.Source == null) continue;
-                                if (!nameToIndex.TryGetValue(sw.Source, out int srcIndex))
+                                if (!wireToTrackIndex.TryGetValue(sw.Source, out int srcIndex))
                                 {
-                                    Debug.LogWarning($"[KHR_character] Mapping references unknown expression '{sw.Source}'; dropping.");
+                                    Debug.LogWarning($"[KHR_character] Mapping references invalid expression index {sw.Source}; dropping.");
                                     continue;
                                 }
                                 contributions.Add(new MappingContribution { SourceIndex = srcIndex, Weight = sw.Weight });

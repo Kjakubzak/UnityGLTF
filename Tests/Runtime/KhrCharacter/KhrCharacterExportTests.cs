@@ -414,7 +414,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         public void ExpressionMetadataExport_IncludesMaskEntries()
         {
             // MaskEntry[] on an expression export as a KHR_character_expression_mask sub-extension whose masks[]
-            // carry { target (expression NAME), type "blend"|"block", amount, threshold } — the exact inverse of
+            // carry { target (expression index), type "blend"|"block", amount, threshold } — the exact inverse of
             // KhrCharacterBaker.BuildMaskEntries. Mirrors the spec example: "happy" blend-masks "aa"; "angry"
             // block-masks "aa". Each masking expression also has a driver channel so its item is emitted.
             var root = new GameObject("char");
@@ -456,9 +456,11 @@ namespace UnityGLTF.KhrCharacter.Tests
             var ext = gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
             Assert.IsNotNull(ext);
 
-            // The same expression-name -> track-index map the import baker resolves masks against.
+            // Exported entries are contiguous here, so wire and runtime indices are identical.
             var nameToIndex = new Dictionary<string, int>();
             for (int i = 0; i < ext.Expressions.Count; i++) nameToIndex[ext.Expressions[i].Expression] = i;
+            var wireToTrackIndex = new Dictionary<int, int>();
+            for (int i = 0; i < ext.Expressions.Count; i++) wireToTrackIndex[i] = i;
 
             // "aa" carries no mask of its own.
             var aa = ext.Expressions.Find(e => e.Expression == "aa");
@@ -470,7 +472,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsNotNull(happy);
             Assert.IsNotNull(happy.Mask, "happy should carry a KHR_character_expression_mask sub-extension");
             Assert.AreEqual(1, happy.Mask.Masks.Count);
-            Assert.AreEqual("aa", happy.Mask.Masks[0].Target);
+            Assert.AreEqual(nameToIndex["aa"], happy.Mask.Masks[0].Target);
             Assert.AreEqual("blend", happy.Mask.Masks[0].Type);
             Assert.AreEqual(0.5f, happy.Mask.Masks[0].Amount, 1e-5f);
 
@@ -482,13 +484,13 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(0.2f, angry.Mask.Masks[0].Threshold, 1e-5f);
 
             // Round-trip through the real import baker: exported masks resolve back to the original MaskEntry.
-            var happyEntries = KhrCharacterBaker.BuildMaskEntries(happy.Mask, nameToIndex["happy"], nameToIndex);
+            var happyEntries = KhrCharacterBaker.BuildMaskEntries(happy.Mask, nameToIndex["happy"], wireToTrackIndex);
             Assert.AreEqual(1, happyEntries.Length);
             Assert.AreEqual(nameToIndex["aa"], happyEntries[0].TargetIndex);
             Assert.AreEqual(MaskType.Blend, happyEntries[0].Type);
             Assert.AreEqual(0.5f, happyEntries[0].Amount, 1e-5f);
 
-            var angryEntries = KhrCharacterBaker.BuildMaskEntries(angry.Mask, nameToIndex["angry"], nameToIndex);
+            var angryEntries = KhrCharacterBaker.BuildMaskEntries(angry.Mask, nameToIndex["angry"], wireToTrackIndex);
             Assert.AreEqual(1, angryEntries.Length);
             Assert.AreEqual(nameToIndex["aa"], angryEntries[0].TargetIndex);
             Assert.AreEqual(MaskType.Block, angryEntries[0].Type);
@@ -498,7 +500,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsNotNull(soft?.Mask);
             Assert.AreEqual("soft_block", soft.Mask.Masks[0].Type,
                 "application-defined mask type must be preserved on export");
-            var softEntries = KhrCharacterBaker.BuildMaskEntries(soft.Mask, nameToIndex["soft"], nameToIndex);
+            var softEntries = KhrCharacterBaker.BuildMaskEntries(soft.Mask, nameToIndex["soft"], wireToTrackIndex);
             Assert.AreEqual(MaskType.Blend, softEntries[0].Type);
             Assert.AreEqual("soft_block", softEntries[0].CustomType);
         }
@@ -508,7 +510,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         {
             // ExpressionMappingSet[] export as the root KHR_character_expression_mapping extension:
             //   expressionSetMappings[setName][targetName] = [ { source, weight }, ... ]
-            // where source is the model's own expression NAME. Exact inverse of KhrCharacterBaker.BuildMappingSets.
+            // where source is the model's own expression index. Exact inverse of KhrCharacterBaker.BuildMappingSets.
             var root = new GameObject("char");
             _created.Add(root);
             var ctrl = new GameObject("ctrl").transform;
@@ -555,28 +557,88 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsTrue(smileSet.ContainsKey("Smile"));
             var contribs = smileSet["Smile"];
             Assert.AreEqual(2, contribs.Count, "Smile is composed from two source expressions");
-            Assert.AreEqual("smileLeft", contribs[0].Source);
+            Assert.AreEqual(0, contribs[0].Source);
             Assert.AreEqual(0.8f, contribs[0].Weight, 1e-5f);
-            Assert.AreEqual("smileRight", contribs[1].Source);
+            Assert.AreEqual(1, contribs[1].Source);
             Assert.AreEqual(0.8f, contribs[1].Weight, 1e-5f);
 
-            // Round-trip through the real import baker: source names resolve back to track indices.
+            // Round-trip through the real import baker: wire indices resolve back to track indices.
             var exprExt = gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
             Assert.IsNotNull(exprExt, "source expressions with drivers should also export as expression items");
-            var nameToIndex = new Dictionary<string, int>();
-            for (int i = 0; i < exprExt.Expressions.Count; i++) nameToIndex[exprExt.Expressions[i].Expression] = i;
+            var wireToTrackIndex = new Dictionary<int, int>();
+            for (int i = 0; i < exprExt.Expressions.Count; i++) wireToTrackIndex[i] = i;
 
-            var sets = KhrCharacterBaker.BuildMappingSets(mappingExt, nameToIndex);
+            var sets = KhrCharacterBaker.BuildMappingSets(mappingExt, wireToTrackIndex);
             Assert.AreEqual(1, sets.Length);
             Assert.AreEqual("vrm", sets[0].SetName);
             Assert.AreEqual(1, sets[0].Targets.Length);
             Assert.AreEqual("Smile", sets[0].Targets[0].TargetName);
             var baked = sets[0].Targets[0].Contributions;
             Assert.AreEqual(2, baked.Length);
-            Assert.AreEqual(nameToIndex["smileLeft"], baked[0].SourceIndex);
+            Assert.AreEqual(0, baked[0].SourceIndex);
             Assert.AreEqual(0.8f, baked[0].Weight, 1e-5f);
-            Assert.AreEqual(nameToIndex["smileRight"], baked[1].SourceIndex);
+            Assert.AreEqual(1, baked[1].SourceIndex);
             Assert.AreEqual(0.8f, baked[1].Weight, 1e-5f);
+        }
+
+        [Test]
+        public void ExpressionMetadataExport_RemapsReferencesAfterFiltering()
+        {
+            var root = new GameObject("char");
+            _created.Add(root);
+            var ctrl = new GameObject("ctrl").transform;
+            ctrl.SetParent(root.transform, false);
+
+            var set = new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack { Name = "skipped" },
+                    new ExpressionTrack
+                    {
+                        Name = "source",
+                        Domains = ExpressionDomain.Joint,
+                        JointDrivers = new[] { RotationDriver(ctrl) },
+                        Masks = new[] { new MaskEntry { TargetIndex = 2, Type = MaskType.Blend, Amount = 1f } },
+                    },
+                    new ExpressionTrack
+                    {
+                        Name = "target",
+                        Domains = ExpressionDomain.Joint,
+                        JointDrivers = new[] { RotationDriver(ctrl) },
+                    },
+                },
+                MappingSets = new[]
+                {
+                    new ExpressionMappingSet
+                    {
+                        SetName = "example",
+                        Targets = new[]
+                        {
+                            new MappingTarget
+                            {
+                                TargetName = "Target",
+                                Contributions = new[] { new MappingContribution { SourceIndex = 2, Weight = 1f } },
+                            },
+                        },
+                    },
+                },
+            };
+            root.AddComponent<ExpressionController>().Initialize(set);
+
+            var gltf = ExportToGltfRoot(root);
+            var expressions = (gltf.Extensions[KHR_character_expression.EXTENSION_NAME]
+                as KHR_character_expression).Expressions;
+            Assert.AreEqual(2, expressions.Count);
+            Assert.AreEqual("source", expressions[0].Expression);
+            Assert.AreEqual("target", expressions[1].Expression);
+            Assert.AreEqual(1, expressions[0].Mask.Masks[0].Target,
+                "runtime target index 2 remaps to wire expression index 1");
+
+            var mapping = gltf.Extensions[KHR_character_expression_mapping.EXTENSION_NAME]
+                as KHR_character_expression_mapping;
+            Assert.AreEqual(1, mapping.ExpressionSetMappings["example"]["Target"][0].Source,
+                "runtime source index 2 remaps to wire expression index 1");
         }
 
         [Test]

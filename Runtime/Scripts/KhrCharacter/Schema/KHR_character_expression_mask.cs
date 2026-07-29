@@ -16,7 +16,7 @@ namespace GLTF.Schema
 
         public class Mask
         {
-            public string Target;            // required
+            public int Target = -1;          // required expression index
             public string Type = "blend";    // "blend" | "block" | (any string -> treat as blend)
             public float Amount = 1.0f;       // [0..1]
             public float Threshold = 0.0f;    // [0..1], block only
@@ -32,7 +32,7 @@ namespace GLTF.Schema
                     if (!(node is JObject m)) continue;
                     ext.Masks.Add(new Mask
                     {
-                        Target = m["target"]?.Value<string>(),
+                        Target = m["target"]?.Value<int>() ?? -1,
                         Type = m["type"]?.Value<string>() ?? "blend",
                         Amount = m["amount"]?.Value<float>() ?? 1.0f,
                         Threshold = m["threshold"]?.Value<float>() ?? 0.0f,
@@ -53,7 +53,7 @@ namespace GLTF.Schema
                 {
                     if (m == null) continue;
                     var mo = new JObject();
-                    if (m.Target != null) mo.Add("target", m.Target);
+                    if (m.Target >= 0) mo.Add("target", m.Target);
                     if (m.Type != null) mo.Add("type", m.Type);
                     mo.Add("amount", m.Amount);
                     mo.Add("threshold", m.Threshold);

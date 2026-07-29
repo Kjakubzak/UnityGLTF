@@ -254,37 +254,17 @@ namespace UnityGLTF.KhrCharacter
         {
             var expressions = new List<KHR_character_expression.ExpressionItem>();
             var mappingDict = new Dictionary<string, Dictionary<string, List<KHR_character_expression_mapping.SourceWeight>>>();
-
-            // Build mapping sets (root extension, not per-expression)
-            if (set.MappingSets != null)
-            {
-                foreach (var mappingSet in set.MappingSets)
-                {
-                    var setDict = new Dictionary<string, List<KHR_character_expression_mapping.SourceWeight>>();
-                    foreach (var target in mappingSet.Targets)
-                    {
-                        var contributions = new List<KHR_character_expression_mapping.SourceWeight>();
-                        foreach (var contrib in target.Contributions)
-                        {
-                            if (contrib.SourceIndex < 0 || contrib.SourceIndex >= set.Expressions.Length) continue;
-                            contributions.Add(new KHR_character_expression_mapping.SourceWeight {
-                                Source = set.Expressions[contrib.SourceIndex].Name,
-                                Weight = contrib.Weight
-                            });
-                        }
-                        if (contributions.Count > 0) setDict[target.TargetName] = contributions;
-                    }
-                    if (setDict.Count > 0) mappingDict[mappingSet.SetName] = setDict;
-                }
-            }
+            var runtimeToWireIndex = new Dictionary<int, int>();
+            var pendingMasks = new Dictionary<KHR_character_expression.ExpressionItem, MaskEntry[]>();
 
             // Track which nested expression sub-extensions are actually emitted, so each can be declared once in
             // extensionsUsed (B1: nested KHR_character_expression_* were written on items but never declared).
             bool anyMorph = false, anyJoint = false, anyTexture = false, anyMask = false;
 
             // Process each expression track
-            foreach (var track in set.Expressions)
+            for (int trackIndex = 0; trackIndex < set.Expressions.Length; trackIndex++)
             {
+                var track = set.Expressions[trackIndex];
                 if (track == null || string.IsNullOrEmpty(track.Name)) continue;
 
                 // Create one animation per expression
@@ -342,6 +322,7 @@ namespace UnityGLTF.KhrCharacter
                     Expression = track.Name,
                     Animation = animIndex
                 };
+                runtimeToWireIndex[trackIndex] = expressions.Count;
 
                 if (morphChannels.Count > 0)
                 {
@@ -365,33 +346,59 @@ namespace UnityGLTF.KhrCharacter
                 }
 
                 if (track.Masks != null && track.Masks.Length > 0)
-                {
-                    var masks = new List<KHR_character_expression_mask.Mask>();
-                    foreach (var mask in track.Masks)
-                    {
-                        if (mask.TargetIndex < 0 || mask.TargetIndex >= set.Expressions.Length) continue;
-                        masks.Add(new KHR_character_expression_mask.Mask
-                        {
-                            Target = set.Expressions[mask.TargetIndex].Name,
-                            Type = !string.IsNullOrEmpty(mask.CustomType)
-                                ? mask.CustomType
-                                : mask.Type == MaskType.Block ? "block" : "blend",
-                            Amount = mask.Amount,
-                            Threshold = mask.Threshold
-                        });
-                    }
-                    if (masks.Count > 0)
-                    {
-                        expressionItem.Mask =
-                            new KHR_character_expression_mask { Masks = masks };
-                        anyMask = true;
-                    }
-                }
+                    pendingMasks[expressionItem] = track.Masks;
 
                 // blendMode/priority are intentionally NOT exported (no ratified KHR field; the baker reconstructs
                 // Additive + Priority 0), so no vendor extras are written — the expression wire stays neutral.
 
                 expressions.Add(expressionItem);
+            }
+
+            foreach (var pending in pendingMasks)
+            {
+                var masks = new List<KHR_character_expression_mask.Mask>();
+                foreach (var mask in pending.Value)
+                {
+                    if (!runtimeToWireIndex.TryGetValue(mask.TargetIndex, out int targetIndex)) continue;
+                    masks.Add(new KHR_character_expression_mask.Mask
+                    {
+                        Target = targetIndex,
+                        Type = !string.IsNullOrEmpty(mask.CustomType)
+                            ? mask.CustomType
+                            : mask.Type == MaskType.Block ? "block" : "blend",
+                        Amount = mask.Amount,
+                        Threshold = mask.Threshold
+                    });
+                }
+                if (masks.Count > 0)
+                {
+                    pending.Key.Mask = new KHR_character_expression_mask { Masks = masks };
+                    anyMask = true;
+                }
+            }
+
+            // Build mapping sets after expression filtering so runtime indices can be remapped to wire indices.
+            if (set.MappingSets != null)
+            {
+                foreach (var mappingSet in set.MappingSets)
+                {
+                    var setDict = new Dictionary<string, List<KHR_character_expression_mapping.SourceWeight>>();
+                    foreach (var target in mappingSet.Targets)
+                    {
+                        var contributions = new List<KHR_character_expression_mapping.SourceWeight>();
+                        foreach (var contrib in target.Contributions)
+                        {
+                            if (!runtimeToWireIndex.TryGetValue(contrib.SourceIndex, out int sourceIndex)) continue;
+                            contributions.Add(new KHR_character_expression_mapping.SourceWeight
+                            {
+                                Source = sourceIndex,
+                                Weight = contrib.Weight
+                            });
+                        }
+                        if (contributions.Count > 0) setDict[target.TargetName] = contributions;
+                    }
+                    if (setDict.Count > 0) mappingDict[mappingSet.SetName] = setDict;
+                }
             }
 
             if (expressions.Count > 0)
