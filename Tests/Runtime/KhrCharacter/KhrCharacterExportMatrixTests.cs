@@ -377,17 +377,18 @@ namespace UnityGLTF.KhrCharacter.Tests
             // Every value is a valid, non-negative index into nodes[].
             foreach (var kv in rig)
             {
-                Assert.GreaterOrEqual(kv.Value, 0, $"mapping value for '{kv.Key}' must be a non-negative node index");
-                Assert.Less(kv.Value, gltf.Nodes.Count, $"mapping value for '{kv.Key}' must index a real exported node");
+                Assert.GreaterOrEqual(kv.Value.Node, 0, $"mapping value for '{kv.Key}' must be a non-negative node index");
+                Assert.Less(kv.Value.Node, gltf.Nodes.Count, $"mapping value for '{kv.Key}' must index a real exported node");
+                Assert.AreEqual(gltf.Nodes[kv.Value.Node].Name, kv.Value.Name);
             }
 
             // The unique-named control bone resolves to the node actually named "Spine".
-            Assert.AreEqual("Spine", gltf.Nodes[rig["spine"]].Name);
+            Assert.AreEqual("Spine", gltf.Nodes[rig["spine"].Node].Name);
 
             // The two same-named bones resolve to DISTINCT node indices — no ambiguity despite the shared name.
-            Assert.AreNotEqual(rig["hips"], rig["head"], "same-named bound bones still map to distinct node indices");
-            Assert.AreEqual("Joint", gltf.Nodes[rig["hips"]].Name);
-            Assert.AreEqual("Joint", gltf.Nodes[rig["head"]].Name);
+            Assert.AreNotEqual(rig["hips"].Node, rig["head"].Node, "same-named bound bones still map to distinct node indices");
+            Assert.AreEqual("Joint", gltf.Nodes[rig["hips"].Node].Name);
+            Assert.AreEqual("Joint", gltf.Nodes[rig["head"].Node].Name);
 
             // Both colliding bones were exported as distinct nodes.
             int jointNodes = gltf.Nodes.FindAll(n => n.Name == "Joint").Count;

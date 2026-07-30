@@ -87,16 +87,18 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsNull(SerializableSkeletonMapping.FromResult(null));
         }
 
-        // ── KHR_character_skeleton_mapping JSON wire (int node indices) ────────────
+        // ── KHR_character_skeleton_mapping JSON wire ───────────────────────────────
 
         [Test]
-        public void SkeletonMappingSchema_SerializeDeserialize_PreservesIntegerNodeIndices()
+        public void SkeletonMappingSchema_SerializeDeserialize_PreservesAssociations()
         {
+            var hips = new GLTF.Schema.KHR_character_skeleton_mapping.JointAssociation { Node = 1, Name = "Hips" };
+            var head = new GLTF.Schema.KHR_character_skeleton_mapping.JointAssociation { Node = 5 };
             var ext = new GLTF.Schema.KHR_character_skeleton_mapping
             {
-                SkeletalRigMappings = new Dictionary<string, Dictionary<string, int>>
+                SkeletalRigMappings = new Dictionary<string, Dictionary<string, GLTF.Schema.KHR_character_skeleton_mapping.JointAssociation>>
                 {
-                    { "unityHumanoid", new Dictionary<string, int> { { "hips", 1 }, { "head", 5 } } },
+                    { "unityHumanoid", new Dictionary<string, GLTF.Schema.KHR_character_skeleton_mapping.JointAssociation> { { "hips", hips }, { "head", head } } },
                 },
             };
 
@@ -107,15 +109,17 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             Assert.IsNotNull(restored);
             var rig = restored.SkeletalRigMappings["unityHumanoid"];
-            Assert.AreEqual(1, rig["hips"]);
-            Assert.AreEqual(5, rig["head"]);
+            Assert.AreEqual(1, rig["hips"].Node);
+            Assert.AreEqual("Hips", rig["hips"].Name);
+            Assert.AreEqual(5, rig["head"].Node);
+            Assert.IsNull(rig["head"].Name);
         }
 
         [Test]
-        public void SkeletonMappingSchema_Deserialize_DropsLegacyNameStringValues()
+        public void SkeletonMappingSchema_Deserialize_DropsLegacyScalarValues()
         {
-            // Hard cut: a pre-change asset carried node-name strings. Those entries are dropped (they simply do
-            // not resolve) rather than throwing and failing the whole document load; integer entries are kept.
+            // Hard cut: pre-change assets carried bare indices or node-name strings. Both scalar forms are
+            // dropped rather than throwing and failing the whole document load.
             var token = new JProperty(GLTF.Schema.KHR_character_skeleton_mapping.EXTENSION_NAME,
                 new JObject
                 {
@@ -131,7 +135,7 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             Assert.IsNotNull(ext);
             var rig = ext.SkeletalRigMappings["unityHumanoid"];
-            Assert.AreEqual(2, rig["hips"], "integer node-index values are kept");
+            Assert.IsFalse(rig.ContainsKey("hips"), "legacy integer values are dropped");
             Assert.IsFalse(rig.ContainsKey("head"), "legacy string values are dropped, not throwing");
         }
 

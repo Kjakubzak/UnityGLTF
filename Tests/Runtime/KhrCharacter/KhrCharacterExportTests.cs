@@ -834,19 +834,22 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             // Canonical target-vocabulary joint names (keys) -> source node INDICES (values) into nodes[].
             Assert.AreEqual(3, rig.Count);
-            Assert.AreEqual("Hips", gltf.Nodes[rig["hips"]].Name);
-            Assert.AreEqual("LeftUpperLeg", gltf.Nodes[rig["leftUpperLeg"]].Name);
-            Assert.AreEqual("Head", gltf.Nodes[rig["head"]].Name);
+            Assert.AreEqual("Hips", gltf.Nodes[rig["hips"].Node].Name);
+            Assert.AreEqual("LeftUpperLeg", gltf.Nodes[rig["leftUpperLeg"].Node].Name);
+            Assert.AreEqual("Head", gltf.Nodes[rig["head"].Node].Name);
 
             // Each value must be a valid, non-negative 0-based index into the exported nodes[] (spec: glTFid).
-            foreach (var nodeIndex in rig.Values)
+            var nodeIndices = new List<int>();
+            foreach (var association in rig.Values)
             {
-                Assert.GreaterOrEqual(nodeIndex, 0, "skeleton mapping values are non-negative node indices");
-                Assert.Less(nodeIndex, gltf.Nodes.Count, "skeleton mapping value must index a real glTF node");
+                Assert.GreaterOrEqual(association.Node, 0, "skeleton mapping values are non-negative node indices");
+                Assert.Less(association.Node, gltf.Nodes.Count, "skeleton mapping value must index a real glTF node");
+                Assert.AreEqual(gltf.Nodes[association.Node].Name, association.Name);
+                nodeIndices.Add(association.Node);
             }
 
             // Distinct joints bind distinct transforms, so they resolve to distinct node indices.
-            CollectionAssert.AllItemsAreUnique(rig.Values);
+            CollectionAssert.AllItemsAreUnique(nodeIndices);
         }
 
         [Test]

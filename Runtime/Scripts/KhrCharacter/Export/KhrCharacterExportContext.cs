@@ -363,6 +363,7 @@ namespace UnityGLTF.KhrCharacter
                     masks.Add(new KHR_character_expression_mask.Mask
                     {
                         Target = targetIndex,
+                        Name = expressions[targetIndex].Expression,
                         Type = !string.IsNullOrEmpty(mask.CustomType)
                             ? mask.CustomType
                             : mask.Type == MaskType.Block ? "block" : "blend",
@@ -392,6 +393,7 @@ namespace UnityGLTF.KhrCharacter
                             contributions.Add(new KHR_character_expression_mapping.SourceWeight
                             {
                                 Source = sourceIndex,
+                                Name = expressions[sourceIndex].Expression,
                                 Weight = contrib.Weight
                             });
                         }
@@ -706,20 +708,24 @@ namespace UnityGLTF.KhrCharacter
 
         private void ExportSkeletonMapping(GLTFSceneExporter exporter, GLTFRoot gltfRoot, SkeletonMappingResult result)
         {
-            var rigDict = new Dictionary<string, int>();
+            var rigDict = new Dictionary<string, KHR_character_skeleton_mapping.JointAssociation>();
             foreach (var kv in result.Bones)
             {
                 if (kv.Value == null) continue;
                 int nodeIdx = exporter.GetTransformIndex(kv.Value);
                 if (nodeIdx < 0) continue;
-                rigDict[kv.Key] = nodeIdx;
+                rigDict[kv.Key] = new KHR_character_skeleton_mapping.JointAssociation
+                {
+                    Node = nodeIdx,
+                    Name = kv.Value.name
+                };
             }
 
             if (rigDict.Count == 0) return;
 
             var mapping = new KHR_character_skeleton_mapping
             {
-                SkeletalRigMappings = new Dictionary<string, Dictionary<string, int>>
+                SkeletalRigMappings = new Dictionary<string, Dictionary<string, KHR_character_skeleton_mapping.JointAssociation>>
                 {
                     [result.SelectedRig ?? "default"] = rigDict
                 }

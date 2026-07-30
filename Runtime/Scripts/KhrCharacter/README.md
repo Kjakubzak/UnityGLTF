@@ -52,7 +52,7 @@ When enabled, the plugin writes the following extensions from a Unity character 
   - `KHR_character_expression_texture`: Texture UV-transform drivers.
   - `KHR_character_expression_mask`: Mask entries for attenuating other expressions.
   - `KHR_character_expression_mapping`: Vocabulary mapping sets.
-- **`KHR_character_skeleton_mapping`**: Rig vocabulary → glTF node-index mapping dictionary (`{ vocabularyJoint: nodeIndex }`).
+- **`KHR_character_skeleton_mapping`**: Rig vocabulary → glTF node association dictionary (`{ vocabularyJoint: { node, name? } }`).
 - **`KHR_character_reference_pose`**: Reference pose animation (e.g., T-Pose) with bone TRS channels.
 
 ### Scope rule (facial expressions only)
@@ -152,11 +152,11 @@ not the skin bind pose.
 
 ## Skeleton mapping
 
-`KHR_character_skeleton_mapping` is `rigName -> { vocabularyJoint -> nodeIndex }`: the key is a known
-vocabulary joint (`hips`, `head`, …) and the value is a glTF node index (a `glTFid` into the document's
-global `nodes[]`), exactly like `KHR_character.rootNode`. The baker (`KhrCharacterSkeletonBaker`) resolves
-each joint via a direct node-index → GameObject lookup, so there is no name coupling and no direction to
-detect. When more than one rig is present, the baker keeps the one that resolves the most bones.
+`KHR_character_skeleton_mapping` is `rigName -> { vocabularyJoint -> { node, name? } }`: the key is a known
+vocabulary joint (`hips`, `head`, …), and `node` is a glTF node index (a `glTFid` into the document's global
+`nodes[]`), exactly like `KHR_character.rootNode`. The optional `name` must exactly match the referenced node
+name. The baker (`KhrCharacterSkeletonBaker`) resolves each joint via the node index and reports mismatched
+labels without changing resolution. When more than one rig is present, it keeps the rig that resolves the most bones.
 
 Building a Unity **humanoid Avatar** is opt-in (`SkeletonMap.BuildHumanoidOnAwake`); it self-validates
 required bones and falls back to the generic rig.

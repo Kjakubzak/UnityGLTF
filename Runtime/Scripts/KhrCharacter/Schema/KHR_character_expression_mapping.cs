@@ -12,7 +12,12 @@ namespace GLTF.Schema
     {
         public const string EXTENSION_NAME = "KHR_character_expression_mapping";
 
-        public struct SourceWeight { public int Source; public float Weight; }
+        public struct SourceWeight
+        {
+            public int Source;
+            public string Name;
+            public float Weight;
+        }
 
         // setName -> (targetExpression -> contributions)
         public Dictionary<string, Dictionary<string, List<SourceWeight>>> ExpressionSetMappings
@@ -37,7 +42,12 @@ namespace GLTF.Schema
                             var contributions = new JArray();
                             if (targetKv.Value != null)
                                 foreach (var sw in targetKv.Value)
-                                    contributions.Add(new JObject { { "source", sw.Source }, { "weight", sw.Weight } });
+                                {
+                                    var contribution = new JObject { { "source", sw.Source } };
+                                    if (sw.Name != null) contribution.Add("name", sw.Name);
+                                    contribution.Add("weight", sw.Weight);
+                                    contributions.Add(contribution);
+                                }
                             targets.Add(targetKv.Key, contributions);
                         }
                     }
@@ -76,6 +86,7 @@ namespace GLTF.Schema
                         list.Add(new KHR_character_expression_mapping.SourceWeight
                         {
                             Source = c["source"]?.Value<int>() ?? -1,
+                            Name = c["name"]?.Value<string>(),
                             Weight = c["weight"]?.Value<float>() ?? 0f,
                         });
                     }

@@ -28,10 +28,13 @@ namespace UnityGLTF.KhrCharacter.Tests
             return go;
         }
 
-        private static KHR_character_skeleton_mapping Mapping(Dictionary<string, int> rig)
+        private static KHR_character_skeleton_mapping.JointAssociation Joint(int node, string name = null)
+            => new KHR_character_skeleton_mapping.JointAssociation { Node = node, Name = name };
+
+        private static KHR_character_skeleton_mapping Mapping(Dictionary<string, KHR_character_skeleton_mapping.JointAssociation> rig)
             => new KHR_character_skeleton_mapping
             {
-                SkeletalRigMappings = new Dictionary<string, Dictionary<string, int>> { { "rig", rig } }
+                SkeletalRigMappings = new Dictionary<string, Dictionary<string, KHR_character_skeleton_mapping.JointAssociation>> { { "rig", rig } }
             };
 
         [Test]
@@ -40,7 +43,11 @@ namespace UnityGLTF.KhrCharacter.Tests
             var hips = NewGo("Hips_node");
             var head = NewGo("Head_node");
             var nodeMap = new Dictionary<int, GameObject> { { 0, hips }, { 1, head } };
-            var ext = Mapping(new Dictionary<string, int> { { "hips", 0 }, { "head", 1 } });
+            var ext = Mapping(new Dictionary<string, KHR_character_skeleton_mapping.JointAssociation>
+            {
+                { "hips", Joint(0, "Hips_node") },
+                { "head", Joint(1, "Head_node") }
+            });
 
             var result = KhrCharacterSkeletonBaker.BakeSkeleton(new GLTFRoot(), nodeMap, ext);
 
@@ -59,10 +66,10 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             var ext = new KHR_character_skeleton_mapping
             {
-                SkeletalRigMappings = new Dictionary<string, Dictionary<string, int>>
+                SkeletalRigMappings = new Dictionary<string, Dictionary<string, KHR_character_skeleton_mapping.JointAssociation>>
                 {
-                    { "sparse", new Dictionary<string, int> { { "hips", 0 } } },
-                    { "full", new Dictionary<string, int> { { "hips", 0 }, { "head", 1 } } },
+                    { "sparse", new Dictionary<string, KHR_character_skeleton_mapping.JointAssociation> { { "hips", Joint(0) } } },
+                    { "full", new Dictionary<string, KHR_character_skeleton_mapping.JointAssociation> { { "hips", Joint(0) }, { "head", Joint(1) } } },
                 }
             };
 
@@ -79,10 +86,10 @@ namespace UnityGLTF.KhrCharacter.Tests
             // hips resolves; leftFoot (a REQUIRED humanoid bone) maps to an index with no node.
             var hips = NewGo("Hips_node");
             var nodeMap = new Dictionary<int, GameObject> { { 0, hips } };
-            var ext = Mapping(new Dictionary<string, int>
+            var ext = Mapping(new Dictionary<string, KHR_character_skeleton_mapping.JointAssociation>
             {
-                { "hips", 0 },
-                { "leftFoot", 99 }, // no such node index
+                { "hips", Joint(0) },
+                { "leftFoot", Joint(99) }, // no such node index
             });
 
             var result = KhrCharacterSkeletonBaker.BakeSkeleton(new GLTFRoot(), nodeMap, ext);
@@ -102,11 +109,11 @@ namespace UnityGLTF.KhrCharacter.Tests
             var hips = NewGo("Hips_node");
             var head = NewGo("Head_node");
             var nodeMap = new Dictionary<int, GameObject> { { 0, hips }, { 1, head } };
-            var ext = Mapping(new Dictionary<string, int>
+            var ext = Mapping(new Dictionary<string, KHR_character_skeleton_mapping.JointAssociation>
             {
-                { "hips", 0 },
-                { "head", 1 },
-                { "jaw", 99 }, // no such node index
+                { "hips", Joint(0) },
+                { "head", Joint(1) },
+                { "jaw", Joint(99) }, // no such node index
             });
 
             var result = KhrCharacterSkeletonBaker.BakeSkeleton(new GLTFRoot(), nodeMap, ext);
@@ -117,6 +124,22 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(0, result.Report.MissingRequiredBones.Count, "jaw is optional, not a required bone");
             Assert.IsTrue(result.Report.IsValid, "an unresolved optional joint must not invalidate the mapping");
             Assert.Greater(result.Report.Warnings.Count, 0, "the unresolved jaw still records a warning");
+        }
+
+        [Test]
+        public void BakeSkeleton_NameMismatchWarnsButResolvesByIndex()
+        {
+            var hips = NewGo("Hips_node");
+            var nodeMap = new Dictionary<int, GameObject> { { 0, hips } };
+            var ext = Mapping(new Dictionary<string, KHR_character_skeleton_mapping.JointAssociation>
+            {
+                { "hips", Joint(0, "WrongName") },
+            });
+
+            var result = KhrCharacterSkeletonBaker.BakeSkeleton(new GLTFRoot(), nodeMap, ext);
+
+            Assert.AreSame(hips.transform, result.Bones["hips"]);
+            Assert.IsNotEmpty(result.Report.Warnings);
         }
 
         [Test]

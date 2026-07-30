@@ -10,8 +10,8 @@ namespace UnityGLTF.KhrCharacter
     /// <summary>
     /// Resolves <c>KHR_character_skeleton_mapping</c> to concrete bone transforms and bakes the
     /// <c>KHR_character_reference_pose</c> animation into a retarget pose. The mapping JSON is
-    /// <c>rigName -&gt; { vocabularyJoint -&gt; nodeIndex }</c>: the key is a known vocabulary joint
-    /// (hips/head/leftUpperArm/...) and the value is a glTF node index, resolved directly via the importer's
+    /// <c>rigName -&gt; { vocabularyJoint -&gt; { node, name? } }</c>: the key is a known vocabulary joint
+    /// (hips/head/leftUpperArm/...) and <c>node</c> is a glTF node index, resolved directly via the importer's
     /// node-index -&gt; GameObject map. Also maps vocabulary joints to Unity humanoid bone names.
     /// </summary>
     internal static class KhrCharacterSkeletonBaker
@@ -159,7 +159,7 @@ namespace UnityGLTF.KhrCharacter
         // target vocabulary joint and the value is a glTF node index into the document's global nodes[] array.
         // Resolve each via a direct node-index -> GameObject lookup (the map the importer builds in
         // OnAfterImportNode), so there is no name coupling and no direction to detect.
-        private static SkeletonMappingResult ResolveRig(string rigName, Dictionary<string, int> mapping, IReadOnlyDictionary<int, GameObject> nodeIndexToGo)
+        private static SkeletonMappingResult ResolveRig(string rigName, Dictionary<string, KHR_character_skeleton_mapping.JointAssociation> mapping, IReadOnlyDictionary<int, GameObject> nodeIndexToGo)
         {
             if (mapping == null || mapping.Count == 0) return null;
 
@@ -168,11 +168,17 @@ namespace UnityGLTF.KhrCharacter
             foreach (var kv in mapping)
             {
                 string vocab = kv.Key;
-                int nodeIndex = kv.Value;
+                var association = kv.Value;
+                if (association == null) continue;
+                int nodeIndex = association.Node;
                 if (string.IsNullOrEmpty(vocab)) continue;
 
                 if (nodeIndex >= 0 && nodeIndexToGo.TryGetValue(nodeIndex, out var go) && go != null)
+                {
                     bones[vocab] = go.transform;
+                    if (association.Name != null && association.Name != go.name)
+                        report.Warnings.Add($"[KHR_character] skeleton joint '{vocab}' name '{association.Name}' does not match node {nodeIndex} name '{go.name}'.");
+                }
                 else
                 {
                     report.Warnings.Add($"[KHR_character] skeleton joint '{vocab}' -> node index {nodeIndex} was not found.");

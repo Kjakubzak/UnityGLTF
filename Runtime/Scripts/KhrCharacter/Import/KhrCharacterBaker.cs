@@ -98,13 +98,13 @@ namespace UnityGLTF.KhrCharacter
             for (int i = 0; i < tracks.Count; i++)
             {
                 if (rawMasks[i] == null) continue;
-                var masks = BuildMaskEntries(rawMasks[i], i, wireToTrackIndex);
+                var masks = BuildMaskEntries(rawMasks[i], i, wireToTrackIndex, expressionExt.Expressions);
                 if (masks.Length > 0) tracks[i].Masks = masks;
             }
 
             var mappingExt = GetMappingExtension(root);
             if (mappingExt != null)
-                set.MappingSets = BuildMappingSets(mappingExt, wireToTrackIndex);
+                set.MappingSets = BuildMappingSets(mappingExt, wireToTrackIndex, expressionExt.Expressions);
 
             return set;
         }
@@ -652,7 +652,11 @@ namespace UnityGLTF.KhrCharacter
 
         // ── Mask + mapping resolution (wire expression indices -> track indices) ────
 
-        internal static MaskEntry[] BuildMaskEntries(KHR_character_expression_mask mask, int sourceIndex, IReadOnlyDictionary<int, int> wireToTrackIndex)
+        internal static MaskEntry[] BuildMaskEntries(
+            KHR_character_expression_mask mask,
+            int sourceIndex,
+            IReadOnlyDictionary<int, int> wireToTrackIndex,
+            IReadOnlyList<KHR_character_expression.ExpressionItem> wireExpressions = null)
         {
             var list = new List<MaskEntry>();
             if (mask?.Masks != null)
@@ -664,6 +668,12 @@ namespace UnityGLTF.KhrCharacter
                         Debug.LogWarning($"[KHR_character] Mask references invalid expression index {m?.Target ?? -1}; dropping.");
                         continue;
                     }
+                    if (m.Name != null
+                        && (wireExpressions == null
+                            || m.Target < 0
+                            || m.Target >= wireExpressions.Count
+                            || m.Name != wireExpressions[m.Target]?.Expression))
+                        Debug.LogWarning($"[KHR_character] Mask name '{m.Name}' does not match expression index {m.Target}.");
                     string maskType = m.Type?.Trim();
                     bool isBlock = string.Equals(maskType, "block", StringComparison.OrdinalIgnoreCase);
                     bool isBlend = string.IsNullOrEmpty(maskType) ||
@@ -682,7 +692,10 @@ namespace UnityGLTF.KhrCharacter
             return list.ToArray();
         }
 
-        internal static ExpressionMappingSet[] BuildMappingSets(KHR_character_expression_mapping mappingExt, IReadOnlyDictionary<int, int> wireToTrackIndex)
+        internal static ExpressionMappingSet[] BuildMappingSets(
+            KHR_character_expression_mapping mappingExt,
+            IReadOnlyDictionary<int, int> wireToTrackIndex,
+            IReadOnlyList<KHR_character_expression.ExpressionItem> wireExpressions = null)
         {
             if (mappingExt?.ExpressionSetMappings == null) return null;
             var sets = new List<ExpressionMappingSet>();
@@ -703,6 +716,12 @@ namespace UnityGLTF.KhrCharacter
                                     Debug.LogWarning($"[KHR_character] Mapping references invalid expression index {sw.Source}; dropping.");
                                     continue;
                                 }
+                                if (sw.Name != null
+                                    && (wireExpressions == null
+                                        || sw.Source < 0
+                                        || sw.Source >= wireExpressions.Count
+                                        || sw.Name != wireExpressions[sw.Source]?.Expression))
+                                    Debug.LogWarning($"[KHR_character] Mapping name '{sw.Name}' does not match expression index {sw.Source}.");
                                 contributions.Add(new MappingContribution { SourceIndex = srcIndex, Weight = sw.Weight });
                             }
                         }

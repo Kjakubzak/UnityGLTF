@@ -5,16 +5,22 @@ namespace GLTF.Schema
 {
     /// <summary>
     /// glTF root extension <c>KHR_character_skeleton_mapping</c>: maps an arbitrary rig to one or more target
-    /// vocabularies. Per the spec: rigName -> { targetJointName -> sourceNodeIndex }, where the value is a
+    /// vocabularies. Per the spec: rigName -> { targetJointName -> { node, name? } }, where <c>node</c> is a
     /// glTFid (a 0-based index into the document's <c>nodes</c> array).
     /// </summary>
     public class KHR_character_skeleton_mapping : IExtension
     {
         public const string EXTENSION_NAME = "KHR_character_skeleton_mapping";
 
-        // rigName -> (vocabularyJoint -> node index), kept verbatim.
-        public Dictionary<string, Dictionary<string, int>> SkeletalRigMappings
-            = new Dictionary<string, Dictionary<string, int>>();
+        public class JointAssociation
+        {
+            public int Node = -1;
+            public string Name;
+        }
+
+        // rigName -> (vocabularyJoint -> source node association), kept verbatim.
+        public Dictionary<string, Dictionary<string, JointAssociation>> SkeletalRigMappings
+            = new Dictionary<string, Dictionary<string, JointAssociation>>();
 
         public JProperty RawData;
 
@@ -30,7 +36,12 @@ namespace GLTF.Schema
                     var joints = new JObject();
                     if (rigKv.Value != null)
                         foreach (var jointKv in rigKv.Value)
-                            joints.Add(jointKv.Key, jointKv.Value); // int -> JValue
+                        {
+                            if (jointKv.Value == null) continue;
+                            var association = new JObject { { "node", jointKv.Value.Node } };
+                            if (jointKv.Value.Name != null) association.Add("name", jointKv.Value.Name);
+                            joints.Add(jointKv.Key, association);
+                        }
                     rigs.Add(rigKv.Key, joints);
                 }
             }
@@ -54,14 +65,18 @@ namespace GLTF.Schema
                 foreach (var rigProp in rigs.Properties())
                 {
                     if (!(rigProp.Value is JObject joints)) continue;
-                    var map = new Dictionary<string, int>();
+                    var map = new Dictionary<string, KHR_character_skeleton_mapping.JointAssociation>();
                     foreach (var jointProp in joints.Properties())
                     {
-                        // Values are node indices (glTFid, mirroring KHR_character.rootNode). Legacy name-string
-                        // values are intentionally dropped (hard cut): such an entry simply does not resolve to a
-                        // bone on import rather than throwing and failing the whole document load.
-                        if (jointProp.Value is JValue jv && jv.Type == JTokenType.Integer)
-                            map[jointProp.Name] = jv.Value<int>();
+                        // Legacy bare indices are intentionally dropped: the draft now requires an association.
+                        if (!(jointProp.Value is JObject association)
+                            || association["node"]?.Type != JTokenType.Integer)
+                            continue;
+                        map[jointProp.Name] = new KHR_character_skeleton_mapping.JointAssociation
+                        {
+                            Node = association["node"].Value<int>(),
+                            Name = association["name"]?.Value<string>(),
+                        };
                     }
                     ext.SkeletalRigMappings[rigProp.Name] = map;
                 }
