@@ -60,6 +60,154 @@ namespace UnityGLTF.KhrCharacter.Tests
             DeltaValues = new[] { 0f, 1f },
         };
 
+        private static JProperty ExpressionProvenanceToken()
+        {
+            return new JProperty(GLTF.Schema.KHR_character_expression.EXTENSION_NAME,
+                new JObject
+                {
+                    { "expressions", new JArray
+                        {
+                            new JObject
+                            {
+                                { "expression", "original" },
+                                { "animation", 1 },
+                                { "extras", "item-extra" },
+                                { "futureItemField", "not-permitted-by-the-item-schema" },
+                                { "extensions", new JObject
+                                    {
+                                        { "ACME_item", new JObject { { "value", 1 } } },
+                                        { GLTF.Schema.KHR_character_expression_morphtarget.EXTENSION_NAME,
+                                            new JObject
+                                            {
+                                                { "channels", new JArray(0) },
+                                                { "extensions", new JObject { { "ACME_morph", new JObject { { "value", 2 } } } } },
+                                                { "extras", false },
+                                                { "futureMorphField", 12 },
+                                            }
+                                        },
+                                        { GLTF.Schema.KHR_character_expression_joint.EXTENSION_NAME,
+                                            new JObject
+                                            {
+                                                { "channels", new JArray(1) },
+                                                { "extensions", new JObject { { "ACME_joint", new JObject { { "value", 3 } } } } },
+                                                { "extras", new JArray("joint", 3) },
+                                                { "futureJointField", 13 },
+                                            }
+                                        },
+                                        { GLTF.Schema.KHR_character_expression_texture.EXTENSION_NAME,
+                                            new JObject
+                                            {
+                                                { "channels", new JArray(2) },
+                                                { "extensions", new JObject { { "ACME_texture", new JObject { { "value", 4 } } } } },
+                                                { "extras", new JObject { { "mode", "texture" } } },
+                                                { "futureTextureField", 14 },
+                                            }
+                                        },
+                                        { GLTF.Schema.KHR_character_expression_mask.EXTENSION_NAME,
+                                            new JObject
+                                            {
+                                                { "masks", new JArray
+                                                    {
+                                                        new JObject
+                                                        {
+                                                            { "target", 0 },
+                                                            { "name", "original" },
+                                                            { "type", "ACME_expression_mask_curve" },
+                                                            { "amount", 0.25f },
+                                                            { "threshold", 0.125f },
+                                                            { "extensions", new JObject
+                                                                {
+                                                                    { "ACME_expression_mask_curve", new JObject { { "value", 6 } } },
+                                                                }
+                                                            },
+                                                            { "extras", "mask-entry-extra" },
+                                                            { "futureMaskEntryField", 16 },
+                                                        }
+                                                    }
+                                                },
+                                                { "extensions", new JObject { { "ACME_mask_root", new JObject { { "value", 7 } } } } },
+                                                { "extras", new JArray("mask-root", 7) },
+                                                { "futureMaskRootField", 17 },
+                                            }
+                                        },
+                                    }
+                                },
+                            }
+                        }
+                    },
+                    { "extensions", new JObject { { "ACME_root", new JObject { { "value", 5 } } } } },
+                    { "extras", new JArray("root", 5) },
+                    { "futureRootField", new JObject { { "keep", true } } },
+                });
+        }
+
+        private static GLTF.Schema.KHR_character_expression ParseExpressionProvenanceToken()
+        {
+            return new GLTF.Schema.KHR_character_expression_Factory()
+                .Deserialize(new GLTF.Schema.GLTFRoot(), ExpressionProvenanceToken())
+                as GLTF.Schema.KHR_character_expression;
+        }
+
+        private static JProperty ExpressionMappingProvenanceToken()
+        {
+            return new JProperty(GLTF.Schema.KHR_character_expression_mapping.EXTENSION_NAME,
+                new JObject
+                {
+                    { "expressionSetMappings", new JObject
+                        {
+                            { Vocab, new JObject
+                                {
+                                    { "Smile", new JArray
+                                        {
+                                            new JObject
+                                            {
+                                                { "source", 0 },
+                                                { "name", "source-original" },
+                                                { "weight", 0.8f },
+                                                { "extensions", new JObject { { "ACME_forward", new JObject { { "value", 21 } } } } },
+                                                { "extras", false },
+                                                { "futureForwardField", 22 },
+                                            }
+                                        }
+                                    },
+                                }
+                            },
+                        }
+                    },
+                    { "expressionSetInputMappings", new JObject
+                        {
+                            { Vocab, new JObject
+                                {
+                                    { "Smile", new JArray
+                                        {
+                                            new JObject
+                                            {
+                                                { "target", 1 },
+                                                { "name", "target-original" },
+                                                { "weight", 0.5f },
+                                                { "extensions", new JObject { { "ACME_input", new JObject { { "value", 23 } } } } },
+                                                { "extras", new JArray("input", 23) },
+                                                { "futureInputField", 24 },
+                                            }
+                                        }
+                                    },
+                                }
+                            },
+                        }
+                    },
+                    { "extensions", new JObject { { "ACME_mapping_root", new JObject { { "value", 25 } } } } },
+                    { "extras", new JObject { { "mapping", true } } },
+                    { "futureMappingRootField", 26 },
+                });
+        }
+
+        private static GLTF.Schema.KHR_character_expression_mapping ParseExpressionMappingProvenanceToken()
+        {
+            return new GLTF.Schema.KHR_character_expression_mapping_Factory()
+                .Deserialize(new GLTF.Schema.GLTFRoot(), ExpressionMappingProvenanceToken())
+                as GLTF.Schema.KHR_character_expression_mapping;
+        }
+
         // ── SerializableSkeletonMapping data round-trip ─────────────────────────────
 
         [Test]
@@ -184,27 +332,193 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void ExpressionMappingSchema_RoundTrip_PreservesIndependentDirections()
+        public void ExpressionSchema_RoundTrip_PreservesGltfPropertyPayloadAndAppliesKnownEdits()
         {
-            var ext = new GLTF.Schema.KHR_character_expression_mapping();
-            ext.ExpressionSetMappings["https://example.com/vocab/v1"] =
-                new Dictionary<string, List<GLTF.Schema.KHR_character_expression_mapping.SourceWeight>>
-                {
-                    { "Smile", new List<GLTF.Schema.KHR_character_expression_mapping.SourceWeight>
-                        { new GLTF.Schema.KHR_character_expression_mapping.SourceWeight { Source = 0, Weight = 0.8f } } },
-                };
-            ext.ExpressionSetInputMappings["https://example.com/vocab/v1"] =
-                new Dictionary<string, List<GLTF.Schema.KHR_character_expression_mapping.TargetWeight>>
-                {
-                    { "Smile", new List<GLTF.Schema.KHR_character_expression_mapping.TargetWeight>
-                        { new GLTF.Schema.KHR_character_expression_mapping.TargetWeight { Target = 1, Weight = 0.5f } } },
-                };
+            var ext = ParseExpressionProvenanceToken();
+            var item = ext.Expressions[0];
 
-            var restored = new GLTF.Schema.KHR_character_expression_mapping_Factory()
-                .Deserialize(new GLTF.Schema.GLTFRoot(), ext.Serialize()) as GLTF.Schema.KHR_character_expression_mapping;
+            item.Expression = "edited";
+            item.Animation = 7;
+            item.Morphtarget.Channels = new[] { 3 };
+            item.Joint.Channels = new[] { 4, 5 };
+            item.Texture.Channels = new[] { 6 };
+            item.Mask.Masks[0].Name = "edited-mask";
+            item.Mask.Masks[0].Type = "block";
+            item.Mask.Masks[0].Amount = 0.75f;
+            item.Mask.Masks[0].Threshold = 0.5f;
 
-            Assert.AreEqual(0, restored.ExpressionSetMappings["https://example.com/vocab/v1"]["Smile"][0].Source);
-            Assert.AreEqual(1, restored.ExpressionSetInputMappings["https://example.com/vocab/v1"]["Smile"][0].Target);
+            var value = (JObject)ext.Serialize().Value;
+            var serializedItem = (JObject)((JArray)value["expressions"])[0];
+            var itemExtensions = (JObject)serializedItem["extensions"];
+            var morph = (JObject)itemExtensions[GLTF.Schema.KHR_character_expression_morphtarget.EXTENSION_NAME];
+            var joint = (JObject)itemExtensions[GLTF.Schema.KHR_character_expression_joint.EXTENSION_NAME];
+            var texture = (JObject)itemExtensions[GLTF.Schema.KHR_character_expression_texture.EXTENSION_NAME];
+            var mask = (JObject)itemExtensions[GLTF.Schema.KHR_character_expression_mask.EXTENSION_NAME];
+            var maskEntry = (JObject)((JArray)mask["masks"])[0];
+
+            Assert.AreEqual("edited", serializedItem["expression"].Value<string>());
+            Assert.AreEqual(7, serializedItem["animation"].Value<int>());
+            Assert.AreEqual("item-extra", serializedItem["extras"].Value<string>());
+            Assert.IsNull(serializedItem["futureItemField"],
+                "expression items forbid additional properties, so invalid unknown fields are not retained");
+            Assert.AreEqual(1, itemExtensions["ACME_item"]["value"].Value<int>());
+
+            Assert.AreEqual(3, morph["channels"][0].Value<int>());
+            Assert.IsFalse(morph["extras"].Value<bool>());
+            Assert.AreEqual(2, morph["extensions"]["ACME_morph"]["value"].Value<int>());
+            Assert.AreEqual(12, morph["futureMorphField"].Value<int>());
+
+            Assert.AreEqual(4, joint["channels"][0].Value<int>());
+            Assert.AreEqual(5, joint["channels"][1].Value<int>());
+            Assert.AreEqual("joint", joint["extras"][0].Value<string>());
+            Assert.AreEqual(3, joint["extensions"]["ACME_joint"]["value"].Value<int>());
+            Assert.AreEqual(13, joint["futureJointField"].Value<int>());
+
+            Assert.AreEqual(6, texture["channels"][0].Value<int>());
+            Assert.AreEqual("texture", texture["extras"]["mode"].Value<string>());
+            Assert.AreEqual(4, texture["extensions"]["ACME_texture"]["value"].Value<int>());
+            Assert.AreEqual(14, texture["futureTextureField"].Value<int>());
+
+            Assert.AreEqual("edited-mask", maskEntry["name"].Value<string>());
+            Assert.AreEqual("block", maskEntry["type"].Value<string>());
+            Assert.AreEqual(0.75f, maskEntry["amount"].Value<float>());
+            Assert.AreEqual(0.5f, maskEntry["threshold"].Value<float>());
+            Assert.AreEqual(6, maskEntry["extensions"]["ACME_expression_mask_curve"]["value"].Value<int>());
+            Assert.AreEqual("mask-entry-extra", maskEntry["extras"].Value<string>());
+            Assert.AreEqual(16, maskEntry["futureMaskEntryField"].Value<int>());
+            Assert.AreEqual(7, mask["extensions"]["ACME_mask_root"]["value"].Value<int>());
+            Assert.AreEqual("mask-root", mask["extras"][0].Value<string>());
+            Assert.AreEqual(17, mask["futureMaskRootField"].Value<int>());
+
+            Assert.AreEqual(5, value["extensions"]["ACME_root"]["value"].Value<int>());
+            Assert.AreEqual("root", value["extras"][0].Value<string>());
+            Assert.IsTrue(value["futureRootField"]["keep"].Value<bool>());
+        }
+
+        [Test]
+        public void ExpressionSchema_Clone_DeepCopiesRootItemAndClassifierPayloads()
+        {
+            var source = ParseExpressionProvenanceToken();
+            var clone = source.Clone(new GLTF.Schema.GLTFRoot()) as GLTF.Schema.KHR_character_expression;
+
+            ((JObject)clone.Extensions["ACME_root"])["value"] = 50;
+            ((JArray)clone.Extras)[0] = "clone-root";
+            ((JObject)clone.AdditionalProperties["futureRootField"])["keep"] = false;
+            ((JObject)clone.Expressions[0].RawExtensions["ACME_item"])["value"] = 10;
+            clone.Expressions[0].Morphtarget.Channels[0] = 9;
+            ((JObject)clone.Expressions[0].Joint.Extensions["ACME_joint"])["value"] = 30;
+            ((JObject)clone.Expressions[0].Texture.Extras)["mode"] = "clone-texture";
+            clone.Expressions[0].Texture.AdditionalProperties["futureTextureField"] = 140;
+            ((JObject)clone.Expressions[0].Mask.Extensions["ACME_mask_root"])["value"] = 70;
+            ((JArray)clone.Expressions[0].Mask.Extras)[0] = "clone-mask-root";
+            clone.Expressions[0].Mask.AdditionalProperties["futureMaskRootField"] = 170;
+            clone.Expressions[0].Mask.Masks[0].Type = "block";
+            ((JObject)clone.Expressions[0].Mask.Masks[0].Extensions["ACME_expression_mask_curve"])["value"] = 60;
+            clone.Expressions[0].Mask.Masks[0].AdditionalProperties["futureMaskEntryField"] = 160;
+
+            Assert.AreEqual(5, source.Extensions["ACME_root"]["value"].Value<int>());
+            Assert.AreEqual("root", source.Extras[0].Value<string>());
+            Assert.IsTrue(source.AdditionalProperties["futureRootField"]["keep"].Value<bool>());
+            Assert.AreEqual(1, source.Expressions[0].RawExtensions["ACME_item"]["value"].Value<int>());
+            Assert.AreEqual(0, source.Expressions[0].Morphtarget.Channels[0]);
+            Assert.AreEqual(3, source.Expressions[0].Joint.Extensions["ACME_joint"]["value"].Value<int>());
+            Assert.AreEqual("texture", source.Expressions[0].Texture.Extras["mode"].Value<string>());
+            Assert.AreEqual(14, source.Expressions[0].Texture.AdditionalProperties["futureTextureField"].Value<int>());
+            Assert.AreEqual(7, source.Expressions[0].Mask.Extensions["ACME_mask_root"]["value"].Value<int>());
+            Assert.AreEqual("mask-root", source.Expressions[0].Mask.Extras[0].Value<string>());
+            Assert.AreEqual(17, source.Expressions[0].Mask.AdditionalProperties["futureMaskRootField"].Value<int>());
+            Assert.AreEqual("ACME_expression_mask_curve", source.Expressions[0].Mask.Masks[0].Type);
+            Assert.AreEqual(6,
+                source.Expressions[0].Mask.Masks[0].Extensions["ACME_expression_mask_curve"]["value"].Value<int>());
+            Assert.AreEqual(16,
+                source.Expressions[0].Mask.Masks[0].AdditionalProperties["futureMaskEntryField"].Value<int>());
+        }
+
+        [Test]
+        public void ExpressionMappingSchema_RoundTrip_PreservesProvenanceAndAppliesKnownEdits()
+        {
+            var ext = ParseExpressionMappingProvenanceToken();
+            var forward = ext.ExpressionSetMappings[Vocab]["Smile"][0];
+            forward.Source = 2;
+            forward.Name = "source-edited";
+            forward.Weight = 0.4f;
+            ext.ExpressionSetMappings[Vocab]["Smile"][0] = forward;
+            var input = ext.ExpressionSetInputMappings[Vocab]["Smile"][0];
+            input.Target = 3;
+            input.Name = "target-edited";
+            input.Weight = 0.6f;
+            ext.ExpressionSetInputMappings[Vocab]["Smile"][0] = input;
+
+            var value = (JObject)ext.Serialize().Value;
+            var serializedForward = (JObject)value["expressionSetMappings"][Vocab]["Smile"][0];
+            var serializedInput = (JObject)value["expressionSetInputMappings"][Vocab]["Smile"][0];
+
+            Assert.AreEqual(2, serializedForward["source"].Value<int>());
+            Assert.AreEqual("source-edited", serializedForward["name"].Value<string>());
+            Assert.AreEqual(0.4f, serializedForward["weight"].Value<float>());
+            Assert.AreEqual(21, serializedForward["extensions"]["ACME_forward"]["value"].Value<int>());
+            Assert.IsFalse(serializedForward["extras"].Value<bool>());
+            Assert.AreEqual(22, serializedForward["futureForwardField"].Value<int>());
+
+            Assert.AreEqual(3, serializedInput["target"].Value<int>());
+            Assert.AreEqual("target-edited", serializedInput["name"].Value<string>());
+            Assert.AreEqual(0.6f, serializedInput["weight"].Value<float>());
+            Assert.AreEqual(23, serializedInput["extensions"]["ACME_input"]["value"].Value<int>());
+            Assert.AreEqual("input", serializedInput["extras"][0].Value<string>());
+            Assert.AreEqual(24, serializedInput["futureInputField"].Value<int>());
+
+            Assert.AreEqual(25, value["extensions"]["ACME_mapping_root"]["value"].Value<int>());
+            Assert.IsTrue(value["extras"]["mapping"].Value<bool>());
+            Assert.AreEqual(26, value["futureMappingRootField"].Value<int>());
+        }
+
+        [Test]
+        public void ExpressionMappingSchema_Clone_DeepCopiesRootAndContributionPayloads()
+        {
+            var source = ParseExpressionMappingProvenanceToken();
+            var clone = source.Clone(new GLTF.Schema.GLTFRoot())
+                as GLTF.Schema.KHR_character_expression_mapping;
+
+            ((JObject)clone.Extensions["ACME_mapping_root"])["value"] = 250;
+            clone.Extras["mapping"] = false;
+            clone.AdditionalProperties["futureMappingRootField"] = 260;
+            var forward = clone.ExpressionSetMappings[Vocab]["Smile"][0];
+            ((JObject)forward.Extensions["ACME_forward"])["value"] = 210;
+            forward.AdditionalProperties["futureForwardField"] = 220;
+            clone.ExpressionSetMappings[Vocab]["Smile"][0] = forward;
+            var input = clone.ExpressionSetInputMappings[Vocab]["Smile"][0];
+            ((JArray)input.Extras)[0] = "clone-input";
+            input.AdditionalProperties["futureInputField"] = 240;
+            clone.ExpressionSetInputMappings[Vocab]["Smile"][0] = input;
+
+            Assert.AreEqual(25, source.Extensions["ACME_mapping_root"]["value"].Value<int>());
+            Assert.IsTrue(source.Extras["mapping"].Value<bool>());
+            Assert.AreEqual(26, source.AdditionalProperties["futureMappingRootField"].Value<int>());
+            Assert.AreEqual(21,
+                source.ExpressionSetMappings[Vocab]["Smile"][0].Extensions["ACME_forward"]["value"].Value<int>());
+            Assert.AreEqual(22,
+                source.ExpressionSetMappings[Vocab]["Smile"][0].AdditionalProperties["futureForwardField"].Value<int>());
+            Assert.AreEqual("input", source.ExpressionSetInputMappings[Vocab]["Smile"][0].Extras[0].Value<string>());
+            Assert.AreEqual(24,
+                source.ExpressionSetInputMappings[Vocab]["Smile"][0].AdditionalProperties["futureInputField"].Value<int>());
+        }
+
+        [Test]
+        public void ExpressionMappingSchema_Deserialize_PreservesInvalidIdentifierAndSerializeRejectsIt()
+        {
+            var token = ExpressionMappingProvenanceToken();
+            ((JObject)token.Value["expressionSetMappings"])["vrm"] =
+                new JObject { { "Smile", new JArray(new JObject { { "source", 0 }, { "weight", 1f } }) } };
+
+            var ext = new GLTF.Schema.KHR_character_expression_mapping_Factory()
+                .Deserialize(new GLTF.Schema.GLTFRoot(), token)
+                as GLTF.Schema.KHR_character_expression_mapping;
+
+            Assert.IsTrue(ext.ExpressionSetMappings.ContainsKey(Vocab));
+            Assert.IsTrue(ext.ExpressionSetMappings.ContainsKey("vrm"),
+                "parse retains invalid source data for diagnostics instead of silently losing it");
+            Assert.Throws<System.InvalidOperationException>(() => ext.Serialize(),
+                "serialization must fail loudly instead of emitting or silently dropping an invalid URI key");
         }
 
         [Test]
@@ -212,17 +526,22 @@ namespace UnityGLTF.KhrCharacter.Tests
         {
             var ext = new GLTF.Schema.KHR_character_expression_mask
             {
+                Extensions = new JObject { { "ACME_mask_root", new JObject { { "version", 1 } } } },
+                Extras = "root-extra",
+                AdditionalProperties = new JObject { { "futureMaskRootField", 2 } },
                 Masks = new List<GLTF.Schema.KHR_character_expression_mask.Mask>
                 {
                     new GLTF.Schema.KHR_character_expression_mask.Mask
                     {
                         Target = 0,
+                        Name = "target",
                         Type = "ACME_curve",
                         Extensions = new JObject
                         {
                             { "ACME_curve", new JObject { { "controlPoints", new JArray(0f, 1f) } } },
                         },
-                        Extras = new JObject { { "author", "test" } },
+                        Extras = new JArray("author", "test"),
+                        AdditionalProperties = new JObject { { "futureMaskEntryField", 3 } },
                     },
                 },
             };
@@ -230,8 +549,13 @@ namespace UnityGLTF.KhrCharacter.Tests
             var restored = GLTF.Schema.KHR_character_expression_mask.FromJson(ext.Serialize().Value as JObject);
 
             Assert.AreEqual("ACME_curve", restored.Masks[0].Type);
+            Assert.AreEqual("target", restored.Masks[0].Name);
             Assert.AreEqual(2, ((JArray)restored.Masks[0].Extensions["ACME_curve"]["controlPoints"]).Count);
-            Assert.AreEqual("test", restored.Masks[0].Extras["author"].Value<string>());
+            Assert.AreEqual("author", restored.Masks[0].Extras[0].Value<string>());
+            Assert.AreEqual(3, restored.Masks[0].AdditionalProperties["futureMaskEntryField"].Value<int>());
+            Assert.AreEqual(1, restored.Extensions["ACME_mask_root"]["version"].Value<int>());
+            Assert.AreEqual("root-extra", restored.Extras.Value<string>());
+            Assert.AreEqual(2, restored.AdditionalProperties["futureMaskRootField"].Value<int>());
         }
 
         // ── ExpressionController rehydration on Awake ───────────────────────────────

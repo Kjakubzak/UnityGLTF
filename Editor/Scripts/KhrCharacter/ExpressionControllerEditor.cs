@@ -19,6 +19,10 @@ namespace UnityGLTF.KhrCharacter.Editor
         public override void OnInspectorGUI()
         {
             var controller = (ExpressionController)target;
+            serializedObject.Update();
+            EditorGUILayout.PropertyField(serializedObject.FindProperty("_ownershipMode"));
+            serializedObject.ApplyModifiedProperties();
+            EditorGUILayout.Space();
 
             if (Application.isPlaying)
                 DrawPlayMode(controller);
@@ -46,7 +50,7 @@ namespace UnityGLTF.KhrCharacter.Editor
                 if (string.IsNullOrEmpty(handle.Name)) continue;
                 float current = controller.GetWeight(handle.Name);
                 float raw = EditorGUILayout.Slider(handle.Name, current, 0f, 1f);
-                // Binary (all-STEP) expressions snap to 0/1 -- the weight only resolves to discrete states.
+                // Explicit host-authored binary metadata opts this control into 0/1 snapping.
                 float next = handle.IsBinary ? Mathf.Round(raw) : raw;
                 if (!Mathf.Approximately(next, current))
                     controller.SetWeight(handle.Name, next);
@@ -126,7 +130,8 @@ namespace UnityGLTF.KhrCharacter.Editor
             EditorGUILayout.HelpBox(
                 "Extract creates a CharacterExpressionSetAsset from the baked set, capturing drivers as " +
                 "scene-independent bindings (renderer/bone paths + blendshape names + curves) you can edit in its " +
-                "inspector and re-resolve onto a character. glTF export is still future work.", MessageType.Info);
+                "inspector and re-resolve onto a character. The export plugin accepts controller-authored sets; " +
+                "imported passive response data fails closed until a lossless passive writer exists.", MessageType.Info);
         }
 
         private void ExtractToAsset()

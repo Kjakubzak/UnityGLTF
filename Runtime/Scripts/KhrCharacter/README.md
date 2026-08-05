@@ -17,15 +17,16 @@ import on ordinary glTF assets without a character root.
 | Component | Responsibility |
 |---|---|
 | `KhrCharacter` | Hub: capability list, readiness, references to the components below. |
-| `ExpressionController` | Drives morph / joint / texture expressions each frame (`Components/ExpressionController.cs`). |
+| `ExpressionResponseSet` | Passive, stateless wire evaluator returning absolute response records by authoritative expression index. It never writes scene targets. |
+| `ExpressionController` | Optional Unity host adapter for the legacy additive/override morph, joint, and material application policy. |
 | `SkeletonMap` | Holds the resolved vocabulary→bone mapping + reference pose; can (re)build a Unity humanoid Avatar. |
 | `LookAtTargetSet` | Passive live `Transform` markers for `KHR_node_lookat_target`; never selects or drives a consumer. |
 | `CameraHintSet` | Passive advisory camera descriptors (never creates, owns, selects, or activates a camera). |
 | `GazeSolver` | Optional Unity host adapter with an application-configured target, expression vocabulary, and response curve. It is never auto-created by import. |
 | `ViewModeController` | First/third-person view utility (no extension required). |
 
-Capabilities are derived from the extensions actually present and the data actually baked
-(`KhrCharacterImportContext.DeriveCapabilities`).
+Capabilities distinguish passive response data from optional scene-writing adapters. Schema recognition alone does
+not satisfy an extension's required-use support contract.
 
 ## Enabling the import plugin
 
@@ -38,6 +39,15 @@ importing character assets:
 When disabled, used-only extension data can still import as ordinary glTF metadata. An asset that lists a
 behavioral extension in `extensionsRequired` is rejected unless an enabled plugin claims its complete minimum
 support; schema recognition alone is not a support claim.
+
+`CreateExpressionController` explicitly opts into the Unity scene-writing adapter. It is off by default. When that
+adapter is created successfully, `SuppressNonInteractiveAnimationAutoPlay` may additionally alter Unity's default
+clip selection; it is also off by default. Invalid or passive-only expression data never triggers suppression.
+Imported animation clips, wrap modes, and Animator state are otherwise left untouched.
+
+The passive response representation is not yet an export source. Export aborts whenever a character has passive
+expression data, even if a lossy legacy controller projection is also present, rather than silently discarding the
+authoritative response. Preserve the original glTF for lossless pass-through until passive response export exists.
 
 ## Export
 
@@ -60,13 +70,12 @@ When enabled, the plugin writes the following extensions from a Unity character 
 - **`KHR_node_camera_hint` / `KHR_node_lookat_target`**: Independent passive node annotations. They export
   from all matching sets under the selected export roots and do not synthesize `KHR_character`.
 
-### Scope rule (facial expressions only)
+### Response-animation scope
 
-The exporter writes **whatever expressions are in the `CharacterExpressionSet`**. The **caller is responsible**
-for putting only **facial expressions** (0→1 driven, no loop expectation) into the set. **Body/locomotion
-animations** (walk cycles, idle poses, etc.) must be exported via the **standard UnityGLTF animation export
-path**, not through this plugin. The KHR_character extension set is reserved for facial expressions and
-other scalar-driven (0→1) animations without loop expectations.
+The exporter writes whatever response entries are in the `CharacterExpressionSet`. The wire extension is not
+limited to a particular facial vocabulary, but each entry is a stateless response sampled from a finite host-supplied
+scalar. Ordinary looping locomotion and idle playback belong on the standard UnityGLTF animation path unless an
+author deliberately intends that response contract.
 
 ### Pending schema fields
 
@@ -85,21 +94,23 @@ ratified representation.
 Honest fidelity notes for an export → import (or import → export) cycle. None of these break neutral-glTF
 loading in a third-party viewer; they are documented so consumers know what is and isn't preserved.
 
-- **CUBICSPLINE animations are imported as LINEAR.** The baker has no cubic-spline evaluator: it samples each
-  keyframe's value block (`[inTangent, value, outTangent]`) and records the track as `LINEAR`, discarding the
-  tangents (`KhrCharacterBaker.MapInterp`). `STEP` and `LINEAR` round-trip exactly.
-- **Multi-key UV-transform animations round-trip exactly on the first cycle.** Import captures the animation's
-  frame-0 absolute `_ST` (`Frame0St`) alongside the frame-0-relative deltas and the material's static `_ST`
-  (`BaseSt`). On export the absolute `_ST` per key is reconstructed as `Frame0St + (frame_k − frame0)`, so both the
-  inter-key *shape* (deltas) and the authored absolute baseline are preserved — a foreign asset whose animated
-  frame 0 differs from its material's static `_ST` round-trips exactly on the first cycle. (Drivers that carry no
-  captured frame 0 — e.g. hand-authored sets — fall back to anchoring on `BaseSt`, the prior behavior.) `BaseSt`
-  stays the runtime rest the compositor applies deltas over.
-- **A material shared by multiple renderers is one entry on the wire.** Texture (UV-transform / index-swap)
-  channels are addressed per material via `KHR_animation_pointer` (`/materials/{m}/...`), not per renderer. If two
-  renderers share a material but carry different texture animations, both resolve to the same material index and
-  collapse to a single animated material on export. Give renderers distinct materials when they need independent
-  texture animation.
+- **The passive response evaluator preserves CUBICSPLINE.** It decodes in-tangent/value/out-tangent records and
+  evaluates them with the glTF time-scaled Hermite rule. The optional legacy `ExpressionController` baker still
+  reduces CUBICSPLINE to its older host-adapter representation. Exporting that legacy representation writes LINEAR,
+  because it no longer contains the tangent triplets required for a valid CUBICSPLINE accessor; do not use that
+  adapter as a wire-conformance oracle.
+- **Legacy expression samplers are normalized to response progress.** Export maps every multi-key input range to
+  `[0, 1]`, and expands a legacy single target into an initial-to-target LINEAR response. This guarantees that the
+  response reaches its target at progress `1`, independent of the source clip's duration.
+- **UV-transform export is anchored to the authored material rest.** `BaseSt` is the static material transform and
+  every multi-key output is reconstructed as `BaseSt + frameRelativeDelta`. The first exported value must therefore
+  match the static glTF `KHR_texture_transform`. `Frame0St` remains legacy import metadata but is not an export
+  baseline: a foreign animation whose first key differs from its static material is rebased to the static value.
+- **A material shared by multiple renderers is one entry on the wire.** UV-transform channels are addressed per
+  material via `KHR_animation_pointer` (`/materials/{m}/...`), not per renderer. If two
+  drivers in one expression resolve to the same concrete material property, identical curves are emitted once and
+  conflicting curves reject the export. Give renderers distinct materials when they need independent texture
+  animation.
 - **`blendMode` / per-driver `priority` are not exported.**
   import baker reconstructs `Additive` + priority `0` regardless, so the exporter writes **no** vendor `extras`
   at all — the expression wire is fully Khronos-neutral. They may return later via a ratified representation. Each
@@ -116,7 +127,16 @@ loading in a third-party viewer; they are documented so consumers know what is a
   the asset contains only one character-like object. If an export set contains multiple character components,
   the exporter deterministically designates the first and leaves the others as ordinary glTF content.
 
-## Compositing policy (additive vs. override)
+## Optional Unity compositing policy (additive vs. override)
+
+`KHR_character_expression` returns absolute Asset Object Model response records and does not define their final
+composition. `ExpressionController` is one optional Unity policy for applying a supported subset. It is created only
+when `CreateExpressionController` is enabled.
+
+`ExpressionControllerOwnershipMode.Standalone` (the default) restores targets it owns to their baked bases when no
+contributor is active. `Integrated` leaves an inactive target untouched so an Animator or another earlier system can
+refresh the live underlay before `LateUpdate`. Active joint and texture application still uses the adapter's baked
+base policy described below; `Integrated` is an inactive-target handoff, not a portable mixing rule.
 
 Expression evaluation is **target-major**: for each concrete target (a blendshape, a transform TRS channel,
 or a material `_ST`/texture property), every active expression that touches it is combined, then written
@@ -138,15 +158,23 @@ driver weight, then declaration order** (above an activation threshold); with eq
 default — this is identical to the prior most-active-wins behavior. The default (nothing active) is the
 slot's base texture.
 
+Using Unity material instances, `MaterialPropertyBlock`, shader parameters, or a separate texture-transform layer
+are all valid host implementations. The wire contract identifies distinct glTF target properties and returns their
+absolute samples; it does not require Unity materials. An adapter must keep separately addressed texture-info
+properties independent and must not mistake its application or mixing policy for normative extension behavior.
+
 ### Known limitations
 
 These are honest, documented gaps (raised in the glTF PR #2512 discussion):
 
-1. **Joint / texture absolute-pose expressions assume additive-authored deltas.** Two *absolute-pose*
+1. **The optional controller is not the passive wire evaluator.** Its baked tracks are an older delta-oriented
+   Unity representation and typed classifiers select the subset it can apply. Required expression-family use is
+   conservatively rejected until every required target, classifier, mapping, mask, and provenance rule is supported.
+2. **Joint / texture absolute-pose expressions assume additive-authored deltas.** Two *absolute-pose*
    expressions on one bone composed additively will **over-rotate**. Author conflicting absolute poses as
    `Override` (with priorities), or keep deltas additive. The spec carries no `blendMode` yet, so the baker
    always emits `Additive`; `Override` is currently a **runtime-selectable** policy.
-2. **Joint expressions compose over the baked node neutral, not the live Animator pose.** A joint
+3. **Joint expressions compose over the baked node neutral, not the live Animator pose.** A joint
    expression resolves to `delta * nodeNeutral` (the node's authored local TRS captured at bake), so on a
    humanoid muscle bone it does **not** layer on top of the current Animator pose — it replaces it. Safe
    "delta over current pose" needs humanoid muscle-bone detection (opt-in Avatars only) and risks per-frame
@@ -250,9 +278,9 @@ previously broke extraction now round-trip). `CharacterExpressionSetAsset.Resolv
 it re-resolves each path/name under a character root back into live runtime drivers (unresolved paths/names are
 dropped with a warning).
 
-> **Scope.** This is groundwork for the future exporter, **not** the exporter. The binding keeps each texture
-> driver's stable `PropertyId` (enough to re-resolve a runtime driver); capturing the human-readable shader
-> property name and the glTF export itself are deferred to the exporter work.
+> **Scope.** These bindings are the scene-independent authoring layer. After resolution, the exporter validates the
+> concrete glTF target and emits the expression response; the runtime remains free to drive the resolved data from
+> clips, controllers, user input, or another animation system.
 
 ## Character Health
 
@@ -278,7 +306,10 @@ The baked data is import-time only, but the components survive being saved as a 
 - Import/baking: `Import/KhrCharacterImportPlugin.cs`, `Import/KhrCharacterBaker.cs`,
   `Import/KhrCharacterSkeletonBaker.cs`
 - Export: `Export/KhrCharacterExportPlugin.cs`, `Export/KhrCharacterExportContext.cs`
-- Runtime: `Components/ExpressionController.cs`, `Components/SkeletonMap.cs`, `Components/CameraHintSet.cs`,
+- Passive expression wire path: `Components/ExpressionResponseSet.cs`,
+  `Evaluation/ExpressionResponseEvaluator.cs`, `Evaluation/ExpressionInitialValueValidation.cs`, and
+  `Import/KhrCharacterResponseBaker.cs`
+- Runtime host adapters: `Components/ExpressionController.cs`, `Components/SkeletonMap.cs`, `Components/CameraHintSet.cs`,
   `Components/LookAtTargetSet.cs`, `Components/GazeSolver.cs` (optional host adapter), and
   `Components/EyeAimConstraint.cs` (non-spec, opt-in eye aiming)
 - Authoring: `Authoring/CharacterExpressionSetAsset.cs`

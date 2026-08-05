@@ -1,66 +1,86 @@
 using NUnit.Framework;
+using UnityEngine;
 
 namespace UnityGLTF.KhrCharacter.Tests
 {
-    /// <summary>
-    /// Verifies ExpressionTrack.IsBinary detection (KhrCharacterBaker.AllStep): an expression is "binary" when it
-    /// carries at least one driver and EVERY driver -- across morph, joint, AND texture domains -- uses STEP
-    /// interpolation. Binary is not morph-exclusive: a STEP-only joint or texture expression is binary too.
-    /// </summary>
+    /// <summary>STEP interpolation is timeline behavior, not an authored binary-driver declaration.</summary>
     public class KhrCharacterBakerBinaryTests
     {
-        private static Sampler Step => new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Step };
-        private static Sampler Linear => new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Linear };
+        private GameObject _root;
 
-        [Test]
-        public void Morph_AllStep_IsBinary()
+        [TearDown]
+        public void TearDown()
         {
-            var t = new ExpressionTrack { MorphDrivers = new[] { new MorphDriver { Sampler = Step } } };
-            Assert.IsTrue(KhrCharacterBaker.AllStep(t));
+            if (_root != null) Object.DestroyImmediate(_root);
         }
 
         [Test]
-        public void Morph_WithLinearChannel_IsNotBinary()
+        public void StepSamplerDoesNotImplicitlyMakeTrackBinary()
         {
-            var t = new ExpressionTrack
+            var track = new ExpressionTrack
             {
-                MorphDrivers = new[] { new MorphDriver { Sampler = Step }, new MorphDriver { Sampler = Linear } },
+                MorphDrivers = new[]
+                {
+                    new MorphDriver
+                    {
+                        Sampler = new Sampler
+                        {
+                            Times = new[] { 0f, 1f },
+                            Interp = Interp.Step,
+                        },
+                    },
+                },
             };
-            Assert.IsFalse(KhrCharacterBaker.AllStep(t));
+
+            Assert.IsFalse(track.IsBinary);
         }
 
-        // The broadening: a STEP-only JOINT expression with no morph drivers is still binary.
         [Test]
-        public void JointOnly_AllStep_IsBinary()
+        public void ControllerPresentsStepTrackAsContinuousByDefault()
         {
-            var t = new ExpressionTrack { JointDrivers = new[] { new JointDriver { Sampler = Step } } };
-            Assert.IsTrue(KhrCharacterBaker.AllStep(t));
+            var controller = CreateController(false);
+
+            Assert.That(controller.Expressions.Count, Is.EqualTo(1));
+            Assert.IsFalse(controller.Expressions[0].IsBinary);
         }
 
-        // ...and a STEP-only TEXTURE expression (e.g. an index swap) is binary too.
         [Test]
-        public void TextureOnly_AllStep_IsBinary()
+        public void ExplicitHostAuthoredBinaryMetadataIsPreserved()
         {
-            var t = new ExpressionTrack { TextureDrivers = new[] { new TextureDriver { Sampler = Step } } };
-            Assert.IsTrue(KhrCharacterBaker.AllStep(t));
+            var controller = CreateController(true);
+
+            Assert.IsTrue(controller.Expressions[0].IsBinary);
         }
 
-        // A single non-STEP channel in any domain disqualifies the whole expression.
-        [Test]
-        public void MixedDomains_OneLinear_IsNotBinary()
+        private ExpressionController CreateController(bool isBinary)
         {
-            var t = new ExpressionTrack
+            _root = new GameObject("binary-host-metadata");
+            var set = new CharacterExpressionSet
             {
-                MorphDrivers = new[] { new MorphDriver { Sampler = Step } },
-                JointDrivers = new[] { new JointDriver { Sampler = Linear } },
+                Expressions = new[]
+                {
+                    new ExpressionTrack
+                    {
+                        Name = "expression",
+                        IsBinary = isBinary,
+                        MorphDrivers = new[]
+                        {
+                            new MorphDriver
+                            {
+                                Sampler = new Sampler
+                                {
+                                    Times = new[] { 0f, 1f },
+                                    Interp = Interp.Step,
+                                },
+                            },
+                        },
+                    },
+                },
             };
-            Assert.IsFalse(KhrCharacterBaker.AllStep(t));
-        }
-
-        [Test]
-        public void NoDrivers_IsNotBinary()
-        {
-            Assert.IsFalse(KhrCharacterBaker.AllStep(new ExpressionTrack()));
+            set.RebuildIndex();
+            var controller = _root.AddComponent<ExpressionController>();
+            controller.Initialize(set);
+            return controller;
         }
     }
 }

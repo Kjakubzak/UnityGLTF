@@ -23,6 +23,10 @@ namespace UnityGLTF.KhrCharacter
         public ExpressionBinding[] Expressions;
         public ExpressionMappingSet[] MappingSets;
         public ExpressionInputMappingSet[] InputMappingSets;
+        public string MappingExtensionsJson;
+        public string MappingExtrasJson;
+        public string MappingAdditionalPropertiesJson;
+        public string[] MappingRequiredCompanionExtensions;
     }
 
     // Path-based mirror of ExpressionTrack. Metadata (Name/Domains/BlendMode/IsBinary/Masks) is carried verbatim;
@@ -35,6 +39,10 @@ namespace UnityGLTF.KhrCharacter
         public ExpressionBlendMode BlendMode = ExpressionBlendMode.Additive;
         public bool IsBinary;
         public MaskEntry[] Masks;
+        public string MaskExtensionsJson;
+        public string MaskExtrasJson;
+        public string MaskAdditionalPropertiesJson;
+        public string[] MaskRequiredCompanionExtensions;
         public MorphBinding[] MorphBindings;
         public JointBinding[] JointBindings;
         public TextureBinding[] TextureBindings;
@@ -79,6 +87,7 @@ namespace UnityGLTF.KhrCharacter
         public int PropertyId;           // resolved per pipeline (Shader.PropertyToID) at bake
         public string PropertyName;      // human-readable shader property name (e.g., "_BaseMap") — required for export
         public string GltfTextureSlot;   // glTF texture slot name (e.g., "baseColorTexture") — required for export
+        public TextureTransformTarget TransformTarget;
         public Sampler Sampler;
         public Vector4[] StValues;       // Frame-0-relative _ST deltas
         public Vector4 BaseSt;           // The material's base _ST

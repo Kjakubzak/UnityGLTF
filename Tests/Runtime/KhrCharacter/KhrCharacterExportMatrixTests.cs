@@ -12,7 +12,7 @@ namespace UnityGLTF.KhrCharacter.Tests
 {
     /// <summary>
     /// Phase-Z matrix-gap coverage for the KHR_character EXPORT path that the original export suite left open:
-    /// mixed-domain channel partition (T3), skeleton-only export (X1), null/missing-target skips (X3/X6),
+    /// mixed-domain channel partition (T3), skeleton-only export (X1), null/missing-target rejection (X3/X6),
     /// duplicate node names (X4), the baked-state
     /// edit-time fallback (N2), correctness with KHR_animation_pointer export disabled (N3), shared-material
     /// resolution (P4), and sampler-input min/max across all domains (P3). All drive a real GLTFSceneExporter
@@ -94,6 +94,9 @@ namespace UnityGLTF.KhrCharacter.Tests
             go.transform.SetParent(parent, false);
             var smr = go.GetComponent<SkinnedMeshRenderer>();
             smr.sharedMesh = mesh;
+            var shader = Shader.Find("Standard") ?? Shader.Find("Unlit/Color") ?? Shader.Find("Unlit/Texture");
+            Assert.IsNotNull(shader, "a built-in shader is required for the morph export fixture");
+            smr.sharedMaterial = MakeMaterial(shader, name + "_material");
             return smr;
         }
 
@@ -133,10 +136,10 @@ namespace UnityGLTF.KhrCharacter.Tests
                 BaseSt = new Vector4(1f, 1f, 0f, 0f),
             };
 
-        private static Shader UnlitTextureShaderOrIgnore()
+        private static Shader TextureShaderOrFail()
         {
-            var shader = Shader.Find("Unlit/Texture");
-            if (shader == null) Assert.Ignore("No suitable built-in shader available in this project.");
+            var shader = Shader.Find("Unlit/Texture") ?? Shader.Find("Standard");
+            Assert.IsNotNull(shader, "a built-in texture-capable shader is required for export tests");
             return shader;
         }
 
@@ -156,13 +159,18 @@ namespace UnityGLTF.KhrCharacter.Tests
             // the three sub-extensions: each domain's channel indices are disjoint, together cover every channel,
             // and each references the right KIND of channel (morph -> /weights/ pointer, joint -> native TRS,
             // texture -> /materials/ pointer). The original suite tests each domain only in isolation.
-            var shader = UnlitTextureShaderOrIgnore();
+            var shader = TextureShaderOrFail();
 
             var root = new GameObject("char");
             _created.Add(root);
             var smr = MakeMorphSmr(root.transform, "face", 1);
             var jaw = new GameObject("jaw").transform; jaw.SetParent(root.transform, false);
             var mat = MakeMaterial(shader, "mat");
+            var texture = new Texture2D(1, 1) { name = "base_color" };
+            texture.SetPixel(0, 0, Color.white);
+            texture.Apply();
+            _created.Add(texture);
+            mat.mainTexture = texture;
             var mr = MakeQuad(root.transform, "quad", mat);
 
             var set = new CharacterExpressionSet
@@ -269,19 +277,16 @@ namespace UnityGLTF.KhrCharacter.Tests
                 "no expressions -> no (empty) KHR_character_expression extension on the wire");
         }
 
-        // ── X3: a driver whose target is not in the export is skipped + warns; survivors stay contiguous ──
+        // ── X3: a driver whose target is not in the export rejects the character transactionally ──
 
         [Test]
-        public void JointDriver_TargetNotInExport_SkippedWithWarning_ContiguousChannels()
+        public void JointDriver_TargetNotInExport_RejectsWholeCharacterExport()
         {
-            // X3: a joint driver whose target Transform is not part of the exported hierarchy must be skipped
-            // with a warning (KhrCharacterExportContext.WriteJointDriver), and the surviving drivers' channels
-            // must remain contiguous and valid (no gap left by the skipped driver).
             var root = new GameObject("char");
             _created.Add(root);
             var jaw = new GameObject("jaw").transform; jaw.SetParent(root.transform, false);
 
-            // A loose transform NOT parented under the export root -> GetTransformIndex returns -1 -> warn+skip.
+            // A loose transform is not part of the exported hierarchy and therefore cannot be a native target.
             var loose = new GameObject("looseBone").transform;
             _created.Add(loose.gameObject);
 
@@ -295,21 +300,18 @@ namespace UnityGLTF.KhrCharacter.Tests
                         Domains = ExpressionDomain.Joint,
                         JointDrivers = new[]
                         {
-                            // valid (channel 0)
                             new JointDriver
                             {
                                 Target = jaw, Channel = TrsChannel.Rotation,
                                 Sampler = new Sampler { Times = new[] { 0f }, Interp = Interp.Step, SingleKey = true },
                                 DeltaQuat = new[] { Quaternion.Euler(15f, 0f, 0f) }, BaseQuat = Quaternion.identity,
                             },
-                            // invalid target -> skipped + warned
                             new JointDriver
                             {
                                 Target = loose, Channel = TrsChannel.Rotation,
                                 Sampler = new Sampler { Times = new[] { 0f }, Interp = Interp.Step, SingleKey = true },
                                 DeltaQuat = new[] { Quaternion.Euler(20f, 0f, 0f) }, BaseQuat = Quaternion.identity,
                             },
-                            // valid (channel 1)
                             new JointDriver
                             {
                                 Target = jaw, Channel = TrsChannel.Translation,
@@ -322,29 +324,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             };
             root.AddComponent<ExpressionController>().Initialize(set);
 
-            LogAssert.Expect(LogType.Warning, new System.Text.RegularExpressions.Regex(
-                @"\[KHR_character\] Joint target 'looseBone' is not part of the export"));
-
-            var gltf = ExportToGltfRoot(root);
-
-            var ext = gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
-            Assert.IsNotNull(ext);
-            var item = ext.Expressions.Find(e => e.Expression == "jawOpen");
-            Assert.IsNotNull(item, "the expression item is still emitted from the surviving drivers");
-            Assert.IsNotNull(item.Joint);
-            Assert.AreEqual(2, item.Joint.Channels.Length, "only the two in-export drivers contribute channels");
-
-            var anim = gltf.Animations[item.Animation];
-            // Surviving channel indices are contiguous (0,1) and each is a valid native channel.
-            var indices = new List<int>(item.Joint.Channels);
-            indices.Sort();
-            Assert.AreEqual(0, indices[0], "first surviving channel is index 0 (no gap from the skip)");
-            Assert.AreEqual(1, indices[1], "second surviving channel is index 1 (contiguous)");
-            foreach (var ci in item.Joint.Channels)
-            {
-                Assert.IsTrue(ci >= 0 && ci < anim.Channels.Count, "channel index in range");
-                Assert.IsNotNull(anim.Channels[ci].Target.Node, "surviving joint channel is native TRS");
-            }
+            var error = Assert.Throws<System.InvalidOperationException>(() => ExportToGltfRoot(root));
+            StringAssert.Contains("target is not part of the export", error.Message);
         }
 
         // ── X4: node-index mapping is unambiguous even when two bound bones share a Unity name ──
@@ -396,14 +377,11 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(2, jointNodes, "both same-named bones export as distinct nodes");
         }
 
-        // ── X6: a texture driver with no glTF slot is skipped + warns; the expression still emits ───
+        // ── X6: a texture driver with no glTF slot rejects the character transactionally ───────────
 
         [Test]
-        public void TextureDriver_EmptyGltfSlot_SkippedWithWarning()
+        public void TextureDriver_EmptyGltfSlot_RejectsWholeCharacterExport()
         {
-            // X6: a TextureDriver whose GltfTextureSlot was never captured (empty) cannot be addressed on the
-            // wire, so it is skipped with a warning (KhrCharacterExportContext.WriteTextureDriver). A sibling
-            // joint driver keeps the expression item alive, and it carries no texture sub-extension.
             var root = new GameObject("char");
             _created.Add(root);
             var jaw = new GameObject("jaw").transform; jaw.SetParent(root.transform, false);
@@ -440,17 +418,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             };
             root.AddComponent<ExpressionController>().Initialize(set);
 
-            LogAssert.Expect(LogType.Warning, new System.Text.RegularExpressions.Regex(
-                @"\[KHR_character\] TextureDriver has no GltfTextureSlot"));
-
-            var gltf = ExportToGltfRoot(root);
-
-            var ext = gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
-            Assert.IsNotNull(ext);
-            var item = ext.Expressions.Find(e => e.Expression == "scrollNoSlot");
-            Assert.IsNotNull(item, "the joint driver keeps the expression item alive");
-            Assert.IsNotNull(item.Joint, "the joint channel survived");
-            Assert.IsNull(item.Texture, "the slot-less texture driver emitted no texture sub-extension");
+            var error = Assert.Throws<System.InvalidOperationException>(() => ExportToGltfRoot(root));
+            StringAssert.Contains("has no glTF texture slot", error.Message);
         }
 
         // ── N2: edit-time export reads BakedSet / EditorBakedResult when runtime state is null ──────
@@ -598,11 +567,16 @@ namespace UnityGLTF.KhrCharacter.Tests
             // When two renderers share one material, two expressions each animating one renderer's UV both
             // resolve to the SAME material index -- the documented shared-material ambiguity. This pins that
             // GetMaterialId collapses them to one material on the wire.
-            var shader = UnlitTextureShaderOrIgnore();
+            var shader = TextureShaderOrFail();
 
             var root = new GameObject("char");
             _created.Add(root);
             var sharedMat = MakeMaterial(shader, "shared");
+            var texture = new Texture2D(1, 1) { name = "shared_base_color" };
+            texture.SetPixel(0, 0, Color.white);
+            texture.Apply();
+            _created.Add(texture);
+            sharedMat.mainTexture = texture;
             var mrA = MakeQuad(root.transform, "quadA", sharedMat);
             var mrB = MakeQuad(root.transform, "quadB", sharedMat); // SAME material instance
 

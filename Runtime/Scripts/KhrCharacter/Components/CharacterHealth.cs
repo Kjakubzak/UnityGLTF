@@ -4,9 +4,9 @@ namespace UnityGLTF.KhrCharacter
 {
     public enum CapabilityStatus
     {
-        Active,    // present in the asset and driven at runtime
-        Degraded,  // present but only partially driven
-        Inert,     // present in the asset but not driven at runtime
+        Active,    // a supported passive data surface or selected host adapter is available
+        Degraded,  // the selected host adapter is available but incomplete
+        Inert,     // declared in the asset without a usable data surface in this implementation
     }
 
     public struct CapabilityHealth

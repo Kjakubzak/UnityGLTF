@@ -77,6 +77,41 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
+        public void CoreWeightsUseNodeWeightsBeforeMeshWeightsAsBase()
+        {
+            var smr = MakeSmr(2, 1f);
+            var root = new GLTFRoot
+            {
+                Meshes = new List<GLTFMesh>
+                {
+                    new GLTFMesh { Weights = new List<double> { 0.1d, 0.2d } },
+                },
+                Nodes = new List<Node>(),
+            };
+            root.Nodes.Add(new Node
+            {
+                Mesh = new MeshId { Id = 0, Root = root },
+                Weights = new List<double> { 0.25d, 0.5d },
+            });
+            var bases = KhrCharacterBaker.ResolveMorphBaseValues(root, 0, 2);
+            var drivers = new List<MorphDriver>();
+
+            KhrCharacterBaker.BuildMorphDrivers(
+                smr,
+                new[] { 0f, 1f },
+                new[] { 0.25f, 0.5f, 0.75f, 0.25f },
+                InterpolationType.LINEAR,
+                bases,
+                drivers);
+
+            Assert.That(bases, Is.EqualTo(new[] { 0.25f, 0.5f }));
+            Assert.That(drivers[0].BaseValue, Is.EqualTo(0.25f));
+            Assert.That(drivers[0].DeltaValues, Is.EqualTo(new[] { 0f, 0.5f }).Within(1e-6f));
+            Assert.That(drivers[1].BaseValue, Is.EqualTo(0.5f));
+            Assert.That(drivers[1].DeltaValues, Is.EqualTo(new[] { 0f, -0.25f }).Within(1e-6f));
+        }
+
+        [Test]
         public void Step_PreservesInterpolation()
         {
             var smr = MakeSmr(1, 1f);
@@ -105,6 +140,37 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(Interp.Linear, drivers[0].Sampler.Interp);
             Assert.IsFalse(drivers[0].Sampler.SingleKey);
             Assert.AreSame(smr, drivers[0].Smr);
+        }
+
+        [Test]
+        public void MorphPointerUsesMeshWeightAsBaseAndFallsBackToZero()
+        {
+            var smr = MakeSmr(2, 1f);
+            var mesh = new GLTFMesh { Weights = new List<double> { 0.2d, 0.4d } };
+            var root = new GLTFRoot
+            {
+                Meshes = new List<GLTFMesh> { mesh },
+                Nodes = new List<Node>(),
+            };
+            root.Nodes.Add(new Node { Mesh = new MeshId { Id = 0, Root = root } });
+            float baseValue = KhrCharacterBaker.ResolveMorphBaseValue(root, 0, 1);
+            var drivers = new List<MorphDriver>();
+
+            KhrCharacterBaker.BuildMorphPointerDriver(
+                smr,
+                1,
+                new[] { 0f, 1f },
+                new[] { 0.4f, 0.9f },
+                InterpolationType.LINEAR,
+                baseValue,
+                drivers);
+
+            Assert.That(baseValue, Is.EqualTo(0.4f));
+            Assert.That(drivers[0].BaseValue, Is.EqualTo(0.4f));
+            Assert.That(drivers[0].DeltaValues, Is.EqualTo(new[] { 0f, 0.5f }).Within(1e-6f));
+
+            mesh.Weights = null;
+            Assert.That(KhrCharacterBaker.ResolveMorphBaseValue(root, 0, 1), Is.Zero);
         }
 
         [Test]

@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using GLTF.Schema;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.TestTools;
 using UnityGLTF.Plugins;
 
 namespace UnityGLTF.KhrCharacter.Tests
@@ -128,6 +129,98 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             Assert.IsNotNull(go.GetComponent<KhrCharacter>(),
                 "the KHR_character root extension opens the gate -> the hub is attached");
+        }
+
+        [Test]
+        public void InvalidPassiveExpressionDataCannotCreateOptionalController()
+        {
+            var root = new GLTFRoot
+            {
+                Accessors = new List<Accessor>
+                {
+                    new Accessor
+                    {
+                        ComponentType = GLTFComponentType.Float,
+                        Count = 1,
+                        Type = GLTFAccessorAttributeType.SCALAR,
+                        Min = new List<double> { 0d },
+                        Max = new List<double> { 0d },
+                    },
+                    new Accessor
+                    {
+                        ComponentType = GLTFComponentType.Float,
+                        Count = 1,
+                        Type = GLTFAccessorAttributeType.VEC3,
+                    },
+                },
+                Animations = new List<GLTFAnimation>(),
+                Nodes = new List<Node> { new Node { Name = "character" } },
+            };
+            var animation = new GLTFAnimation();
+            animation.Samplers.Add(new AnimationSampler
+            {
+                Input = new AccessorId { Id = 0, Root = root },
+                Output = new AccessorId { Id = 1, Root = root },
+                Interpolation = InterpolationType.LINEAR,
+            });
+            animation.Channels.Add(new AnimationChannel
+            {
+                Sampler = new AnimationSamplerId { Id = 0, Root = root, GLTFAnimation = animation },
+                Target = new AnimationChannelTarget
+                {
+                    Node = new NodeId { Id = 0, Root = root },
+                    Path = "translation",
+                },
+            });
+            root.Animations.Add(animation);
+            root.Extensions = new Dictionary<string, IExtension>
+            {
+                { KhrCharacterExtensionNames.Character, new KHR_character { RootNode = 0 } },
+                {
+                    KhrCharacterExtensionNames.Expression,
+                    new KHR_character_expression
+                    {
+                        Expressions = new List<KHR_character_expression.ExpressionItem>
+                        {
+                            new KHR_character_expression.ExpressionItem
+                            {
+                                Expression = "invalid",
+                                Animation = 0,
+                            },
+                        },
+                    }
+                },
+            };
+
+            var settings = ScriptableObject.CreateInstance<GLTFSettings>();
+            _created.Add(settings);
+#if UNITY_EDITOR
+            var importContext = new GLTFImportContext(null, settings);
+#else
+            var importContext = new GLTFImportContext(settings);
+#endif
+            var options = new ImportOptions { ImportContext = importContext };
+            using (var importer = new GLTFSceneImporter(root, null, options))
+            {
+                var context = new KhrCharacterImportContext(importContext, createExpressionController: true);
+                context.OnAfterImportRoot(root);
+
+                var sceneObject = new GameObject("invalid-character");
+                _created.Add(sceneObject);
+                context.OnAfterImportNode(root.Nodes[0], 0, sceneObject);
+                LogAssert.Expect(
+                    LogType.Error,
+                    "[KHR_character] Expression response data is invalid: " +
+                    "Sampler 0 input must contain at least two keys.");
+                context.OnAfterImportScene(null, 0, sceneObject);
+
+                var hub = sceneObject.GetComponent<KhrCharacter>();
+                Assert.IsNotNull(hub);
+                Assert.IsNull(sceneObject.GetComponent<ExpressionResponseSet>());
+                Assert.IsNull(sceneObject.GetComponent<ExpressionController>());
+                Assert.IsNull(hub.ExpressionResponses);
+                Assert.IsNull(hub.Expressions);
+            }
         }
     }
 }

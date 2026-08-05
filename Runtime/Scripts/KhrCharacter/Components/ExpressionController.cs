@@ -3,11 +3,20 @@ using UnityEngine;
 
 namespace UnityGLTF.KhrCharacter
 {
+    /// <summary>Host-defined ownership policy for the optional Unity expression applicator.</summary>
+    public enum ExpressionControllerOwnershipMode
+    {
+        /// <summary>The controller owns its targets and restores their baked bases while inactive.</summary>
+        Standalone,
+        /// <summary>An earlier animation system owns the targets; inactive expressions leave its values untouched.</summary>
+        Integrated,
+    }
+
     /// <summary>
-    /// Drives expressions each frame. Runs in LateUpdate (after the Animator) at a higher execution order than
+    /// Optional Unity host applicator. Runs in LateUpdate (after the Animator) at a higher execution order than
     /// <see cref="GazeSolver"/> so gaze can feed the same-frame evaluation. Morph, joint, and texture targets
-    /// are evaluated target-major (all active expressions combined per target, then written once) and re-based
-    /// to the stored neutral each frame.
+    /// are evaluated target-major. Standalone mode restores owned targets to their baked bases while inactive;
+    /// Integrated mode leaves inactive targets to an earlier animation-system writer.
     /// </summary>
     [DisallowMultipleComponent]
     [DefaultExecutionOrder(100)]
@@ -65,6 +74,7 @@ namespace UnityGLTF.KhrCharacter
         // which also stores here). Not the runtime working copy — see _set below, which is rebuilt from this.
         // Hidden from the inspector: it's baked data, surfaced read-only by ExpressionControllerEditor.
         [SerializeField, HideInInspector] private CharacterExpressionSet _serializedSet;
+        [SerializeField] private ExpressionControllerOwnershipMode _ownershipMode = ExpressionControllerOwnershipMode.Standalone;
 
         private CharacterExpressionSet _set;
         private IExpressionSemantics _semantics;
@@ -93,6 +103,11 @@ namespace UnityGLTF.KhrCharacter
         public IReadOnlyList<string> InputVocabularySets { get; private set; } = new List<string>();
         public IReadOnlyList<string> OutputVocabularySets { get; private set; } = new List<string>();
         public string SelectedInputMappingSet => _selectedInputMappingSet;
+        public ExpressionControllerOwnershipMode OwnershipMode
+        {
+            get => _ownershipMode;
+            set => _ownershipMode = value;
+        }
 
         // Rehydrate an editor-imported prefab. A live import adds this component fresh (no serialized set) and
         // calls Initialize itself, so this is a no-op in that path; it only fires for a deserialized prefab.
@@ -344,12 +359,14 @@ namespace UnityGLTF.KhrCharacter
                 if (mt.Smr == null) continue;
 
                 float acc = mt.BaseValue;
+                bool hasActiveContributor = false;
                 int winner = -1, winnerPrio = 0, winnerExpr = -1;
                 for (int k = 0; k < mt.Drivers.Count; k++)
                 {
                     int e = mt.ExprIndices[k];
                     float di = _d[e];
                     if (di <= 0f) continue;
+                    hasActiveContributor = true;
                     var driver = mt.Drivers[k];
                     acc += _semantics.SampleScalarDelta(driver.Sampler, driver.DeltaValues, mt.BaseValue, di);
                     if (IsOverride(e) && IsBetterWinner(driver.Priority, e, winner, winnerPrio, winnerExpr))
@@ -360,6 +377,8 @@ namespace UnityGLTF.KhrCharacter
                     var d = mt.Drivers[winner];
                     acc = mt.BaseValue + _semantics.SampleScalarDelta(d.Sampler, d.DeltaValues, mt.BaseValue, _d[mt.ExprIndices[winner]]);
                 }
+                if (!hasActiveContributor && _ownershipMode == ExpressionControllerOwnershipMode.Integrated)
+                    continue;
                 mt.Smr.SetBlendShapeWeight(mt.BlendShapeIndex, _semantics.Clamp01(acc) * mt.Multiplier);
             }
         }
@@ -374,12 +393,14 @@ namespace UnityGLTF.KhrCharacter
                 if (jt.Channel == TrsChannel.Rotation)
                 {
                     var accDelta = Quaternion.identity;
+                    bool hasActiveContributor = false;
                     int winner = -1, winnerPrio = 0, winnerExpr = -1;
                     for (int k = 0; k < jt.Drivers.Count; k++)
                     {
                         int e = jt.ExprIndices[k];
                         float di = _d[e];
                         if (di <= 0f) continue;
+                        hasActiveContributor = true;
                         var driver = jt.Drivers[k];
                         var delta = _semantics.SampleRotationDelta(driver.Sampler, driver.DeltaQuat, driver.BaseQuat, di);
                         accDelta = _semantics.AccumulateRotation(accDelta, delta, 1f);
@@ -391,17 +412,21 @@ namespace UnityGLTF.KhrCharacter
                         var d = jt.Drivers[winner];
                         accDelta = _semantics.SampleRotationDelta(d.Sampler, d.DeltaQuat, d.BaseQuat, _d[jt.ExprIndices[winner]]);
                     }
+                    if (!hasActiveContributor && _ownershipMode == ExpressionControllerOwnershipMode.Integrated)
+                        continue;
                     jt.Target.localRotation = accDelta * jt.BaseQuat;
                 }
                 else
                 {
                     var acc = jt.BaseVec;
+                    bool hasActiveContributor = false;
                     int winner = -1, winnerPrio = 0, winnerExpr = -1;
                     for (int k = 0; k < jt.Drivers.Count; k++)
                     {
                         int e = jt.ExprIndices[k];
                         float di = _d[e];
                         if (di <= 0f) continue;
+                        hasActiveContributor = true;
                         var driver = jt.Drivers[k];
                         acc += _semantics.SampleVectorDelta(driver.Sampler, driver.DeltaVec, driver.BaseVec, di);
                         if (IsOverride(e) && IsBetterWinner(driver.Priority, e, winner, winnerPrio, winnerExpr))
@@ -412,6 +437,8 @@ namespace UnityGLTF.KhrCharacter
                         var d = jt.Drivers[winner];
                         acc = jt.BaseVec + _semantics.SampleVectorDelta(d.Sampler, d.DeltaVec, d.BaseVec, _d[jt.ExprIndices[winner]]);
                     }
+                    if (!hasActiveContributor && _ownershipMode == ExpressionControllerOwnershipMode.Integrated)
+                        continue;
                     if (jt.Channel == TrsChannel.Translation) jt.Target.localPosition = acc;
                     else jt.Target.localScale = acc;
                 }
@@ -426,18 +453,21 @@ namespace UnityGLTF.KhrCharacter
                 if (target.Renderer == null) continue;
 
                 target.Renderer.GetPropertyBlock(target.Mpb, target.Slot);
+                bool writesAnyProperty = false;
 
                 // UV transforms: additive _ST over the base, with the same Override winner-takes rule as morph/joint.
                 for (int u = 0; u < target.Uv.Count; u++)
                 {
                     var uv = target.Uv[u];
                     var st = uv.BaseSt;
+                    bool hasActiveContributor = false;
                     int winner = -1, winnerPrio = 0, winnerExpr = -1;
                     for (int k = 0; k < uv.Drivers.Count; k++)
                     {
                         int e = uv.ExprIndices[k];
                         float di = _d[e];
                         if (di <= 0f) continue;
+                        hasActiveContributor = true;
                         var driver = uv.Drivers[k];
                         st += _semantics.SampleVector4Delta(driver.Sampler, driver.StValues, driver.BaseSt, di);
                         if (IsOverride(e) && IsBetterWinner(driver.Priority, e, winner, winnerPrio, winnerExpr))
@@ -448,10 +478,14 @@ namespace UnityGLTF.KhrCharacter
                         var d = uv.Drivers[winner];
                         st = uv.BaseSt + _semantics.SampleVector4Delta(d.Sampler, d.StValues, d.BaseSt, _d[uv.ExprIndices[winner]]);
                     }
+                    if (!hasActiveContributor && _ownershipMode == ExpressionControllerOwnershipMode.Integrated)
+                        continue;
                     target.Mpb.SetVector(uv.PropId, st);
+                    writesAnyProperty = true;
                 }
 
-                target.Renderer.SetPropertyBlock(target.Mpb, target.Slot);
+                if (writesAnyProperty)
+                    target.Renderer.SetPropertyBlock(target.Mpb, target.Slot);
             }
         }
 

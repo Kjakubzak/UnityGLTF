@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using GLTF.Schema;
+using Newtonsoft.Json.Linq;
 using Unity.Mathematics;
 using UnityEngine;
 using UnityGLTF.Extensions;
@@ -80,11 +81,6 @@ namespace UnityGLTF.KhrCharacter
                     track.Domains |= ExpressionDomain.Texture;
                 }
 
-                // Binary = every animated channel this expression carries (morph/joint/texture) is STEP, so the
-                // weight only ever resolves to discrete states -> a 0/1-snapping control fits. Spans all domains,
-                // not morph-only.
-                track.IsBinary = AllStep(track);
-
                 rawMasks.Add(item.Mask);
                 wireToTrackIndex[expressionIndex] = tracks.Count;
                 tracks.Add(track);
@@ -99,15 +95,24 @@ namespace UnityGLTF.KhrCharacter
             {
                 if (rawMasks[i] == null) continue;
                 var masks = BuildMaskEntries(rawMasks[i], i, wireToTrackIndex, expressionExt.Expressions);
-                if (masks.Length > 0) tracks[i].Masks = masks;
+                if (masks.Length > 0)
+                {
+                    tracks[i].Masks = masks;
+                    tracks[i].MaskExtensionsJson = rawMasks[i].Extensions?.ToString(
+                        Newtonsoft.Json.Formatting.None);
+                    tracks[i].MaskExtrasJson = rawMasks[i].Extras?.ToString(
+                        Newtonsoft.Json.Formatting.None);
+                    tracks[i].MaskAdditionalPropertiesJson = rawMasks[i].AdditionalProperties?.ToString(
+                        Newtonsoft.Json.Formatting.None);
+                    tracks[i].MaskRequiredCompanionExtensions = GetRequiredMaskCompanionExtensions(
+                        root, rawMasks[i], masks);
+                }
             }
 
             var mappingExt = GetMappingExtension(root);
             if (mappingExt != null)
-            {
-                set.MappingSets = BuildMappingSets(mappingExt, wireToTrackIndex, expressionExt.Expressions);
-                set.InputMappingSets = BuildInputMappingSets(mappingExt, wireToTrackIndex, expressionExt.Expressions);
-            }
+                TryApplyMappingSets(
+                    root, mappingExt, wireToTrackIndex, expressionExt.Expressions, set);
 
             return set;
         }
@@ -134,16 +139,18 @@ namespace UnityGLTF.KhrCharacter
                     //    target extension deserializes to a typed pointer (see GetPointer).
                     SkinnedMeshRenderer smr = null;
                     int singleShapeIndex = -1;
+                    int targetNodeIndex = -1;
                     if (channel.Target.Path == "weights" && channel.Target.Node != null)
                     {
-                        if (!nodeIndexToGo.TryGetValue(channel.Target.Node.Id, out var go) || go == null) continue;
+                        targetNodeIndex = channel.Target.Node.Id;
+                        if (!nodeIndexToGo.TryGetValue(targetNodeIndex, out var go) || go == null) continue;
                         smr = go.GetComponent<SkinnedMeshRenderer>();
                     }
                     else
                     {
                         var pointer = GetPointer(channel);
-                        if (pointer == null || !TryParseNodeWeightsPointer(pointer, out int nodeIndex, out singleShapeIndex)) continue;
-                        if (!nodeIndexToGo.TryGetValue(nodeIndex, out var go) || go == null) continue;
+                        if (pointer == null || !TryParseNodeWeightsPointer(pointer, out targetNodeIndex, out singleShapeIndex)) continue;
+                        if (!nodeIndexToGo.TryGetValue(targetNodeIndex, out var go) || go == null) continue;
                         smr = go.GetComponent<SkinnedMeshRenderer>();
                     }
                     if (smr == null || smr.sharedMesh == null) continue;
@@ -155,9 +162,22 @@ namespace UnityGLTF.KhrCharacter
                     var times = DecodeScalar(importer, GetAccessor(root, sampler.Input));
                     var values = DecodeScalar(importer, GetAccessor(root, sampler.Output));
                     if (singleShapeIndex >= 0)
-                        BuildMorphPointerDriver(smr, singleShapeIndex, times, values, sampler.Interpolation, output);
+                        BuildMorphPointerDriver(
+                            smr,
+                            singleShapeIndex,
+                            times,
+                            values,
+                            sampler.Interpolation,
+                            ResolveMorphBaseValue(root, targetNodeIndex, singleShapeIndex),
+                            output);
                     else
-                        BuildMorphDrivers(smr, times, values, sampler.Interpolation, output);
+                        BuildMorphDrivers(
+                            smr,
+                            times,
+                            values,
+                            sampler.Interpolation,
+                            ResolveMorphBaseValues(root, targetNodeIndex, smr.sharedMesh.blendShapeCount),
+                            output);
                 }
                 catch (Exception e)
                 {
@@ -173,6 +193,15 @@ namespace UnityGLTF.KhrCharacter
         /// </summary>
         internal static void BuildMorphDrivers(
             SkinnedMeshRenderer smr, float[] times, float[] values, InterpolationType interpolation, List<MorphDriver> output)
+            => BuildMorphDrivers(smr, times, values, interpolation, null, output);
+
+        internal static void BuildMorphDrivers(
+            SkinnedMeshRenderer smr,
+            float[] times,
+            float[] values,
+            InterpolationType interpolation,
+            IReadOnlyList<float> baseValues,
+            List<MorphDriver> output)
         {
             if (smr?.sharedMesh == null || times == null || values == null) return;
             int n = times.Length;
@@ -211,7 +240,7 @@ namespace UnityGLTF.KhrCharacter
                     BlendShapeIndex = i,
                     Sampler = samplerData,
                     DeltaValues = deltas,
-                    BaseValue = 0f, // glTF default morph weight; node/mesh weight overrides are added later
+                    BaseValue = baseValues != null && i < baseValues.Count ? baseValues[i] : 0f,
                     Priority = 0,
                 });
             }
@@ -235,6 +264,16 @@ namespace UnityGLTF.KhrCharacter
         /// </summary>
         internal static void BuildMorphPointerDriver(
             SkinnedMeshRenderer smr, int blendShapeIndex, float[] times, float[] values, InterpolationType interpolation, List<MorphDriver> output)
+            => BuildMorphPointerDriver(smr, blendShapeIndex, times, values, interpolation, 0f, output);
+
+        internal static void BuildMorphPointerDriver(
+            SkinnedMeshRenderer smr,
+            int blendShapeIndex,
+            float[] times,
+            float[] values,
+            InterpolationType interpolation,
+            float baseValue,
+            List<MorphDriver> output)
         {
             if (smr?.sharedMesh == null || times == null || values == null) return;
             int n = times.Length;
@@ -266,9 +305,31 @@ namespace UnityGLTF.KhrCharacter
                 BlendShapeIndex = blendShapeIndex,
                 Sampler = BuildSampler(times, MapInterp(interpolation)),
                 DeltaValues = deltas,
-                BaseValue = 0f,
+                BaseValue = baseValue,
                 Priority = 0,
             });
+        }
+
+        internal static float[] ResolveMorphBaseValues(
+            GLTFRoot root,
+            int nodeIndex,
+            int blendShapeCount)
+        {
+            var result = new float[Mathf.Max(0, blendShapeCount)];
+            for (int index = 0; index < result.Length; index++)
+                result[index] = ResolveMorphBaseValue(root, nodeIndex, index);
+            return result;
+        }
+
+        internal static float ResolveMorphBaseValue(GLTFRoot root, int nodeIndex, int blendShapeIndex)
+        {
+            if (root?.Nodes == null || nodeIndex < 0 || nodeIndex >= root.Nodes.Count || blendShapeIndex < 0)
+                return 0f;
+            var node = root.Nodes[nodeIndex];
+            var weights = node?.Weights ?? node?.Mesh?.Value?.Weights;
+            return weights != null && blendShapeIndex < weights.Count
+                ? (float)weights[blendShapeIndex]
+                : 0f;
         }
 
         // ── Joint (node TRS) channels ──────────────────────────────
@@ -402,28 +463,10 @@ namespace UnityGLTF.KhrCharacter
 
         // ── Texture channels (KHR_animation_pointer: UV transform + index swap) ──
 
-        private sealed class UvGroup
-        {
-            public Renderer Renderer;
-            public int Slot;
-            public int PropId;            // the _ST property
-            public Vector4 BaseSt;        // material's current _ST (Unity convention)
-            public InterpolationType Interp;
-            public float[] ScaleTimes;
-            public Vector2[] ScaleVals;   // glTF scale keyframes (or null)
-            public float[] OffsetTimes;
-            public Vector2[] OffsetVals;  // glTF offset keyframes (or null)
-            public string PropertyName;    // Unity texture property (no "_ST"); export-only metadata
-            public string GltfTextureSlot; // full glTF slot path, e.g. pbrMetallicRoughness/baseColorTexture
-        }
-
         private static void BakeTextureChannels(
             GLTFRoot root, GLTFSceneImporter importer, MaterialPropertiesRemapper remapper, GLTFAnimation animation,
             int[] channelIndices, IReadOnlyDictionary<int, GameObject> nodeIndexToGo, List<TextureDriver> output)
         {
-            // Pair scale + offset channels that target the same material/_ST into one combined UV driver.
-            var uvGroups = new Dictionary<(int, string), UvGroup>();
-
             foreach (var channelIndex in channelIndices)
             {
                 try
@@ -439,7 +482,8 @@ namespace UnityGLTF.KhrCharacter
                     if (importer.MaterialCache == null || matIndex < 0 || matIndex >= importer.MaterialCache.Length) continue;
                     var mat = importer.MaterialCache[matIndex]?.UnityMaterial;
                     if (mat == null) continue;
-                    if (!TryResolveRendererSlot(root, importer, matIndex, out var renderer, out int slot)) continue;
+                    var rendererSlots = ResolveRendererSlots(root, nodeIndexToGo, matIndex);
+                    if (rendererSlots.Count == 0) continue;
 
                     int samplerIndex = channel.Sampler?.Id ?? -1;
                     if (samplerIndex < 0 || samplerIndex >= animation.Samplers.Count) continue;
@@ -455,27 +499,36 @@ namespace UnityGLTF.KhrCharacter
 
                         var raw = DecodeVec2(importer, GetAccessor(root, sampler.Output));
                         if (raw.Length == 0) continue;
-                        var vec2 = new Vector2[raw.Length];
-                        for (int k = 0; k < raw.Length; k++) vec2[k] = new Vector2(raw[k].x, raw[k].y);
 
                         int propId = Shader.PropertyToID(unityName);
-                        var key = (matIndex, unityName);
-                        if (!uvGroups.TryGetValue(key, out var group))
+                        var baseSt = mat.GetVector(propId);
+                        var baseScale = new Vector2(baseSt.x, baseSt.y);
+                        var baseOffset = new Vector2(baseSt.z, 1f - baseSt.w - baseSt.y);
+                        var transformTarget = isSecondary
+                            ? TextureTransformTarget.Offset
+                            : TextureTransformTarget.Scale;
+                        var stValues = new Vector4[raw.Length];
+                        for (int k = 0; k < raw.Length; k++)
                         {
-                            group = new UvGroup
-                            {
-                                Renderer = renderer, Slot = slot, PropId = propId,
-                                BaseSt = mat.GetVector(propId), Interp = sampler.Interpolation,
-                                // Export-only metadata (G-B): Unity texture property (strip "_ST") + full glTF slot
-                                // path, so a later re-export can rebuild the KHR_animation_pointer paths.
-                                PropertyName = StripStSuffix(unityName),
-                                GltfTextureSlot = SlotFromGltfProperty(map.GltfPropertyName),
-                            };
-                            uvGroups[key] = group;
+                            var value = new Vector2(raw[k].x, raw[k].y);
+                            stValues[k] = isSecondary
+                                ? PackSt(baseScale, value)
+                                : PackSt(value, baseOffset);
                         }
-                        // The remapper's primary glTF property is "scale", secondary is "offset".
-                        if (isSecondary) { group.OffsetTimes = times; group.OffsetVals = vec2; }
-                        else { group.ScaleTimes = times; group.ScaleVals = vec2; }
+
+                        foreach (var rendererSlot in rendererSlots)
+                            BuildUvTransformDriver(
+                                rendererSlot.Renderer,
+                                rendererSlot.Slot,
+                                propId,
+                                times,
+                                stValues,
+                                baseSt,
+                                sampler.Interpolation,
+                                output,
+                                StripStSuffix(unityName),
+                                SlotFromGltfProperty(map.GltfPropertyName),
+                                transformTarget);
                     }
                 }
                 catch (Exception e)
@@ -483,30 +536,6 @@ namespace UnityGLTF.KhrCharacter
                     Debug.LogWarning($"[KHR_character] Skipping texture channel {channelIndex}: {e.Message}");
                 }
             }
-
-            foreach (var kv in uvGroups)
-                BuildUvTransformDriverFromGroup(kv.Value, output);
-        }
-
-        private static void BuildUvTransformDriverFromGroup(UvGroup g, List<TextureDriver> output)
-        {
-            var times = g.OffsetVals != null ? g.OffsetTimes : g.ScaleTimes;
-            if (times == null || times.Length == 0) return;
-
-            // Recover base glTF scale/offset from the packed Unity _ST: _ST = (sx, sy, ox, 1 - oy - sy).
-            var baseScale = new Vector2(g.BaseSt.x, g.BaseSt.y);
-            var baseOffset = new Vector2(g.BaseSt.z, 1f - g.BaseSt.w - g.BaseSt.y);
-
-            int n = times.Length;
-            var st = new Vector4[n];
-            for (int k = 0; k < n; k++)
-            {
-                var scale = (g.ScaleVals != null && k < g.ScaleVals.Length) ? g.ScaleVals[k] : baseScale;
-                var offset = (g.OffsetVals != null && k < g.OffsetVals.Length) ? g.OffsetVals[k] : baseOffset;
-                st[k] = PackSt(scale, offset);
-            }
-            BuildUvTransformDriver(g.Renderer, g.Slot, g.PropId, times, st, g.BaseSt, g.Interp, output,
-                g.PropertyName, g.GltfTextureSlot);
         }
 
         /// <summary>
@@ -516,7 +545,8 @@ namespace UnityGLTF.KhrCharacter
         internal static void BuildUvTransformDriver(
             Renderer renderer, int slot, int propId, float[] times, Vector4[] stValues, Vector4 baseSt,
             InterpolationType interpolation, List<TextureDriver> output,
-            string propertyName = null, string gltfTextureSlot = null)
+            string propertyName = null, string gltfTextureSlot = null,
+            TextureTransformTarget transformTarget = TextureTransformTarget.Combined)
         {
             int n = times?.Length ?? 0;
             if (renderer == null || stValues == null || n == 0 || stValues.Length < n) return;
@@ -539,13 +569,12 @@ namespace UnityGLTF.KhrCharacter
                 PropertyId = propId,
                 PropertyName = propertyName,
                 GltfTextureSlot = gltfTextureSlot,
+                TransformTarget = transformTarget,
                 Sampler = BuildSampler(times, MapInterp(interpolation)),
                 StValues = deltas,
                 BaseSt = baseSt,
-                // Frame-0 absolute _ST (before delta-izing). Export anchors multi-key reconstruction on this so a
-                // foreign asset whose authored frame0 != material rest (baseSt) round-trips exactly on the first
-                // cycle; BaseSt stays the runtime rest anchor only. HasFrame0St marks it captured (drivers that
-                // skip this path — hand-authored sets — leave it false and export falls back to BaseSt).
+                // Frame-0 absolute _ST is retained as legacy/provenance diagnostic metadata. Conformant export
+                // anchors on BaseSt so the time-zero value matches the static Asset Object Model value.
                 Frame0St = stValues[0],
                 HasFrame0St = true,
                 Priority = 0,
@@ -602,28 +631,27 @@ namespace UnityGLTF.KhrCharacter
             return int.TryParse(parts[2], out nodeIndex) && int.TryParse(parts[4], out blendShapeIndex);
         }
 
-        private static bool TryResolveRendererSlot(GLTFRoot root, GLTFSceneImporter importer, int materialIndex, out Renderer renderer, out int slot)
+        internal static List<(Renderer Renderer, int Slot)> ResolveRendererSlots(
+            GLTFRoot root,
+            IReadOnlyDictionary<int, GameObject> nodeIndexToGo,
+            int materialIndex)
         {
-            renderer = null;
-            slot = 0;
-            if (root?.Nodes == null || importer?.NodeCache == null) return false;
-            for (int nodeId = 0; nodeId < root.Nodes.Count && nodeId < importer.NodeCache.Length; nodeId++)
+            var result = new List<(Renderer Renderer, int Slot)>();
+            if (root?.Nodes == null || nodeIndexToGo == null) return result;
+            for (int nodeId = 0; nodeId < root.Nodes.Count; nodeId++)
             {
-                var go = importer.NodeCache[nodeId];
-                if (go == null) continue;
+                if (!nodeIndexToGo.TryGetValue(nodeId, out var go) || go == null) continue;
                 var prims = root.Nodes[nodeId]?.Mesh?.Value?.Primitives;
                 if (prims == null) continue;
+                var renderer = go.GetComponent<Renderer>();
+                if (renderer == null) continue;
                 for (int s = 0; s < prims.Count; s++)
                 {
                     if (prims[s]?.Material == null || prims[s].Material.Id != materialIndex) continue;
-                    var r = go.GetComponent<Renderer>();
-                    if (r == null) break;
-                    renderer = r;
-                    slot = s;
-                    return true;
+                    result.Add((renderer, s));
                 }
             }
-            return false;
+            return result;
         }
 
         private static bool TryResolveTextureProperty(MaterialPropertiesRemapper remapper, Material mat, string gltfProperty, out int propId, out string unityTextureName)
@@ -655,6 +683,44 @@ namespace UnityGLTF.KhrCharacter
 
         // ── Mask + mapping resolution (wire expression indices -> track indices) ────
 
+        internal static bool TryApplyMappingSets(
+            GLTFRoot root,
+            KHR_character_expression_mapping mappingExt,
+            IReadOnlyDictionary<int, int> wireToTrackIndex,
+            IReadOnlyList<KHR_character_expression.ExpressionItem> wireExpressions,
+            CharacterExpressionSet set)
+        {
+            if (set == null) throw new ArgumentNullException(nameof(set));
+            try
+            {
+                set.MappingSets = BuildMappingSets(mappingExt, wireToTrackIndex, wireExpressions);
+                set.InputMappingSets = BuildInputMappingSets(mappingExt, wireToTrackIndex, wireExpressions);
+                if (set.MappingSets != null || set.InputMappingSets != null)
+                {
+                    set.MappingExtensionsJson = mappingExt?.Extensions?.ToString(
+                        Newtonsoft.Json.Formatting.None);
+                    set.MappingExtrasJson = mappingExt?.Extras?.ToString(Newtonsoft.Json.Formatting.None);
+                    set.MappingAdditionalPropertiesJson = mappingExt?.AdditionalProperties?.ToString(
+                        Newtonsoft.Json.Formatting.None);
+                    set.MappingRequiredCompanionExtensions = GetRequiredMappingCompanionExtensions(
+                        root, mappingExt, set.MappingSets, set.InputMappingSets);
+                }
+                return true;
+            }
+            catch (InvalidOperationException exception)
+            {
+                set.MappingSets = null;
+                set.InputMappingSets = null;
+                set.MappingExtensionsJson = null;
+                set.MappingExtrasJson = null;
+                set.MappingAdditionalPropertiesJson = null;
+                set.MappingRequiredCompanionExtensions = null;
+                Debug.LogError(
+                    $"[KHR_character] Expression mapping validation failed; no mapping adapter was exposed. {exception.Message}");
+                return false;
+            }
+        }
+
         internal static MaskEntry[] BuildMaskEntries(
             KHR_character_expression_mask mask,
             int sourceIndex,
@@ -685,10 +751,13 @@ namespace UnityGLTF.KhrCharacter
                     {
                         TargetIndex = targetIndex,
                         SourceIndex = sourceIndex,
+                        Name = m.Name,
                         Type = isBlock ? MaskType.Block : isBlend ? MaskType.Blend : MaskType.Identity,
                         CustomType = isBlend || isBlock ? null : maskType,
                         RawExtensionsJson = m.Extensions?.ToString(Newtonsoft.Json.Formatting.None),
                         RawExtrasJson = m.Extras?.ToString(Newtonsoft.Json.Formatting.None),
+                        RawAdditionalPropertiesJson = m.AdditionalProperties?.ToString(
+                            Newtonsoft.Json.Formatting.None),
                         Amount = m.Amount,
                         Threshold = m.Threshold,
                     });
@@ -706,6 +775,9 @@ namespace UnityGLTF.KhrCharacter
             var sets = new List<ExpressionMappingSet>();
             foreach (var setKv in mappingExt.ExpressionSetMappings)
             {
+                if (!KHR_character_expression_mapping.IsValidMappingSetIdentifier(setKv.Key))
+                    throw new InvalidOperationException(
+                        $"Mapping-set identifier '{setKv.Key}' is not a valid absolute URI.");
                 var targets = new List<MappingTarget>();
                 if (setKv.Value != null)
                 {
@@ -727,7 +799,16 @@ namespace UnityGLTF.KhrCharacter
                                         || sw.Source >= wireExpressions.Count
                                         || sw.Name != wireExpressions[sw.Source]?.Expression))
                                     Debug.LogWarning($"[KHR_character] Mapping name '{sw.Name}' does not match expression index {sw.Source}.");
-                                contributions.Add(new MappingContribution { SourceIndex = srcIndex, Weight = sw.Weight });
+                                contributions.Add(new MappingContribution
+                                {
+                                    SourceIndex = srcIndex,
+                                    Name = sw.Name,
+                                    Weight = sw.Weight,
+                                    ExtensionsJson = sw.Extensions?.ToString(Newtonsoft.Json.Formatting.None),
+                                    ExtrasJson = sw.Extras?.ToString(Newtonsoft.Json.Formatting.None),
+                                    AdditionalPropertiesJson = sw.AdditionalProperties?.ToString(
+                                        Newtonsoft.Json.Formatting.None),
+                                });
                             }
                         }
                         if (contributions.Count > 0)
@@ -749,6 +830,9 @@ namespace UnityGLTF.KhrCharacter
             var sets = new List<ExpressionInputMappingSet>();
             foreach (var setKv in mappingExt.ExpressionSetInputMappings)
             {
+                if (!KHR_character_expression_mapping.IsValidMappingSetIdentifier(setKv.Key))
+                    throw new InvalidOperationException(
+                        $"Mapping-set identifier '{setKv.Key}' is not a valid absolute URI.");
                 var commands = new List<InputMappingCommand>();
                 if (setKv.Value != null)
                     foreach (var commandKv in setKv.Value)
@@ -771,7 +855,12 @@ namespace UnityGLTF.KhrCharacter
                                 contributions.Add(new InputMappingContribution
                                 {
                                     TargetIndex = targetIndex,
+                                    Name = target.Name,
                                     Weight = target.Weight,
+                                    ExtensionsJson = target.Extensions?.ToString(Newtonsoft.Json.Formatting.None),
+                                    ExtrasJson = target.Extras?.ToString(Newtonsoft.Json.Formatting.None),
+                                    AdditionalPropertiesJson = target.AdditionalProperties?.ToString(
+                                        Newtonsoft.Json.Formatting.None),
                                 });
                             }
                         if (contributions.Count > 0)
@@ -797,6 +886,92 @@ namespace UnityGLTF.KhrCharacter
             return null;
         }
 
+        internal static string[] GetRequiredMaskCompanionExtensions(
+            GLTFRoot root,
+            KHR_character_expression_mask mask,
+            IReadOnlyList<MaskEntry> retainedMasks = null)
+        {
+            var present = new HashSet<string>();
+            AddCompanionNames(present, mask?.Extensions);
+            if (retainedMasks != null)
+            {
+                foreach (var entry in retainedMasks)
+                    AddCompanionNames(present, entry?.RawExtensionsJson);
+            }
+            else if (mask?.Masks != null)
+                foreach (var entry in mask.Masks)
+                    AddCompanionNames(present, entry?.Extensions);
+            return GetDeclaredRequiredCompanions(root, present);
+        }
+
+        internal static string[] GetRequiredMappingCompanionExtensions(
+            GLTFRoot root,
+            KHR_character_expression_mapping mapping,
+            IReadOnlyList<ExpressionMappingSet> retainedForward = null,
+            IReadOnlyList<ExpressionInputMappingSet> retainedInput = null)
+        {
+            var present = new HashSet<string>();
+            AddCompanionNames(present, mapping?.Extensions);
+            if (retainedForward != null || retainedInput != null)
+            {
+                if (retainedForward != null)
+                    foreach (var set in retainedForward)
+                        if (set?.Targets != null)
+                            foreach (var target in set.Targets)
+                                if (target?.Contributions != null)
+                                    foreach (var contribution in target.Contributions)
+                                        AddCompanionNames(present, contribution.ExtensionsJson);
+                if (retainedInput != null)
+                    foreach (var set in retainedInput)
+                        if (set?.Commands != null)
+                            foreach (var command in set.Commands)
+                                if (command?.Contributions != null)
+                                    foreach (var contribution in command.Contributions)
+                                        AddCompanionNames(present, contribution.ExtensionsJson);
+            }
+            else
+            {
+                if (mapping?.ExpressionSetMappings != null)
+                    foreach (var set in mapping.ExpressionSetMappings.Values)
+                        if (set != null)
+                            foreach (var endpoint in set.Values)
+                                if (endpoint != null)
+                                    foreach (var contribution in endpoint)
+                                        AddCompanionNames(present, contribution.Extensions);
+                if (mapping?.ExpressionSetInputMappings != null)
+                    foreach (var set in mapping.ExpressionSetInputMappings.Values)
+                        if (set != null)
+                            foreach (var endpoint in set.Values)
+                                if (endpoint != null)
+                                    foreach (var contribution in endpoint)
+                                        AddCompanionNames(present, contribution.Extensions);
+            }
+            return GetDeclaredRequiredCompanions(root, present);
+        }
+
+        private static void AddCompanionNames(HashSet<string> names, JObject extensions)
+        {
+            if (extensions == null) return;
+            foreach (var extension in extensions.Properties()) names.Add(extension.Name);
+        }
+
+        private static void AddCompanionNames(HashSet<string> names, string extensionsJson)
+        {
+            if (string.IsNullOrEmpty(extensionsJson)) return;
+            try { AddCompanionNames(names, JObject.Parse(extensionsJson)); }
+            catch { }
+        }
+
+        private static string[] GetDeclaredRequiredCompanions(GLTFRoot root, HashSet<string> present)
+        {
+            if (root?.ExtensionsRequired == null || present.Count == 0)
+                return Array.Empty<string>();
+            var required = new List<string>();
+            foreach (var extension in root.ExtensionsRequired)
+                if (present.Contains(extension)) required.Add(extension);
+            return required.ToArray();
+        }
+
         // ── Shared helpers ───────────────────────────────────────────────────
 
         private static Sampler BuildSampler(float[] times, Interp interp) => new Sampler
@@ -815,20 +990,6 @@ namespace UnityGLTF.KhrCharacter
                 // CUBICSPLINE/CATMULLROMSPLINE values are sampled and treated linearly for now.
                 default: return Interp.Linear;
             }
-        }
-
-        // True when the track carries at least one driver and every driver -- across morph, joint, and texture
-        // domains -- uses STEP interpolation. Used to present binary (on/off) expressions as a 0/1-snapping control.
-        internal static bool AllStep(ExpressionTrack track)
-        {
-            int count = 0;
-            if (track.MorphDrivers != null)
-                foreach (var d in track.MorphDrivers) { count++; if (d.Sampler.Interp != Interp.Step) return false; }
-            if (track.JointDrivers != null)
-                foreach (var d in track.JointDrivers) { count++; if (d.Sampler.Interp != Interp.Step) return false; }
-            if (track.TextureDrivers != null)
-                foreach (var d in track.TextureDrivers) { count++; if (d.Sampler.Interp != Interp.Step) return false; }
-            return count > 0;
         }
 
         private static Accessor GetAccessor(GLTFRoot root, AccessorId id)

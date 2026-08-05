@@ -41,6 +41,10 @@ namespace UnityGLTF.KhrCharacter
             {
                 MappingSets = baked?.MappingSets,
                 InputMappingSets = baked?.InputMappingSets,
+                MappingExtensionsJson = baked?.MappingExtensionsJson,
+                MappingExtrasJson = baked?.MappingExtrasJson,
+                MappingAdditionalPropertiesJson = baked?.MappingAdditionalPropertiesJson,
+                MappingRequiredCompanionExtensions = baked?.MappingRequiredCompanionExtensions,
             };
             if (baked?.Expressions == null) return result;
 
@@ -55,6 +59,10 @@ namespace UnityGLTF.KhrCharacter
                     BlendMode = src.BlendMode,
                     IsBinary = src.IsBinary,
                     Masks = src.Masks,
+                    MaskExtensionsJson = src.MaskExtensionsJson,
+                    MaskExtrasJson = src.MaskExtrasJson,
+                    MaskAdditionalPropertiesJson = src.MaskAdditionalPropertiesJson,
+                    MaskRequiredCompanionExtensions = src.MaskRequiredCompanionExtensions,
                 };
 
                 // Morph drivers → renderer path + blendshape name.
@@ -148,6 +156,7 @@ namespace UnityGLTF.KhrCharacter
                             PropertyId = d.PropertyId,
                             PropertyName = d.PropertyName,
                             GltfTextureSlot = d.GltfTextureSlot,
+                            TransformTarget = d.TransformTarget,
                             Sampler = d.Sampler,
                             StValues = d.StValues,
                             BaseSt = d.BaseSt,
@@ -178,6 +187,10 @@ namespace UnityGLTF.KhrCharacter
             {
                 MappingSets = bindings?.MappingSets,
                 InputMappingSets = bindings?.InputMappingSets,
+                MappingExtensionsJson = bindings?.MappingExtensionsJson,
+                MappingExtrasJson = bindings?.MappingExtrasJson,
+                MappingAdditionalPropertiesJson = bindings?.MappingAdditionalPropertiesJson,
+                MappingRequiredCompanionExtensions = bindings?.MappingRequiredCompanionExtensions,
             };
             if (bindings?.Expressions == null) return result;
 
@@ -192,6 +205,10 @@ namespace UnityGLTF.KhrCharacter
                     BlendMode = src.BlendMode,
                     IsBinary = src.IsBinary,
                     Masks = src.Masks,
+                    MaskExtensionsJson = src.MaskExtensionsJson,
+                    MaskExtrasJson = src.MaskExtrasJson,
+                    MaskAdditionalPropertiesJson = src.MaskAdditionalPropertiesJson,
+                    MaskRequiredCompanionExtensions = src.MaskRequiredCompanionExtensions,
                 };
 
                 // Morph bindings → live SkinnedMeshRenderer + blendshape index.
@@ -276,6 +293,7 @@ namespace UnityGLTF.KhrCharacter
                             PropertyId = b.PropertyId,
                             PropertyName = b.PropertyName,
                             GltfTextureSlot = b.GltfTextureSlot,
+                            TransformTarget = b.TransformTarget,
                             Sampler = b.Sampler,
                             StValues = b.StValues,
                             BaseSt = b.BaseSt,

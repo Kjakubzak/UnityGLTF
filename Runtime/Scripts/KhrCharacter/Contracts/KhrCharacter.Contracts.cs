@@ -24,6 +24,8 @@ namespace UnityGLTF.KhrCharacter
 
     public enum TrsChannel { Translation, Rotation, Scale }
 
+    public enum TextureTransformTarget { Combined, Scale, Offset }
+
     public enum MaskType { Blend, Block, Identity }
 
     public enum CharacterCapability
@@ -82,12 +84,13 @@ namespace UnityGLTF.KhrCharacter
         public int SubmeshSlot;          // material index on the renderer
         public int PropertyId;           // resolved per pipeline (Shader.PropertyToID) at bake
         public string PropertyName;      // human-readable shader property name (e.g., "_BaseMap") — required for export
-        public string GltfTextureSlot;   // glTF texture slot name (e.g., "baseColorTexture") — required for export
+        public string GltfTextureSlot;   // glTF material slot path (e.g., "pbrMetallicRoughness/baseColorTexture")
+        public TextureTransformTarget TransformTarget; // Imported scale/offset channels retain independent samplers
         public Sampler Sampler;
         public Vector4[] StValues;       // Frame-0-relative _ST (tiling.xy, offset.zw) deltas
         public Vector4 BaseSt;           // The material's base _ST (runtime rest anchor)
-        public Vector4 Frame0St;         // Animation frame-0 absolute _ST; multi-key export anchor when HasFrame0St
-        public bool HasFrame0St;         // true once import captured the authored frame-0 absolute; else export anchors on BaseSt
+        public Vector4 Frame0St;         // Legacy/provenance copy of the imported animation's frame-0 absolute _ST
+        public bool HasFrame0St;         // true when Frame0St was captured; export always anchors responses on BaseSt
         public int Priority;             // same-slot conflict resolution
     }
 
@@ -95,10 +98,12 @@ namespace UnityGLTF.KhrCharacter
     public class MaskEntry
     {
         public int TargetIndex;          // expression index this mask attenuates
+        public string Name;              // optional diagnostic copy from the wire
         public MaskType Type;            // Custom types without supported companion semantics use Identity
         public string CustomType;        // Preserved application-defined type; null for blend/block
         public string RawExtensionsJson; // Preserved same-object companion/unrelated extension payloads
         public string RawExtrasJson;     // Preserved mask extras payload
+        public string RawAdditionalPropertiesJson;
         public float Amount;             // [0..1], default 1
         public float Threshold;          // [0..1], Block only, default 0
         public int SourceIndex;          // owning expression by default; explicit if the schema allows it
@@ -111,15 +116,27 @@ namespace UnityGLTF.KhrCharacter
         public string Name;
         public ExpressionDomain Domains;     // set only for the sub-extensions present
         public ExpressionBlendMode BlendMode = ExpressionBlendMode.Additive;
-        public bool IsBinary;                // every morph/joint/texture channel is STEP (>=1 driver); UI uses a 0/1-snapping control
+        public bool IsBinary;                // explicit host/UI snapping metadata; never inferred from STEP interpolation
         public MorphDriver[] MorphDrivers;
         public JointDriver[] JointDrivers;
         public TextureDriver[] TextureDrivers;
         public MaskEntry[] Masks;
+        public string MaskExtensionsJson;
+        public string MaskExtrasJson;
+        public string MaskAdditionalPropertiesJson;
+        public string[] MaskRequiredCompanionExtensions;
     }
 
     [Serializable]
-    public struct MappingContribution { public int SourceIndex; public float Weight; }
+    public struct MappingContribution
+    {
+        public int SourceIndex;
+        public string Name;
+        public float Weight;
+        public string ExtensionsJson;
+        public string ExtrasJson;
+        public string AdditionalPropertiesJson;
+    }
 
     [Serializable]
     public class MappingTarget { public string TargetName; public MappingContribution[] Contributions; }
@@ -128,7 +145,15 @@ namespace UnityGLTF.KhrCharacter
     public class ExpressionMappingSet { public string SetName; public MappingTarget[] Targets; }
 
     [Serializable]
-    public struct InputMappingContribution { public int TargetIndex; public float Weight; }
+    public struct InputMappingContribution
+    {
+        public int TargetIndex;
+        public string Name;
+        public float Weight;
+        public string ExtensionsJson;
+        public string ExtrasJson;
+        public string AdditionalPropertiesJson;
+    }
 
     [Serializable]
     public class InputMappingCommand { public string CommandName; public InputMappingContribution[] Contributions; }
@@ -142,6 +167,10 @@ namespace UnityGLTF.KhrCharacter
         public ExpressionTrack[] Expressions;
         public ExpressionMappingSet[] MappingSets;           // native drivers -> endpoint outputs
         public ExpressionInputMappingSet[] InputMappingSets; // endpoint commands -> native drivers
+        public string MappingExtensionsJson;
+        public string MappingExtrasJson;
+        public string MappingAdditionalPropertiesJson;
+        public string[] MappingRequiredCompanionExtensions;
 
         // Rebuilt at runtime from Expressions (not serialized).
         [NonSerialized] public Dictionary<string, int> NameToIndex;
@@ -193,6 +222,7 @@ namespace UnityGLTF.KhrCharacter
     {
         public bool IsValid = true;
         public List<string> Warnings = new List<string>();
+        // Optional host-adapter health detail; entries here do not by themselves imply invalid glTF data.
         public List<string> MissingRequiredBones = new List<string>();
     }
 

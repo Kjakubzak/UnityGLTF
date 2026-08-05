@@ -85,7 +85,23 @@ namespace UnityGLTF.KhrCharacter.Tests
                                 Priority = 2,
                             },
                         },
-                        Masks = new[] { new MaskEntry { TargetIndex = 0, Type = MaskType.Blend, Amount = 1f } },
+                        Masks = new[]
+                        {
+                            new MaskEntry
+                            {
+                                TargetIndex = 0,
+                                Name = "smile",
+                                Type = MaskType.Blend,
+                                Amount = 1f,
+                                RawExtensionsJson = "{\"ACME_mask\":{}}",
+                                RawExtrasJson = "false",
+                                RawAdditionalPropertiesJson = "{\"futureMaskField\":1}",
+                            },
+                        },
+                        MaskExtensionsJson = "{\"ACME_mask_root\":{}}",
+                        MaskExtrasJson = "[\"mask-root\"]",
+                        MaskAdditionalPropertiesJson = "{\"futureMaskRootField\":2}",
+                        MaskRequiredCompanionExtensions = new[] { "ACME_mask" },
                     },
                 },
                 MappingSets = new[]
@@ -98,11 +114,26 @@ namespace UnityGLTF.KhrCharacter.Tests
                             new MappingTarget
                             {
                                 TargetName = "happy",
-                                Contributions = new[] { new MappingContribution { SourceIndex = 0, Weight = 1f } },
+                                Contributions = new[]
+                                {
+                                    new MappingContribution
+                                    {
+                                        SourceIndex = 0,
+                                        Name = "smile",
+                                        Weight = 1f,
+                                        ExtensionsJson = "{\"ACME_mapping\":{}}",
+                                        ExtrasJson = "\"mapping-entry\"",
+                                        AdditionalPropertiesJson = "{\"futureMappingField\":3}",
+                                    },
+                                },
                             },
                         },
                     },
                 },
+                MappingExtensionsJson = "{\"ACME_mapping_root\":{}}",
+                MappingExtrasJson = "{\"mapping-root\":true}",
+                MappingAdditionalPropertiesJson = "{\"futureMappingRootField\":4}",
+                MappingRequiredCompanionExtensions = new[] { "ACME_mapping" },
             };
         }
 
@@ -194,15 +225,67 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsFalse(eb.IsBinary);
             Assert.AreEqual(1, eb.Masks.Length);
             Assert.AreEqual(MaskType.Blend, eb.Masks[0].Type);
+            Assert.AreEqual("smile", eb.Masks[0].Name);
+            Assert.AreEqual("{\"ACME_mask\":{}}", eb.Masks[0].RawExtensionsJson);
+            Assert.AreEqual("{\"ACME_mask_root\":{}}", eb.MaskExtensionsJson);
+            CollectionAssert.AreEqual(new[] { "ACME_mask" }, eb.MaskRequiredCompanionExtensions);
             Assert.AreEqual("vrm", bindings.MappingSets[0].SetName);
             Assert.AreEqual("happy", bindings.MappingSets[0].Targets[0].TargetName);
+            Assert.AreEqual("smile", bindings.MappingSets[0].Targets[0].Contributions[0].Name);
+            Assert.AreEqual("{\"ACME_mapping\":{}}",
+                bindings.MappingSets[0].Targets[0].Contributions[0].ExtensionsJson);
+            Assert.AreEqual("{\"ACME_mapping_root\":{}}", bindings.MappingExtensionsJson);
+            CollectionAssert.AreEqual(new[] { "ACME_mapping" }, bindings.MappingRequiredCompanionExtensions);
 
             // Metadata also survives the inverse.
             var resolved = CharacterExpressionSetAsset.Resolve(bindings, root);
             Assert.AreEqual("smile", resolved.Expressions[0].Name);
             Assert.AreEqual(ExpressionBlendMode.Override, resolved.Expressions[0].BlendMode);
             Assert.AreEqual(ExpressionDomain.Morph | ExpressionDomain.Joint, resolved.Expressions[0].Domains);
+            Assert.AreEqual("{\"ACME_mask_root\":{}}", resolved.Expressions[0].MaskExtensionsJson);
             Assert.AreEqual("vrm", resolved.MappingSets[0].SetName);
+            Assert.AreEqual("{\"ACME_mapping_root\":{}}", resolved.MappingExtensionsJson);
+        }
+
+        [Test]
+        public void TextureTransformTarget_SurvivesExtractAndResolve()
+        {
+            var root = BuildCharacter(out var renderer, out _);
+            var baked = new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack
+                    {
+                        Name = "uv",
+                        Domains = ExpressionDomain.Texture,
+                        TextureDrivers = new[]
+                        {
+                            new TextureDriver
+                            {
+                                Renderer = renderer,
+                                SubmeshSlot = 0,
+                                PropertyId = Shader.PropertyToID("_MainTex_ST"),
+                                PropertyName = "_MainTex",
+                                GltfTextureSlot = "pbrMetallicRoughness/baseColorTexture",
+                                TransformTarget = TextureTransformTarget.Offset,
+                                Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Linear },
+                                StValues = new[] { Vector4.zero, new Vector4(0f, 0f, 0.5f, 0f) },
+                                BaseSt = new Vector4(1f, 1f, 0f, 0f),
+                            },
+                        },
+                    },
+                },
+            };
+
+            var bindings = CharacterExpressionSetAsset.Extract(baked, root);
+            Assert.That(bindings.Expressions[0].TextureBindings[0].TransformTarget,
+                Is.EqualTo(TextureTransformTarget.Offset));
+
+            var resolved = CharacterExpressionSetAsset.Resolve(bindings, root);
+            Assert.That(resolved.Expressions[0].TextureDrivers[0].TransformTarget,
+                Is.EqualTo(TextureTransformTarget.Offset));
+            Assert.That(resolved.Expressions[0].TextureDrivers[0].Renderer, Is.SameAs(renderer));
         }
 
         [Test]

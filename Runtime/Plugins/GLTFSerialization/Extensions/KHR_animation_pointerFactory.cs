@@ -11,6 +11,7 @@ namespace GLTF.Schema
         public KHR_animation_pointerExtensionFactory()
         {
             ExtensionName = EXTENSION_NAME;
+            RequiresRuntimeSupportForRequiredUse = true;
         }
 
         public override IExtension Deserialize(GLTFRoot root, JProperty extensionToken)

@@ -16,8 +16,8 @@ namespace UnityGLTF.KhrCharacter.Tests
     /// accessors straight out of the binary chunk, and feed them back through the real baker builders -- proving
     /// the export reconstruction is the exact inverse of the import delta math, with interpolation and handedness
     /// preserved (R1 morph LINEAR, R2 joint rotation+translation). Idempotence (P5) is proven WITHOUT a scene
-    /// load by chaining that same machinery into repeated export -> re-bake cycles and asserting the pipeline
-    /// reaches a fixed point (export #2 == export #3). PlayMode (the export pipeline needs the Unity runtime).
+    /// load by chaining that same machinery into repeated export -> re-bake cycles and asserting every export
+    /// remains equivalent. PlayMode (the export pipeline needs the Unity runtime).
     /// </summary>
     public class KhrCharacterRoundTripTests
     {
@@ -94,6 +94,11 @@ namespace UnityGLTF.KhrCharacter.Tests
             go.transform.SetParent(parent, false);
             var smr = go.GetComponent<SkinnedMeshRenderer>();
             smr.sharedMesh = mesh;
+            var shader = Shader.Find("Standard") ?? Shader.Find("Unlit/Color") ?? Shader.Find("Unlit/Texture");
+            Assert.IsNotNull(shader, "a built-in shader is required for the morph export fixture");
+            var material = new Material(shader) { name = name + "_material" };
+            _created.Add(material);
+            smr.sharedMaterial = material;
             return smr;
         }
 
@@ -108,6 +113,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             var root = new GameObject("char");
             _created.Add(root);
             var smr = MakeMorphSmr(root.transform, "face", 1);
+            smr.SetBlendShapeWeight(0, 20f);
 
             var originalDeltas = new[] { 0f, 0.3f, 0.8f };
             var set = new CharacterExpressionSet
@@ -183,6 +189,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             var deltaQ = Quaternion.Euler(20f, 0f, 0f);     // original rotation delta at key 1
             var baseV = new Vector3(1f, 0f, 0f);
             var deltaV = new Vector3(0.1f, 0.2f, 0.3f);     // original translation delta at key 1
+            joint.localRotation = baseQ;
+            joint.localPosition = baseV;
 
             var set = new CharacterExpressionSet
             {
@@ -280,17 +288,16 @@ namespace UnityGLTF.KhrCharacter.Tests
             // the sampler accessors out of the binary chunk, re-bake through the REAL importer builders — and chain
             // it: author -> export #1 -> re-bake -> export #2 -> re-bake -> export #3.
             //
-            // Idempotence is asserted on the STABLE cycle (#2 == #3), not (#1 == #2), because the FIRST import
-            // re-anchors the absolute baseline: the morph baker fixes BaseValue = 0 and stores frame-0-relative
-            // deltas, and the joint baker stores deltas over each target's rest TRS (the documented FU2 caveat —
-            // import keeps only deltas, discarding the animation's frame-0 absolute). Once in that canonical form,
-            // the data is a fixed point: every further export -> re-bake -> export is identical within epsilon.
-            // The expression TOPOLOGY (names, per-channel target paths, interpolation) is stable from export #1.
+            // Frozen responses retain the authored static AOM value as the delta base. The first import therefore
+            // preserves both topology and values; every export -> re-bake -> export cycle is equivalent.
             var root = new GameObject("char");
             _created.Add(root);
             var smr = MakeMorphSmr(root.transform, "face", 1);
+            smr.SetBlendShapeWeight(0, 20f);
             var jaw = new GameObject("jaw").transform;
             jaw.SetParent(root.transform, false);
+            jaw.localRotation = Quaternion.Euler(0f, 30f, 0f);
+            jaw.localPosition = new Vector3(1f, 0f, 0f);
 
             var set = new CharacterExpressionSet
             {
@@ -347,9 +354,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             var (glb3, gltf3) = ExportToGlb(root);
 
             const float eps = 1e-4f;
-            // Topology is stable from the very first export (only the re-anchored baseline shifts on #1 -> #2).
-            AssertCharacterExportsEqual(glb1, gltf1, glb2, gltf2, compareValues: false, eps);
-            // Full idempotence: from the canonical form on, the accessor data is bit-stable within epsilon.
+            AssertCharacterExportsEqual(glb1, gltf1, glb2, gltf2, compareValues: true, eps);
             AssertCharacterExportsEqual(glb2, gltf2, glb3, gltf3, compareValues: true, eps);
         }
 
@@ -381,9 +386,15 @@ namespace UnityGLTF.KhrCharacter.Tests
                         var times = ReadAccessorFloats(glb, gltf, gltf.Accessors[sampler.Input.Id]);
                         var values = ReadAccessorFloats(glb, gltf, gltf.Accessors[sampler.Output.Id]);
                         int blendShapeIndex = 0;
-                        if (KhrCharacterBaker.TryParseNodeWeightsPointer(PointerPath(ch), out _, out int bsi))
+                        int nodeIndex = -1;
+                        if (KhrCharacterBaker.TryParseNodeWeightsPointer(PointerPath(ch), out int ni, out int bsi))
+                        {
+                            nodeIndex = ni;
                             blendShapeIndex = bsi;
-                        KhrCharacterBaker.BuildMorphPointerDriver(smr, blendShapeIndex, times, values, sampler.Interpolation, morphs);
+                        }
+                        float baseValue = KhrCharacterBaker.ResolveMorphBaseValue(gltf, nodeIndex, blendShapeIndex);
+                        KhrCharacterBaker.BuildMorphPointerDriver(
+                            smr, blendShapeIndex, times, values, sampler.Interpolation, baseValue, morphs);
                     }
                     if (morphs.Count > 0) { track.MorphDrivers = morphs.ToArray(); track.Domains |= ExpressionDomain.Morph; }
                 }

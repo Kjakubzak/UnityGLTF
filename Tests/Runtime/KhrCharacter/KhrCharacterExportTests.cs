@@ -14,11 +14,12 @@ namespace UnityGLTF.KhrCharacter.Tests
     /// <summary>
     /// Tests for the KHR Character export plugin: drives a real GLTFSceneExporter over an in-memory character
     /// and verifies expression metadata (morph/joint/texture/mask/mapping), skeleton mapping, reference pose,
-    /// and the facial-only scope guard. Runs in PlayMode (the export pipeline needs the Unity runtime).
+    /// and response-versus-ordinary-animation scope. Runs in PlayMode (the export pipeline needs the Unity runtime).
     /// </summary>
     public class KhrCharacterExportTests
     {
         private const string SkeletonVocab = "https://example.com/skeleton/unity-humanoid/v1";
+        private const string ExpressionVocab = "https://example.com/expressions/v1";
         private readonly List<Object> _created = new List<Object>();
 
         [TearDown]
@@ -89,6 +90,56 @@ namespace UnityGLTF.KhrCharacter.Tests
             DeltaQuat = new[] { Quaternion.Euler(10f, 0f, 0f) }, BaseQuat = Quaternion.identity,
         };
 
+        private static void BindPassiveResponse(ExpressionResponseSet responses)
+        {
+            responses.Bind(
+                new[]
+                {
+                    new ExpressionResponseSetEntry(
+                        "smile",
+                        0,
+                        new ExpressionResponseAnimation
+                        {
+                            Samplers = new[]
+                            {
+                                new ExpressionResponseSampler
+                                {
+                                    InputTimes = new[] { 0f, 1f },
+                                    OutputValues = new[] { new[] { 0f }, new[] { 1f } },
+                                    Interpolation = ExpressionResponseInterpolation.Linear,
+                                },
+                            },
+                            Channels = new[]
+                            {
+                                new ExpressionResponseChannel
+                                {
+                                    SamplerIndex = 0,
+                                    Target = new ExpressionResponseTarget("/nodes/0/weights/0", 1),
+                                },
+                            },
+                        },
+                        null,
+                        null),
+                },
+                false);
+        }
+
+        private Material MakeMorphMaterial(string name)
+        {
+            var shader = Shader.Find("Standard") ?? Shader.Find("Unlit/Color") ?? Shader.Find("Unlit/Texture");
+            Assert.IsNotNull(shader, "a built-in shader is required for the morph export fixture");
+            var material = new Material(shader) { name = name };
+            _created.Add(material);
+            return material;
+        }
+
+        private static Shader TextureShaderOrFail()
+        {
+            var shader = Shader.Find("Unlit/Texture") ?? Shader.Find("Standard");
+            Assert.IsNotNull(shader, "a built-in texture-capable shader is required for export tests");
+            return shader;
+        }
+
         [Test]
         public void ExportPlugin_IsDisabledByDefault()
         {
@@ -114,11 +165,11 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void ExportPlugin_Description_MentionsFacialExpressions()
+        public void ExportPlugin_Description_MentionsFiniteScalarResponses()
         {
             var plugin = ScriptableObject.CreateInstance<KhrCharacterExportPlugin>();
-            StringAssert.Contains("facial", plugin.Description.ToLowerInvariant(), 
-                "Description should mention facial expressions scope rule");
+            StringAssert.Contains("finite scalar", plugin.Description.ToLowerInvariant(),
+                "Description should state the response-progress contract");
             Object.DestroyImmediate(plugin);
         }
 
@@ -175,6 +226,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             smrGo.transform.SetParent(root.transform, false);
             var smr = smrGo.GetComponent<SkinnedMeshRenderer>();
             smr.sharedMesh = mesh;
+            smr.sharedMaterial = MakeMorphMaterial("face_material");
 
             // A binary blink: raw weight 0 -> 1 over two STEP keys (BaseValue 0, frame-0-relative deltas).
             var set = new CharacterExpressionSet
@@ -298,18 +350,26 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsNotNull(rotCh, "a native 'rotation' channel should be present");
             Assert.IsNotNull(transCh, "a native 'translation' channel should be present");
 
-            // Rotation output: VEC4, single key.
+            // Legacy single-key drivers are migrated to a valid finite response: authored initial at t=0,
+            // absolute target at t=1, with LINEAR interpolation.
             var rotAcc = OutputAccessor(gltf, anim, rotCh);
             Assert.AreEqual(GLTFAccessorAttributeType.VEC4, rotAcc.Type);
-            Assert.AreEqual(1, (int)rotAcc.Count);
+            Assert.AreEqual(2, (int)rotAcc.Count);
+            Assert.AreEqual(InterpolationType.LINEAR, anim.Samplers[rotCh.Sampler.Id].Interpolation);
+            Assert.AreEqual(2, (int)gltf.Accessors[anim.Samplers[rotCh.Sampler.Id].Input.Id].Count);
 
-            // Translation output: VEC3, single key, with the Unity->glTF (-1,1,1) X-flip applied.
+            // Translation uses the same synthesized response and the Unity->glTF (-1,1,1) X-flip.
             var transAcc = OutputAccessor(gltf, anim, transCh);
             Assert.AreEqual(GLTFAccessorAttributeType.VEC3, transAcc.Type);
-            Assert.AreEqual(1, (int)transAcc.Count);
+            Assert.AreEqual(2, (int)transAcc.Count);
+            Assert.AreEqual(InterpolationType.LINEAR, anim.Samplers[transCh.Sampler.Id].Interpolation);
+            var transInput = gltf.Accessors[anim.Samplers[transCh.Sampler.Id].Input.Id];
+            Assert.AreEqual(2, (int)transInput.Count);
+            Assert.AreEqual(0f, (float)transInput.Min[0], 1e-5f);
+            Assert.AreEqual(1f, (float)transInput.Max[0], 1e-5f);
             Assert.AreEqual(-posAbs.x, (float)transAcc.Min[0], 1e-4f, "translation X must be flipped on export");
-            Assert.AreEqual(posAbs.y, (float)transAcc.Min[1], 1e-4f);
-            Assert.AreEqual(posAbs.z, (float)transAcc.Min[2], 1e-4f);
+            Assert.AreEqual(posAbs.y, (float)transAcc.Max[1], 1e-4f);
+            Assert.AreEqual(posAbs.z, (float)transAcc.Max[2], 1e-4f);
         }
 
         [Test]
@@ -318,8 +378,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             // A UV-transform TextureDriver must export as two KHR_animation_pointer channels into the material's
             // KHR_texture_transform (scale + offset), referenced by the expression item's
             // KHR_character_expression_texture sub-extension — the exact inverse of KhrCharacterBaker's import.
-            var shader = Shader.Find("Unlit/Texture");
-            if (shader == null) { Assert.Ignore("No suitable built-in shader available in this project."); return; }
+            var shader = TextureShaderOrFail();
 
             var root = new GameObject("char");
             _created.Add(root);
@@ -336,6 +395,11 @@ namespace UnityGLTF.KhrCharacter.Tests
             quad.GetComponent<MeshFilter>().sharedMesh = mesh;
             var mat = new Material(shader) { name = "mat" };
             _created.Add(mat);
+            var texture = new Texture2D(1, 1) { name = "baseColor" };
+            texture.SetPixel(0, 0, Color.white);
+            texture.Apply();
+            _created.Add(texture);
+            mat.mainTexture = texture;
             var mr = quad.GetComponent<MeshRenderer>();
             mr.sharedMaterial = mat;
 
@@ -396,6 +460,15 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsNotNull(scaleCh, "a KHR_texture_transform 'scale' pointer channel should be present");
             Assert.IsNotNull(offsetCh, "a KHR_texture_transform 'offset' pointer channel should be present");
 
+            var pointerParts = PointerPath(scaleCh).Split('/');
+            int materialIndex = int.Parse(pointerParts[2]);
+            var textureInfo = gltf.Materials[materialIndex].PbrMetallicRoughness.BaseColorTexture;
+            Assert.IsNotNull(textureInfo, "the pointer must resolve through an existing TextureInfo");
+            Assert.IsTrue(
+                textureInfo.Extensions != null &&
+                textureInfo.Extensions.ContainsKey(ExtTextureTransformExtensionFactory.EXTENSION_NAME),
+                "the pointed-to KHR_texture_transform object must be authored, even when all values are defaults");
+
             // R6: animation sampler INPUT (time) accessors must carry min/max (else invalid glTF / viewer rejection).
             var inAcc = gltf.Accessors[anim.Samplers[offsetCh.Sampler.Id].Input.Id];
             Assert.IsNotNull(inAcc.Min, "sampler input (time) accessor must have min (R6)");
@@ -417,6 +490,189 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(GLTFAccessorAttributeType.VEC2, scaleAcc.Type);
             Assert.AreEqual(1f, (float)scaleAcc.Min[0], 1e-4f);
             Assert.AreEqual(1f, (float)scaleAcc.Max[0], 1e-4f);
+        }
+
+        [Test]
+        public void SingleKeyMorphAndTextureDriversExpandFromAuthoredInitialToTarget()
+        {
+            var shader = TextureShaderOrFail();
+            var root = MakeUvCharacter(shader, out var renderer);
+
+            var mesh = new Mesh { name = "face" };
+            mesh.vertices = new[] { Vector3.zero, Vector3.right, Vector3.up };
+            mesh.triangles = new[] { 0, 1, 2 };
+            mesh.RecalculateNormals();
+            mesh.AddBlendShapeFrame("smile", 100f, new[] { Vector3.up, Vector3.up, Vector3.up }, null, null);
+            _created.Add(mesh);
+            var face = new GameObject("face", typeof(SkinnedMeshRenderer));
+            face.transform.SetParent(root.transform, false);
+            var smr = face.GetComponent<SkinnedMeshRenderer>();
+            smr.sharedMesh = mesh;
+            smr.sharedMaterial = MakeMorphMaterial("face_material");
+            smr.SetBlendShapeWeight(0, 25f);
+
+            root.AddComponent<ExpressionController>().Initialize(new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack
+                    {
+                        Name = "single",
+                        Domains = ExpressionDomain.Morph | ExpressionDomain.Texture,
+                        MorphDrivers = new[]
+                        {
+                            new MorphDriver
+                            {
+                                Smr = smr,
+                                BlendShapeIndex = 0,
+                                BaseValue = 0.25f,
+                                Sampler = new Sampler
+                                {
+                                    Times = new[] { 4f },
+                                    Interp = Interp.Step,
+                                    SingleKey = true,
+                                },
+                                DeltaValues = new[] { 0.75f },
+                            },
+                        },
+                        TextureDrivers = new[]
+                        {
+                            new TextureDriver
+                            {
+                                Renderer = renderer,
+                                SubmeshSlot = 0,
+                                PropertyId = Shader.PropertyToID("_MainTex_ST"),
+                                PropertyName = "_MainTex",
+                                GltfTextureSlot = "pbrMetallicRoughness/baseColorTexture",
+                                BaseSt = new Vector4(1f, 1f, 0f, 0f),
+                                Sampler = new Sampler
+                                {
+                                    Times = new[] { 3f },
+                                    Interp = Interp.CubicSpline,
+                                    SingleKey = true,
+                                },
+                                StValues = new[] { new Vector4(2f, 2f, 0.25f, 0.25f) },
+                            },
+                        },
+                    },
+                },
+            });
+
+            var gltf = ExportToGltfRoot(root);
+            var extension = gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
+            var item = extension.Expressions[0];
+            var animation = gltf.Animations[item.Animation];
+
+            var morphChannel = animation.Channels[item.Morphtarget.Channels[0]];
+            var morphSampler = animation.Samplers[morphChannel.Sampler.Id];
+            var morphOutput = gltf.Accessors[morphSampler.Output.Id];
+            Assert.AreEqual(InterpolationType.LINEAR, morphSampler.Interpolation);
+            Assert.AreEqual(2, (int)morphOutput.Count);
+            Assert.AreEqual(0.25f, (float)morphOutput.Min[0], 1e-5f);
+            Assert.AreEqual(0.75f, (float)morphOutput.Max[0], 1e-5f);
+
+            Assert.AreEqual(2, item.Texture.Channels.Length);
+            foreach (var channelIndex in item.Texture.Channels)
+            {
+                var textureSampler = animation.Samplers[animation.Channels[channelIndex].Sampler.Id];
+                Assert.AreEqual(InterpolationType.LINEAR, textureSampler.Interpolation);
+                Assert.AreEqual(2, (int)gltf.Accessors[textureSampler.Input.Id].Count);
+                Assert.AreEqual(2, (int)gltf.Accessors[textureSampler.Output.Id].Count);
+                Assert.AreEqual(0f, (float)gltf.Accessors[textureSampler.Input.Id].Min[0], 1e-5f);
+                Assert.AreEqual(1f, (float)gltf.Accessors[textureSampler.Input.Id].Max[0], 1e-5f);
+            }
+        }
+
+        [Test]
+        public void TextureExport_DeduplicatesSharedMaterialBindingsAndKeepsComponentSamplers()
+        {
+            var shader = TextureShaderOrFail();
+
+            var root = MakeUvCharacter(shader, out var first);
+            var secondObject = new GameObject("quad2", typeof(MeshFilter), typeof(MeshRenderer));
+            secondObject.transform.SetParent(root.transform, false);
+            var second = secondObject.GetComponent<MeshRenderer>();
+            secondObject.GetComponent<MeshFilter>().sharedMesh = first.GetComponent<MeshFilter>().sharedMesh;
+            second.sharedMaterial = first.sharedMaterial;
+
+            int propId = Shader.PropertyToID("_MainTex_ST");
+            var baseSt = new Vector4(1f, 1f, 0f, 0f);
+            var scaleTimes = new[] { 0f, 1f };
+            var scaleValues = new[] { Vector4.zero, new Vector4(1f, 1f, 0f, -1f) };
+            var offsetTimes = new[] { 0f, 0.25f, 1f };
+            var offsetValues = new[]
+            {
+                Vector4.zero,
+                new Vector4(0f, 0f, 0.25f, 0f),
+                new Vector4(0f, 0f, 0.75f, 0f),
+            };
+            var drivers = new List<TextureDriver>();
+            foreach (var renderer in new[] { first, second })
+            {
+                drivers.Add(new TextureDriver
+                {
+                    Renderer = renderer,
+                    SubmeshSlot = 0,
+                    PropertyId = propId,
+                    PropertyName = "_MainTex",
+                    GltfTextureSlot = "pbrMetallicRoughness/baseColorTexture",
+                    TransformTarget = TextureTransformTarget.Scale,
+                    Sampler = new Sampler { Times = scaleTimes, Interp = Interp.Linear },
+                    StValues = scaleValues,
+                    BaseSt = baseSt,
+                });
+                drivers.Add(new TextureDriver
+                {
+                    Renderer = renderer,
+                    SubmeshSlot = 0,
+                    PropertyId = propId,
+                    PropertyName = "_MainTex",
+                    GltfTextureSlot = "pbrMetallicRoughness/baseColorTexture",
+                    TransformTarget = TextureTransformTarget.Offset,
+                    Sampler = new Sampler { Times = offsetTimes, Interp = Interp.Step },
+                    StValues = offsetValues,
+                    BaseSt = baseSt,
+                });
+            }
+
+            root.AddComponent<ExpressionController>().Initialize(new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack
+                    {
+                        Name = "uv",
+                        Domains = ExpressionDomain.Texture,
+                        TextureDrivers = drivers.ToArray(),
+                    },
+                },
+            });
+
+            var gltf = ExportToGltfRoot(root);
+            var extension = gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
+            var item = extension.Expressions.Find(expression => expression.Expression == "uv");
+            var animation = gltf.Animations[item.Animation];
+            Assert.That(item.Texture.Channels, Has.Length.EqualTo(2));
+
+            AnimationChannel scaleChannel = null;
+            AnimationChannel offsetChannel = null;
+            foreach (var channelIndex in item.Texture.Channels)
+            {
+                var channel = animation.Channels[channelIndex];
+                var path = PointerPath(channel);
+                if (path.EndsWith("/scale")) scaleChannel = channel;
+                if (path.EndsWith("/offset")) offsetChannel = channel;
+            }
+            Assert.IsNotNull(scaleChannel);
+            Assert.IsNotNull(offsetChannel);
+            Assert.That(
+                gltf.Accessors[animation.Samplers[scaleChannel.Sampler.Id].Input.Id].Count,
+                Is.EqualTo(2));
+            Assert.That(
+                gltf.Accessors[animation.Samplers[offsetChannel.Sampler.Id].Input.Id].Count,
+                Is.EqualTo(3));
+            Assert.That(animation.Samplers[scaleChannel.Sampler.Id].Interpolation, Is.EqualTo(InterpolationType.LINEAR));
+            Assert.That(animation.Samplers[offsetChannel.Sampler.Id].Interpolation, Is.EqualTo(InterpolationType.STEP));
         }
 
         [Test]
@@ -452,7 +708,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                     new ExpressionTrack // index 3: application-defined mask type, with blend fallback at runtime
                     {
                         Name = "soft", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
-                        Masks = new[] { new MaskEntry { TargetIndex = 0, Type = MaskType.Identity, CustomType = "ACME_soft_block", Amount = 0.25f } },
+                        Masks = new[] { new MaskEntry { TargetIndex = 0, Type = MaskType.Identity, CustomType = "3D_3d_mask", Amount = 0.25f } },
                     },
                 },
             };
@@ -507,11 +763,11 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             var soft = ext.Expressions.Find(e => e.Expression == "soft");
             Assert.IsNotNull(soft?.Mask);
-            Assert.AreEqual("ACME_soft_block", soft.Mask.Masks[0].Type,
+            Assert.AreEqual("3D_3d_mask", soft.Mask.Masks[0].Type,
                 "application-defined mask type must be preserved on export");
             var softEntries = KhrCharacterBaker.BuildMaskEntries(soft.Mask, nameToIndex["soft"], wireToTrackIndex);
             Assert.AreEqual(MaskType.Identity, softEntries[0].Type);
-            Assert.AreEqual("ACME_soft_block", softEntries[0].CustomType);
+            Assert.AreEqual("3D_3d_mask", softEntries[0].CustomType);
         }
 
         [Test]
@@ -525,7 +781,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             var ctrl = new GameObject("ctrl").transform;
             ctrl.SetParent(root.transform, false);
 
-            // Two model expressions feed a "Smile" term in the "vrm" target vocabulary.
+            // Two model expressions feed a "Smile" term in a versioned target vocabulary.
             var set = new CharacterExpressionSet
             {
                 Expressions = new[]
@@ -537,7 +793,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                 {
                     new ExpressionMappingSet
                     {
-                        SetName = "vrm",
+                        SetName = ExpressionVocab,
                         Targets = new[]
                         {
                             new MappingTarget
@@ -561,8 +817,8 @@ namespace UnityGLTF.KhrCharacter.Tests
                 "KHR_character_expression_mapping root extension should be present");
             var mappingExt = gltf.Extensions[KHR_character_expression_mapping.EXTENSION_NAME] as KHR_character_expression_mapping;
             Assert.IsNotNull(mappingExt);
-            Assert.IsTrue(mappingExt.ExpressionSetMappings.ContainsKey("vrm"), "the 'vrm' target set should be present");
-            var smileSet = mappingExt.ExpressionSetMappings["vrm"];
+            Assert.IsTrue(mappingExt.ExpressionSetMappings.ContainsKey(ExpressionVocab));
+            var smileSet = mappingExt.ExpressionSetMappings[ExpressionVocab];
             Assert.IsTrue(smileSet.ContainsKey("Smile"));
             var contribs = smileSet["Smile"];
             Assert.AreEqual(2, contribs.Count, "Smile is composed from two source expressions");
@@ -579,7 +835,7 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             var sets = KhrCharacterBaker.BuildMappingSets(mappingExt, wireToTrackIndex);
             Assert.AreEqual(1, sets.Length);
-            Assert.AreEqual("vrm", sets[0].SetName);
+            Assert.AreEqual(ExpressionVocab, sets[0].SetName);
             Assert.AreEqual(1, sets[0].Targets.Length);
             Assert.AreEqual("Smile", sets[0].Targets[0].TargetName);
             var baked = sets[0].Targets[0].Contributions;
@@ -591,7 +847,665 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void ExpressionMetadataExport_RemapsReferencesAfterFiltering()
+        public void ExpressionMetadataExport_InvalidMappingSetUriIsRejected()
+        {
+            var root = new GameObject("char");
+            _created.Add(root);
+            var ctrl = new GameObject("ctrl").transform;
+            ctrl.SetParent(root.transform, false);
+            root.AddComponent<ExpressionController>().Initialize(new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack
+                    {
+                        Name = "smile",
+                        Domains = ExpressionDomain.Joint,
+                        JointDrivers = new[] { RotationDriver(ctrl) },
+                    },
+                },
+                MappingSets = new[]
+                {
+                    new ExpressionMappingSet
+                    {
+                        SetName = "vrm",
+                        Targets = new[]
+                        {
+                            new MappingTarget
+                            {
+                                TargetName = "Smile",
+                                Contributions = new[]
+                                {
+                                    new MappingContribution { SourceIndex = 0, Weight = 1f },
+                                },
+                            },
+                        },
+                    },
+                },
+            });
+
+            var exception = Assert.Catch<System.InvalidOperationException>(() => ExportToGltfRoot(root));
+            StringAssert.Contains("'vrm' is not a valid absolute URI", exception.Message);
+        }
+
+        [Test]
+        public void PassiveExpressionDataIsRejectedEvenWhenLossyLegacyControllerExists()
+        {
+            var root = new GameObject("char");
+            _created.Add(root);
+            root.AddComponent<KhrCharacter>();
+            root.AddComponent<ExpressionController>().Initialize(new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack
+                    {
+                        Name = "legacy",
+                        Domains = ExpressionDomain.Joint,
+                        JointDrivers = new[] { RotationDriver(root.transform) },
+                    },
+                },
+            });
+            root.AddComponent<ExpressionResponseSet>();
+            var passiveChild = new GameObject("passive-responses");
+            passiveChild.transform.SetParent(root.transform, false);
+            var responses = passiveChild.AddComponent<ExpressionResponseSet>();
+            BindPassiveResponse(responses);
+
+            var exception = Assert.Catch<System.InvalidOperationException>(() => ExportToGltfRoot(root));
+            StringAssert.Contains("Refusing to silently discard KHR_character_expression data", exception.Message);
+        }
+
+        [Test]
+        public void PassiveOnlyExportHierarchyIsRejected()
+        {
+            var root = new GameObject("passive-only");
+            _created.Add(root);
+            BindPassiveResponse(root.AddComponent<ExpressionResponseSet>());
+
+            var exception = Assert.Catch<System.InvalidOperationException>(() => ExportToGltfRoot(root));
+            StringAssert.Contains("Refusing to silently discard KHR_character_expression data", exception.Message);
+        }
+
+        [Test]
+        public void PassiveDataOnAdditionalExportRootIsRejected()
+        {
+            var authored = new GameObject("authored");
+            _created.Add(authored);
+            authored.AddComponent<ExpressionController>().Initialize(new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack
+                    {
+                        Name = "authored",
+                        Domains = ExpressionDomain.Joint,
+                        JointDrivers = new[] { RotationDriver(authored.transform) },
+                    },
+                },
+            });
+            var passive = new GameObject("passive");
+            _created.Add(passive);
+            BindPassiveResponse(passive.AddComponent<ExpressionResponseSet>());
+
+            var exception = Assert.Catch<System.InvalidOperationException>(
+                () => ExportRootsToGltfRoot(authored, passive));
+            StringAssert.Contains("Refusing to silently discard KHR_character_expression data", exception.Message);
+        }
+
+        [Test]
+        public void LegacySamplerTimelineIsNormalizedAndCubicSplineIsDowngradedToLinear()
+        {
+            var root = new GameObject("char");
+            _created.Add(root);
+            var target = new GameObject("target").transform;
+            target.SetParent(root.transform, false);
+            root.AddComponent<ExpressionController>().Initialize(new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack
+                    {
+                        Name = "move",
+                        Domains = ExpressionDomain.Joint,
+                        JointDrivers = new[]
+                        {
+                            new JointDriver
+                            {
+                                Target = target,
+                                Channel = TrsChannel.Translation,
+                                BaseVec = Vector3.zero,
+                                Sampler = new Sampler
+                                {
+                                    Times = new[] { 2f, 4f, 8f },
+                                    Interp = Interp.CubicSpline,
+                                },
+                                DeltaVec = new[] { Vector3.zero, Vector3.right, Vector3.right * 2f },
+                            },
+                        },
+                    },
+                },
+            });
+
+            var gltf = ExportToGltfRoot(root);
+            var expressions = gltf.Extensions[KHR_character_expression.EXTENSION_NAME]
+                as KHR_character_expression;
+            var item = expressions.Expressions[0];
+            var animation = gltf.Animations[item.Animation];
+            var sampler = animation.Samplers[animation.Channels[0].Sampler.Id];
+            var input = gltf.Accessors[sampler.Input.Id];
+            var output = gltf.Accessors[sampler.Output.Id];
+
+            Assert.AreEqual(InterpolationType.LINEAR, sampler.Interpolation,
+                "the legacy driver has no tangent records and must not claim CUBICSPLINE");
+            Assert.AreEqual(3, (int)input.Count);
+            Assert.AreEqual(0f, (float)input.Min[0], 1e-5f);
+            Assert.AreEqual(1f, (float)input.Max[0], 1e-5f);
+            Assert.AreEqual(3, (int)output.Count);
+        }
+
+        [Test]
+        public void InvalidLegacySamplerTimesAbortExport()
+        {
+            var root = new GameObject("char");
+            _created.Add(root);
+            var target = new GameObject("target").transform;
+            target.SetParent(root.transform, false);
+            root.AddComponent<ExpressionController>().Initialize(new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack
+                    {
+                        Name = "invalid",
+                        Domains = ExpressionDomain.Joint,
+                        JointDrivers = new[]
+                        {
+                            new JointDriver
+                            {
+                                Target = target,
+                                Channel = TrsChannel.Translation,
+                                BaseVec = Vector3.zero,
+                                Sampler = new Sampler
+                                {
+                                    Times = new[] { 0f, 0f },
+                                    Interp = Interp.Linear,
+                                },
+                                DeltaVec = new[] { Vector3.zero, Vector3.right },
+                            },
+                        },
+                    },
+                },
+            });
+
+            var exception = Assert.Catch<System.InvalidOperationException>(() => ExportToGltfRoot(root));
+            StringAssert.Contains("strictly increasing", exception.Message);
+        }
+
+        [Test]
+        public void LegacySamplerTimesThatCollapseAfterNormalizationAbortExport()
+        {
+            var root = new GameObject("char");
+            _created.Add(root);
+            var target = new GameObject("target").transform;
+            target.SetParent(root.transform, false);
+            root.AddComponent<ExpressionController>().Initialize(new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack
+                    {
+                        Name = "collapsed",
+                        Domains = ExpressionDomain.Joint,
+                        JointDrivers = new[]
+                        {
+                            new JointDriver
+                            {
+                                Target = target,
+                                Channel = TrsChannel.Translation,
+                                BaseVec = Vector3.zero,
+                                Sampler = new Sampler
+                                {
+                                    Times = new[] { 0f, float.Epsilon, float.MaxValue },
+                                    Interp = Interp.Linear,
+                                },
+                                DeltaVec = new[] { Vector3.zero, Vector3.right, Vector3.right * 2f },
+                            },
+                        },
+                    },
+                },
+            });
+
+            var exception = Assert.Catch<System.InvalidOperationException>(() => ExportToGltfRoot(root));
+            StringAssert.Contains("collapse after normalization", exception.Message);
+        }
+
+        [Test]
+        public void RotationWithOverflowingFiniteLengthAbortsExport()
+        {
+            var root = new GameObject("char");
+            _created.Add(root);
+            var target = new GameObject("target").transform;
+            target.SetParent(root.transform, false);
+            root.AddComponent<ExpressionController>().Initialize(new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack
+                    {
+                        Name = "overflow",
+                        Domains = ExpressionDomain.Joint,
+                        JointDrivers = new[]
+                        {
+                            new JointDriver
+                            {
+                                Target = target,
+                                Channel = TrsChannel.Rotation,
+                                BaseQuat = Quaternion.identity,
+                                Sampler = new Sampler
+                                {
+                                    Times = new[] { 0f },
+                                    Interp = Interp.Linear,
+                                    SingleKey = true,
+                                },
+                                DeltaQuat = new[] { new Quaternion(1e30f, 1e30f, 1e30f, 1e30f) },
+                            },
+                        },
+                    },
+                },
+            });
+
+            var exception = Assert.Catch<System.InvalidOperationException>(() => ExportToGltfRoot(root));
+            StringAssert.Contains("finite nonzero length", exception.Message);
+        }
+
+        [Test]
+        public void DuplicateConcreteExpressionTargetsAbortExport()
+        {
+            var root = new GameObject("char");
+            _created.Add(root);
+            var target = new GameObject("target").transform;
+            target.SetParent(root.transform, false);
+            JointDriver Driver() => new JointDriver
+            {
+                Target = target,
+                Channel = TrsChannel.Translation,
+                BaseVec = Vector3.zero,
+                Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Linear },
+                DeltaVec = new[] { Vector3.zero, Vector3.right },
+            };
+            root.AddComponent<ExpressionController>().Initialize(new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack
+                    {
+                        Name = "duplicate",
+                        Domains = ExpressionDomain.Joint,
+                        JointDrivers = new[] { Driver(), Driver() },
+                    },
+                },
+            });
+
+            var exception = Assert.Catch<System.InvalidOperationException>(() => ExportToGltfRoot(root));
+            StringAssert.Contains("duplicates concrete target", exception.Message);
+        }
+
+        [Test]
+        public void ConflictingSharedMaterialTextureCurvesAbortInsteadOfFirstWinning()
+        {
+            var shader = TextureShaderOrFail();
+            var root = MakeUvCharacter(shader, out var renderer);
+            TextureDriver Driver(float end) => new TextureDriver
+            {
+                Renderer = renderer,
+                SubmeshSlot = 0,
+                PropertyId = Shader.PropertyToID("_MainTex_ST"),
+                PropertyName = "_MainTex",
+                GltfTextureSlot = "pbrMetallicRoughness/baseColorTexture",
+                TransformTarget = TextureTransformTarget.Offset,
+                BaseSt = new Vector4(1f, 1f, 0f, 0f),
+                Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Linear },
+                StValues = new[] { Vector4.zero, new Vector4(0f, 0f, end, 0f) },
+            };
+            root.AddComponent<ExpressionController>().Initialize(new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack
+                    {
+                        Name = "conflict",
+                        Domains = ExpressionDomain.Texture,
+                        TextureDrivers = new[] { Driver(0.5f), Driver(0.500001f) },
+                    },
+                },
+            });
+
+            var exception = Assert.Catch<System.InvalidOperationException>(() => ExportToGltfRoot(root));
+            StringAssert.Contains("conflicts with another texture driver", exception.Message);
+        }
+
+        [Test]
+        public void TextureExpressionRequiresExistingTextureInfo()
+        {
+            var shader = TextureShaderOrFail();
+            var root = MakeUvCharacter(shader, out var renderer);
+            renderer.sharedMaterial.mainTexture = null;
+            root.AddComponent<ExpressionController>().Initialize(new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack
+                    {
+                        Name = "missingTexture",
+                        Domains = ExpressionDomain.Texture,
+                        TextureDrivers = new[]
+                        {
+                            new TextureDriver
+                            {
+                                Renderer = renderer,
+                                SubmeshSlot = 0,
+                                PropertyId = Shader.PropertyToID("_MainTex_ST"),
+                                PropertyName = "_MainTex",
+                                GltfTextureSlot = "pbrMetallicRoughness/baseColorTexture",
+                                BaseSt = new Vector4(1f, 1f, 0f, 0f),
+                                Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Linear },
+                                StValues = new[] { Vector4.zero, new Vector4(0f, 0f, 0.5f, 0f) },
+                            },
+                        },
+                    },
+                },
+            });
+
+            var exception = Assert.Catch<System.InvalidOperationException>(() => ExportToGltfRoot(root));
+            StringAssert.Contains("authored TextureInfo", exception.Message);
+        }
+
+        [Test]
+        public void InvalidMappingWeightAbortsWholeCharacterExport()
+        {
+            var root = new GameObject("char");
+            _created.Add(root);
+            root.AddComponent<ExpressionController>().Initialize(new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack
+                    {
+                        Name = "smile",
+                        Domains = ExpressionDomain.Joint,
+                        JointDrivers = new[] { RotationDriver(root.transform) },
+                    },
+                },
+                MappingSets = new[]
+                {
+                    new ExpressionMappingSet
+                    {
+                        SetName = ExpressionVocab,
+                        Targets = new[]
+                        {
+                            new MappingTarget
+                            {
+                                TargetName = "Smile",
+                                Contributions = new[]
+                                {
+                                    new MappingContribution { SourceIndex = 0, Weight = 2f },
+                                },
+                            },
+                        },
+                    },
+                },
+            });
+
+            var exception = Assert.Catch<System.InvalidOperationException>(() => ExportToGltfRoot(root));
+            StringAssert.Contains("weight must be finite and in [0, 1]", exception.Message);
+        }
+
+        [TestCase(true)]
+        [TestCase(false)]
+        public void OrphanMaskOrMappingMetadataAbortsWholeCharacterExport(bool maskMetadata)
+        {
+            var root = new GameObject("char");
+            _created.Add(root);
+            var track = new ExpressionTrack
+            {
+                Name = "smile",
+                Domains = ExpressionDomain.Joint,
+                JointDrivers = new[] { RotationDriver(root.transform) },
+            };
+            var set = new CharacterExpressionSet { Expressions = new[] { track } };
+            if (maskMetadata) track.MaskExtrasJson = "{\"orphan\":true}";
+            else set.MappingExtrasJson = "{\"orphan\":true}";
+            root.AddComponent<ExpressionController>().Initialize(set);
+
+            var exception = Assert.Catch<System.InvalidOperationException>(() => ExportToGltfRoot(root));
+            StringAssert.Contains("metadata but no", exception.Message);
+        }
+
+        [Test]
+        public void CompanionExtensionValueMustBeAnObject()
+        {
+            var root = new GameObject("char");
+            _created.Add(root);
+            root.AddComponent<ExpressionController>().Initialize(new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack
+                    {
+                        Name = "target",
+                        Domains = ExpressionDomain.Joint,
+                        JointDrivers = new[] { RotationDriver(root.transform) },
+                    },
+                    new ExpressionTrack
+                    {
+                        Name = "masking",
+                        Domains = ExpressionDomain.Joint,
+                        JointDrivers = new[] { RotationDriver(root.transform) },
+                        Masks = new[]
+                        {
+                            new MaskEntry
+                            {
+                                TargetIndex = 0,
+                                Type = MaskType.Blend,
+                                Amount = 1f,
+                                RawExtensionsJson = "{\"ACME_bad\":5}",
+                            },
+                        },
+                    },
+                },
+            });
+
+            var exception = Assert.Catch<System.InvalidOperationException>(() => ExportToGltfRoot(root));
+            StringAssert.Contains("value for 'ACME_bad' must be a JSON object", exception.Message);
+        }
+
+        [Test]
+        public void RequiredCompanionExtensionMustBeAuthored()
+        {
+            var root = new GameObject("char");
+            _created.Add(root);
+            root.AddComponent<ExpressionController>().Initialize(new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack
+                    {
+                        Name = "target",
+                        Domains = ExpressionDomain.Joint,
+                        JointDrivers = new[] { RotationDriver(root.transform) },
+                    },
+                    new ExpressionTrack
+                    {
+                        Name = "masking",
+                        Domains = ExpressionDomain.Joint,
+                        JointDrivers = new[] { RotationDriver(root.transform) },
+                        Masks = new[]
+                        {
+                            new MaskEntry { TargetIndex = 0, Type = MaskType.Blend, Amount = 1f },
+                        },
+                        MaskRequiredCompanionExtensions = new[] { "ACME_missing" },
+                    },
+                },
+            });
+
+            var exception = Assert.Catch<System.InvalidOperationException>(() => ExportToGltfRoot(root));
+            StringAssert.Contains("requires companion extension 'ACME_missing' but does not author it", exception.Message);
+        }
+
+        [Test]
+        public void ExpressionMetadataExport_PreservesMaskMappingPayloadAndCompanionRequiredness()
+        {
+            var root = new GameObject("char");
+            _created.Add(root);
+            var ctrl = new GameObject("ctrl").transform;
+            ctrl.SetParent(root.transform, false);
+            root.AddComponent<ExpressionController>().Initialize(new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack
+                    {
+                        Name = "target",
+                        Domains = ExpressionDomain.Joint,
+                        JointDrivers = new[] { RotationDriver(ctrl) },
+                    },
+                    new ExpressionTrack
+                    {
+                        Name = "source",
+                        Domains = ExpressionDomain.Joint,
+                        JointDrivers = new[] { RotationDriver(ctrl) },
+                        MaskExtensionsJson =
+                            "{\"ACME_mask_root\":{\"value\":1},\"ACME_optional\":{\"value\":2}}",
+                        MaskExtrasJson = "[\"root-mask\",3]",
+                        MaskAdditionalPropertiesJson = "{\"futureMaskRootField\":4}",
+                        MaskRequiredCompanionExtensions = new[] { "ACME_mask_root", "ACME_mask_entry" },
+                        Masks = new[]
+                        {
+                            new MaskEntry
+                            {
+                                TargetIndex = 0,
+                                Name = "target",
+                                Type = MaskType.Identity,
+                                CustomType = "ACME_mask_entry",
+                                Amount = 0.5f,
+                                Threshold = 0.25f,
+                                RawExtensionsJson = "{\"ACME_mask_entry\":{\"value\":5}}",
+                                RawExtrasJson = "false",
+                                RawAdditionalPropertiesJson = "{\"futureMaskEntryField\":6}",
+                            },
+                        },
+                    },
+                },
+                MappingSets = new[]
+                {
+                    new ExpressionMappingSet
+                    {
+                        SetName = ExpressionVocab,
+                        Targets = new[]
+                        {
+                            new MappingTarget
+                            {
+                                TargetName = "Smile",
+                                Contributions = new[]
+                                {
+                                    new MappingContribution
+                                    {
+                                        SourceIndex = 1,
+                                        Name = "source",
+                                        Weight = 0.75f,
+                                        ExtensionsJson = "{\"ACME_mapping_entry\":{\"value\":7}}",
+                                        ExtrasJson = "\"forward-extra\"",
+                                        AdditionalPropertiesJson = "{\"futureForwardField\":8}",
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+                InputMappingSets = new[]
+                {
+                    new ExpressionInputMappingSet
+                    {
+                        SetName = ExpressionVocab,
+                        Commands = new[]
+                        {
+                            new InputMappingCommand
+                            {
+                                CommandName = "Smile",
+                                Contributions = new[]
+                                {
+                                    new InputMappingContribution
+                                    {
+                                        TargetIndex = 0,
+                                        Name = "target",
+                                        Weight = 0.5f,
+                                        ExtensionsJson = "{\"ACME_input_entry\":{\"value\":9}}",
+                                        ExtrasJson = "[\"input-extra\"]",
+                                        AdditionalPropertiesJson = "{\"futureInputField\":10}",
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+                MappingExtensionsJson = "{\"ACME_mapping_root\":{\"value\":11}}",
+                MappingExtrasJson = "{\"rootMapping\":true}",
+                MappingAdditionalPropertiesJson = "{\"futureMappingRootField\":12}",
+                MappingRequiredCompanionExtensions = new[]
+                {
+                    "ACME_mapping_root",
+                    "ACME_mapping_entry",
+                    "ACME_input_entry",
+                },
+            });
+
+            var gltf = ExportToGltfRoot(root);
+            var expressions = gltf.Extensions[KHR_character_expression.EXTENSION_NAME]
+                as KHR_character_expression;
+            var source = expressions.Expressions.Find(item => item.Expression == "source");
+            var mask = source.Mask;
+            Assert.AreEqual(1, mask.Extensions["ACME_mask_root"]["value"].Value<int>());
+            Assert.AreEqual("root-mask", mask.Extras[0].Value<string>());
+            Assert.AreEqual(4, mask.AdditionalProperties["futureMaskRootField"].Value<int>());
+            Assert.AreEqual("target", mask.Masks[0].Name);
+            Assert.AreEqual("ACME_mask_entry", mask.Masks[0].Type);
+            Assert.AreEqual(5, mask.Masks[0].Extensions["ACME_mask_entry"]["value"].Value<int>());
+            Assert.IsFalse(mask.Masks[0].Extras.Value<bool>());
+            Assert.AreEqual(6,
+                mask.Masks[0].AdditionalProperties["futureMaskEntryField"].Value<int>());
+
+            var mapping = gltf.Extensions[KHR_character_expression_mapping.EXTENSION_NAME]
+                as KHR_character_expression_mapping;
+            var forward = mapping.ExpressionSetMappings[ExpressionVocab]["Smile"][0];
+            var input = mapping.ExpressionSetInputMappings[ExpressionVocab]["Smile"][0];
+            Assert.AreEqual("source", forward.Name);
+            Assert.AreEqual(7, forward.Extensions["ACME_mapping_entry"]["value"].Value<int>());
+            Assert.AreEqual("forward-extra", forward.Extras.Value<string>());
+            Assert.AreEqual(8, forward.AdditionalProperties["futureForwardField"].Value<int>());
+            Assert.AreEqual("target", input.Name);
+            Assert.AreEqual(9, input.Extensions["ACME_input_entry"]["value"].Value<int>());
+            Assert.AreEqual("input-extra", input.Extras[0].Value<string>());
+            Assert.AreEqual(10, input.AdditionalProperties["futureInputField"].Value<int>());
+            Assert.AreEqual(11, mapping.Extensions["ACME_mapping_root"]["value"].Value<int>());
+            Assert.IsTrue(mapping.Extras["rootMapping"].Value<bool>());
+            Assert.AreEqual(12, mapping.AdditionalProperties["futureMappingRootField"].Value<int>());
+
+            foreach (var required in new[]
+                     {
+                         "ACME_mask_root", "ACME_mask_entry", "ACME_mapping_root",
+                         "ACME_mapping_entry", "ACME_input_entry",
+                     })
+            {
+                CollectionAssert.Contains(gltf.ExtensionsUsed, required);
+                CollectionAssert.Contains(gltf.ExtensionsRequired, required);
+            }
+            CollectionAssert.Contains(gltf.ExtensionsUsed, "ACME_optional");
+            Assert.IsFalse(gltf.ExtensionsRequired.Contains("ACME_optional"));
+        }
+
+        [Test]
+        public void ExpressionMetadataExport_RejectsReferencesThatWouldRequireFiltering()
         {
             var root = new GameObject("char");
             _created.Add(root);
@@ -621,7 +1535,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                 {
                     new ExpressionMappingSet
                     {
-                        SetName = "example",
+                        SetName = ExpressionVocab,
                         Targets = new[]
                         {
                             new MappingTarget
@@ -635,19 +1549,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             };
             root.AddComponent<ExpressionController>().Initialize(set);
 
-            var gltf = ExportToGltfRoot(root);
-            var expressions = (gltf.Extensions[KHR_character_expression.EXTENSION_NAME]
-                as KHR_character_expression).Expressions;
-            Assert.AreEqual(2, expressions.Count);
-            Assert.AreEqual("source", expressions[0].Expression);
-            Assert.AreEqual("target", expressions[1].Expression);
-            Assert.AreEqual(1, expressions[0].Mask.Masks[0].Target,
-                "runtime target index 2 remaps to wire expression index 1");
-
-            var mapping = gltf.Extensions[KHR_character_expression_mapping.EXTENSION_NAME]
-                as KHR_character_expression_mapping;
-            Assert.AreEqual(1, mapping.ExpressionSetMappings["example"]["Target"][0].Source,
-                "runtime source index 2 remaps to wire expression index 1");
+            var error = Assert.Throws<System.InvalidOperationException>(() => ExportToGltfRoot(root));
+            StringAssert.Contains("Expression 0 has no exportable animation channels", error.Message);
         }
 
         [Test]
@@ -657,8 +1560,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             // declared in extensionsUsed (deduped, exactly once), and NONE of them in extensionsRequired (they stay
             // non-required, consistent with the parent KHR_character_expression). Exercises morph + joint + texture +
             // mask in one character so all four nested tokens are emitted.
-            var shader = Shader.Find("Unlit/Texture");
-            if (shader == null) { Assert.Ignore("No suitable built-in shader available in this project."); return; }
+            var shader = TextureShaderOrFail();
 
             var root = MakeUvCharacter(shader, out var mr); // root + quad + material (texture domain)
 
@@ -673,6 +1575,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             smrGo.transform.SetParent(root.transform, false);
             smrGo.GetComponent<SkinnedMeshRenderer>().sharedMesh = mesh;
             var smr = smrGo.GetComponent<SkinnedMeshRenderer>();
+            smr.sharedMaterial = MakeMorphMaterial("face_material");
 
             var jaw = new GameObject("jaw").transform; jaw.SetParent(root.transform, false);
             var ctrl = new GameObject("ctrl").transform; ctrl.SetParent(root.transform, false);
@@ -770,6 +1673,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             smrGo.transform.SetParent(root.transform, false);
             smrGo.GetComponent<SkinnedMeshRenderer>().sharedMesh = mesh;
             var smr = smrGo.GetComponent<SkinnedMeshRenderer>();
+            smr.sharedMaterial = MakeMorphMaterial("face_material");
 
             var set = new CharacterExpressionSet
             {
@@ -992,17 +1896,17 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void NonFacialAnimation_NotExportedAsExpression()
+        public void OrdinaryAnimationNotAuthoredAsResponse_RemainsStandardAnimation()
         {
-            // Scope guard: the exporter only emits expressions that live in the CharacterExpressionSet. A standard
-            // Unity animation driving an unrelated bone must export as a PLAIN glTF animation and must NOT be
-            // referenced by any KHR_character_expression item (KHR_character is facial-expressions-only).
+            // The exporter emits only responses explicitly authored in the CharacterExpressionSet. An ordinary
+            // Unity animation driving an unrelated bone remains a plain glTF animation and is not referenced by a
+            // KHR_character_expression item.
             var root = new GameObject("char");
             _created.Add(root);
             var jaw = new GameObject("jaw").transform;
             jaw.SetParent(root.transform, false);
 
-            // The only facial expression in the set -> the only KHR_character_expression item.
+            // The only authored response in the set becomes the only KHR_character_expression item.
             var set = new CharacterExpressionSet
             {
                 Expressions = new[]
@@ -1015,7 +1919,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             };
             root.AddComponent<ExpressionController>().Initialize(set);
 
-            // A standard, non-facial Unity animation on a separate bone (NOT part of the expression set). A legacy
+            // A standard Unity animation on a separate bone (not part of the response set). A legacy
             // clip animating all three localPosition components (UnityGLTF bakes T/S per-component; partial curves
             // would throw) so the standard animation exporter emits a plain glTF animation named "Wave".
             var arm = new GameObject("armBone");
@@ -1033,24 +1937,24 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             var gltf = ExportToGltfRoot(root);
 
-            // The facial expression is present, and it is the ONLY expression item.
+            // The authored response is present, and it is the only expression item.
             Assert.IsTrue(gltf.Extensions != null && gltf.Extensions.ContainsKey(KHR_character_expression.EXTENSION_NAME),
                 "KHR_character_expression root extension should be present");
             var ext = gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
             Assert.IsNotNull(ext);
-            Assert.AreEqual(1, ext.Expressions.Count, "only the set's facial expression should be an expression item");
+            Assert.AreEqual(1, ext.Expressions.Count, "only the explicitly authored response should be an expression item");
             Assert.AreEqual("jawOpen", ext.Expressions[0].Expression);
 
-            // The standard non-facial animation exported as a plain glTF animation...
+            // The ordinary animation exports as a plain glTF animation...
             int waveIndex = gltf.Animations.FindIndex(a => a.Name == "Wave");
             Assert.GreaterOrEqual(waveIndex, 0,
-                "the standard non-facial animation should be exported as a plain glTF animation");
+                "the ordinary animation should be exported as a plain glTF animation");
 
             // ...and it is NOT referenced by any KHR_character_expression item.
             var expressionAnimIndices = new HashSet<int>();
             foreach (var item in ext.Expressions) expressionAnimIndices.Add(item.Animation);
             Assert.IsFalse(expressionAnimIndices.Contains(waveIndex),
-                "a non-facial animation must NOT be referenced by KHR_character_expression");
+                "an ordinary animation outside the response set must not be referenced by KHR_character_expression");
 
             // The expression's own animation is a different, dedicated track.
             Assert.IsTrue(expressionAnimIndices.Contains(ext.Expressions[0].Animation));
@@ -1058,18 +1962,14 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void ExportPlugin_RespectsScopeRule_FacialExpressionsOnly()
+        public void ExportPlugin_DocumentsFiniteResponseScope()
         {
             // The exporter writes whatever is in the CharacterExpressionSet.
-            // The caller is responsible for putting only facial expressions (0→1 driven,
-            // no loop expectation) into the set. Body/locomotion animations must use
-            // standard glTF animation export, not the KHR plugin.
-            //
-            // This test documents the scope rule; actual enforcement is by convention
-            // (the exporter cannot infer intent from data alone).
+            // Entries are finite scalar responses, independent of vocabulary. Ordinary looping animation stays on
+            // the standard path unless the author deliberately chooses the response contract.
             var plugin = ScriptableObject.CreateInstance<KhrCharacterExportPlugin>();
-            StringAssert.Contains("facial", plugin.Description.ToLowerInvariant(),
-                "Plugin description should document the facial-expressions-only scope rule");
+            StringAssert.Contains("finite scalar", plugin.Description.ToLowerInvariant());
+            StringAssert.Contains("ordinary looping", plugin.Description.ToLowerInvariant());
             Object.DestroyImmediate(plugin);
         }
 
@@ -1169,11 +2069,11 @@ namespace UnityGLTF.KhrCharacter.Tests
             foreach (var item in ext.Expressions)
             {
                 // Current behavior: no extras emitted at all (the strongest neutral wire).
-                if (item.Extras == null) continue;
+                if (!(item.Extras is JObject extras)) continue;
                 // Tolerate future non-vendor extras, but fail hard on ANY vendor (META_*) token.
-                Assert.IsNull(item.Extras["META_character_runtime"],
+                Assert.IsNull(extras["META_character_runtime"],
                     $"expression '{item.Expression}' must not carry the META_character_runtime vendor token (wire neutrality)");
-                foreach (var prop in item.Extras.Properties())
+                foreach (var prop in extras.Properties())
                     StringAssert.DoesNotStartWith("META_", prop.Name,
                         $"expression '{item.Expression}' must not carry any META_* vendor extras token (wire neutrality)");
             }
@@ -1198,6 +2098,11 @@ namespace UnityGLTF.KhrCharacter.Tests
             quad.GetComponent<MeshFilter>().sharedMesh = mesh;
             var mat = new Material(shader) { name = "mat" };
             _created.Add(mat);
+            var texture = new Texture2D(1, 1) { name = "baseColor" };
+            texture.SetPixel(0, 0, Color.white);
+            texture.Apply();
+            _created.Add(texture);
+            mat.mainTexture = texture;
             mr = quad.GetComponent<MeshRenderer>();
             mr.sharedMaterial = mat;
             return root;
@@ -1229,13 +2134,11 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void UvTransform_MultiKey_AnchorsAtFrame0_NotMaterialRest()
+        public void UvTransform_MultiKey_AnchorsAtAuthoredMaterialRest()
         {
-            // FU2: a multi-key UV driver carrying an authored frame-0 absolute (HasFrame0St) must export absolutes
-            // anchored at Frame0St, NOT the material rest (BaseSt). Here Frame0St.z = 0.25 != BaseSt.z = 0, so the
-            // exported frame-0 offset.x must be 0.25 (Frame0St-anchored). Pre-fix (BaseSt-anchored) it would be 0.
-            var shader = Shader.Find("Unlit/Texture");
-            if (shader == null) { Assert.Ignore("No suitable built-in shader available in this project."); return; }
+            // Frozen expression responses require the time-zero sample to equal the authored AOM value. Legacy
+            // Frame0St provenance must not override the material rest used by the scene-writing adapter.
+            var shader = TextureShaderOrFail();
 
             var root = MakeUvCharacter(shader, out var mr);
             var set = new CharacterExpressionSet
@@ -1255,8 +2158,8 @@ namespace UnityGLTF.KhrCharacter.Tests
                                 GltfTextureSlot = "pbrMetallicRoughness/baseColorTexture",
                                 Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Linear, SingleKey = false },
                                 StValues = new[] { Vector4.zero, new Vector4(0f, 0f, 0.5f, 0f) },
-                                BaseSt = new Vector4(1f, 1f, 0f, 0f),       // material rest (NOT the anchor)
-                                Frame0St = new Vector4(1f, 1f, 0.25f, 0f),  // authored frame-0 absolute (the anchor)
+                                BaseSt = new Vector4(1f, 1f, 0f, 0f),
+                                Frame0St = new Vector4(1f, 1f, 0.25f, 0f),
                                 HasFrame0St = true,
                             },
                         },
@@ -1268,13 +2171,12 @@ namespace UnityGLTF.KhrCharacter.Tests
             var gltf = ExportToGltfRoot(root);
             FindUvChannels(gltf, out var scaleAcc, out var offsetAcc);
 
-            // offset.x is monotonic, so Min == key0, Max == key1. Frame0St-anchored: key0 = 0.25, key1 = 0.75.
-            Assert.AreEqual(0.25f, (float)offsetAcc.Min[0], 1e-4f,
-                "frame-0 offset.x must anchor at Frame0St.z (0.25), not BaseSt.z (0)");
-            Assert.AreEqual(0.75f, (float)offsetAcc.Max[0], 1e-4f,
-                "offset.x scrolls from the Frame0St baseline (0.25 -> 0.75)");
+            Assert.AreEqual(0f, (float)offsetAcc.Min[0], 1e-4f,
+                "time-zero offset must equal the authored material rest");
+            Assert.AreEqual(0.5f, (float)offsetAcc.Max[0], 1e-4f,
+                "the legacy frame-relative curve is rebased onto the authored material rest");
 
-            // scale comes from Frame0St.xy (1,1).
+            // Scale comes from the authored material rest.
             Assert.AreEqual(1f, (float)scaleAcc.Min[0], 1e-4f);
             Assert.AreEqual(1f, (float)scaleAcc.Min[1], 1e-4f);
         }
@@ -1285,8 +2187,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             // Regression guard: a multi-key UV driver WITHOUT a captured frame-0 (HasFrame0St == false —
             // hand-authored / synthesized) keeps anchoring on BaseSt (the pre-FU2 behavior). This is exactly why
             // the existing UV tests, which never set Frame0St, remain correct after the FU2 change.
-            var shader = Shader.Find("Unlit/Texture");
-            if (shader == null) { Assert.Ignore("No suitable built-in shader available in this project."); return; }
+            var shader = TextureShaderOrFail();
 
             var root = MakeUvCharacter(shader, out var mr);
             var set = new CharacterExpressionSet
@@ -1324,14 +2225,12 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void UvTransform_RoundTrip_FirstCycleExact_ForeignFrame0()
+        public void UvTransform_ForeignMismatchedFrame0IsRebasedForValidExpressionExport()
         {
-            // FU2 end-to-end: a FOREIGN asset whose authored frame-0 _ST != material rest must round-trip exactly on
-            // the FIRST cycle. The real import baker captures the frame-0 absolute (Frame0St) + frame-0-relative
-            // deltas; the real exporter reconstructs the original absolute _ST per key. Proven through real
-            // BuildUvTransformDriver + real export (no silent re-baselining to BaseSt).
-            var shader = Shader.Find("Unlit/Texture");
-            if (shader == null) { Assert.Ignore("No suitable built-in shader available in this project."); return; }
+            // Older data could retain an animation frame zero that differed from the material rest. That is not a
+            // valid frozen expression response, so the lossy legacy exporter preserves its relative curve while
+            // rebasing it to the authored material value.
+            var shader = TextureShaderOrFail();
 
             var root = MakeUvCharacter(shader, out var mr);
 
@@ -1367,11 +2266,10 @@ namespace UnityGLTF.KhrCharacter.Tests
             var gltf = ExportToGltfRoot(root);
             FindUvChannels(gltf, out _, out var offsetAcc);
 
-            // offset.x == _ST.z; the exported absolutes must equal the ORIGINAL foreign absolutes (0.25 -> 0.75).
-            Assert.AreEqual(0.25f, (float)offsetAcc.Min[0], 1e-4f,
-                "exported frame-0 offset.x must equal the original 0.25 (first-cycle exact)");
-            Assert.AreEqual(0.75f, (float)offsetAcc.Max[0], 1e-4f,
-                "exported key-1 offset.x must equal the original 0.75 (first-cycle exact)");
+            Assert.AreEqual(0f, (float)offsetAcc.Min[0], 1e-4f,
+                "exported frame zero must equal the authored material rest");
+            Assert.AreEqual(0.5f, (float)offsetAcc.Max[0], 1e-4f,
+                "the relative 0.5 offset curve remains intact after rebasing");
         }
 
         // ── #4: Camera-hint / look-at node-extension export ──────────────────────────────────────────────

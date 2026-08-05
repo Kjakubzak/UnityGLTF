@@ -26,8 +26,22 @@ namespace UnityGLTF.KhrCharacter
                  "Vendor-neutral — operates over whatever rig vocabularies the model declares.")]
         public RigImportMode Rig = RigImportMode.Humanoid;
 
+        [Tooltip("Optional Unity host adapter. When enabled, imports the legacy additive/override " +
+                 "ExpressionController and lets it write scene targets. This is application policy, not " +
+                 "KHR_character_expression wire behavior.")]
+        public bool CreateExpressionController;
+
+        [Tooltip("Optional Unity host policy. When enabled together with the expression controller, prevents " +
+                 "the imported expression/reference-pose clips from becoming an automatic default animation. " +
+                 "This changes the Unity animation host and is not extension conformance behavior.")]
+        public bool SuppressNonInteractiveAnimationAutoPlay;
+
         public override GLTFImportPluginContext CreateInstance(GLTFImportContext context)
-            => new KhrCharacterImportContext(context, Rig);
+            => new KhrCharacterImportContext(
+                context,
+                Rig,
+                CreateExpressionController,
+                SuppressNonInteractiveAnimationAutoPlay);
     }
 
     /// <summary>
@@ -38,6 +52,8 @@ namespace UnityGLTF.KhrCharacter
     {
         private readonly GLTFImportContext _context;
         private readonly RigImportMode _rigMode;
+        private readonly bool _createExpressionController;
+        private readonly bool _suppressNonInteractiveAnimationAutoPlay;
         private bool _isCharacter;
         private int _characterRootNodeIndex = -1;
 
@@ -65,14 +81,37 @@ namespace UnityGLTF.KhrCharacter
             public KHR_node_lookat_target Target;
         }
 
-        public KhrCharacterImportContext(GLTFImportContext context, RigImportMode rigMode = RigImportMode.Humanoid)
+        public KhrCharacterImportContext(
+            GLTFImportContext context,
+            RigImportMode rigMode = RigImportMode.Humanoid,
+            bool createExpressionController = false,
+            bool suppressNonInteractiveAnimationAutoPlay = false)
         {
             _context = context;
             _rigMode = rigMode;
+            _createExpressionController = createExpressionController;
+            _suppressNonInteractiveAnimationAutoPlay = suppressNonInteractiveAnimationAutoPlay;
         }
 
         public override bool SupportsRequiredExtension(string extensionName)
-            => extensionName == KhrCharacterExtensionNames.NodeLookatTarget;
+        {
+            if (extensionName == KhrCharacterExtensionNames.NodeLookatTarget) return true;
+
+            // Parsing or baking a subset of expression data is not the complete behavior promised by required use.
+            // Keep these explicit so adding a schema factory cannot silently turn recognition into a capability claim.
+            switch (extensionName)
+            {
+                case KhrCharacterExtensionNames.Expression:
+                case KhrCharacterExtensionNames.ExpressionMorphtarget:
+                case KhrCharacterExtensionNames.ExpressionJoint:
+                case KhrCharacterExtensionNames.ExpressionTexture:
+                case KhrCharacterExtensionNames.ExpressionMapping:
+                case KhrCharacterExtensionNames.ExpressionMask:
+                    return false;
+                default:
+                    return false;
+            }
+        }
 
         public override void OnAfterImportRoot(GLTFRoot gltfRoot)
         {
@@ -176,21 +215,26 @@ namespace UnityGLTF.KhrCharacter
             _nodeIndexToGo.TryGetValue(_characterRootNodeIndex, out var designatedRootObject);
             hub.SetDesignation(_characterRootNodeIndex, designatedRootObject != null ? designatedRootObject.transform : null);
 
-            // Parse KHR_character_expression once here and thread it into both consumers below (baking and
-            // auto-play suppression), which both run only inside this single callback. Previously each re-parsed
-            // it independently; GetExpressionExtension is a read-only deserialize and the baker treats the result
-            // as read-only, so sharing one instance is behavior-identical and drops the duplicate parse.
+            // Parse the response metadata once for the explicitly enabled Unity host adapters below. Neither the
+            // controller nor clip suppression is implied by the extension, so both remain opt-in import policy.
             var expressionExt = _context?.Root != null ? GetExpressionExtension(_context.Root) : null;
 
-            var set = TryBakeExpressions(sceneObject, hub, expressionExt);
+            // The passive response set is the wire implementation: it preserves every channel, evaluates absolute
+            // records, and never writes scene targets. It is independent of the optional Unity controller below.
+            var responses = TryBakeExpressionResponses(sceneObject, hub, expressionExt);
+
+            // The legacy scene-writing adapter may only consume data that passed the base wire evaluator's
+            // validation. Invalid optional expression data is ignored atomically rather than partially applied.
+            var set = _createExpressionController && responses != null
+                ? TryBakeExpressions(sceneObject, hub, expressionExt)
+                : null;
             WireSkeleton(sceneObject, hub);
             WireNodeFeatures(sceneObject, hub);
 
-            // Expression + reference-pose animations re-import as ordinary AnimationClips. Unity's auto-play host
-            // (the Legacy Animation default clip, or an editor Mecanim controller's default state) would otherwise
-            // auto-run one of them — double-driving the mesh the ExpressionController already owns, or looping the
-            // reference pose. Suppress that auto-play while leaving the clips intact and reachable for explicit use.
-            SuppressNonInteractiveClipAutoPlay(sceneObject, expressionExt);
+            // A host that explicitly gives the optional controller ownership may also opt into changing Unity's
+            // default animation selection. Ordinary imported clips are otherwise left untouched.
+            if (_suppressNonInteractiveAnimationAutoPlay && set != null)
+                SuppressNonInteractiveClipAutoPlay(sceneObject, expressionExt);
 
             var capabilities = DeriveCapabilities(_presentExtensions, set);
             if (hub.Skeleton?.Result?.ReferencePose != null) capabilities.Add(CharacterCapability.ReferencePose);
@@ -223,6 +267,35 @@ namespace UnityGLTF.KhrCharacter
             animator.avatar = avatar;
         }
 #endif
+
+        private ExpressionResponseSet TryBakeExpressionResponses(
+            GameObject sceneObject,
+            KhrCharacter hub,
+            KHR_character_expression expressionExt)
+        {
+            var root = _context?.Root;
+            var importer = _context?.SceneImporter;
+            if (root == null || importer == null || expressionExt == null) return null;
+
+            try
+            {
+                var entries = KhrCharacterResponseBaker.Bake(root, importer, expressionExt);
+                if (entries.Length == 0) return null;
+                var responses = sceneObject.GetComponent<ExpressionResponseSet>();
+                if (responses == null) responses = sceneObject.AddComponent<ExpressionResponseSet>();
+                responses.Bind(
+                    entries,
+                    root.ExtensionsRequired != null &&
+                    root.ExtensionsRequired.Contains(KhrCharacterExtensionNames.Expression));
+                hub.ExpressionResponses = responses;
+                return responses;
+            }
+            catch (ExpressionResponseEvaluationException exception)
+            {
+                Debug.LogError($"[KHR_character] Expression response data is invalid: {exception.Message}");
+                return null;
+            }
+        }
 
         private CharacterExpressionSet TryBakeExpressions(GameObject sceneObject, KhrCharacter hub, KHR_character_expression expressionExt)
         {

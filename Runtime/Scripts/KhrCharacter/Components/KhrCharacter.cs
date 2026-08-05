@@ -23,6 +23,7 @@ namespace UnityGLTF.KhrCharacter
 
         // Sub-controllers — null when the corresponding extension is absent (graceful degradation).
         public ExpressionController Expressions { get; internal set; }
+        public ExpressionResponseSet ExpressionResponses { get; internal set; }
         public GazeSolver Gaze { get; internal set; }
         public CameraHintSet CameraHints { get; internal set; }
         public LookAtTargetSet LookAtTargets { get; internal set; }
@@ -57,6 +58,7 @@ namespace UnityGLTF.KhrCharacter
             _capabilities.AddRange(_serializedCapabilities);
 
             if (Expressions == null) Expressions = GetComponent<ExpressionController>();
+            if (ExpressionResponses == null) ExpressionResponses = GetComponent<ExpressionResponseSet>();
             if (Gaze == null) Gaze = GetComponent<GazeSolver>();
             if (CameraHints == null) CameraHints = GetComponent<CameraHintSet>();
             if (LookAtTargets == null) LookAtTargets = GetComponent<LookAtTargetSet>();
@@ -110,7 +112,9 @@ namespace UnityGLTF.KhrCharacter
         public CharacterHealthReport GetHealth()
         {
             var report = _healthReport ?? (_healthReport = new CharacterHealthReport());
-            report.ExpressionCount = Expressions != null ? Expressions.Count : 0;
+            report.ExpressionCount = ExpressionResponses != null
+                ? ExpressionResponses.Count
+                : Expressions != null ? Expressions.Count : 0;
             report.Capabilities.Clear();
             foreach (var capability in _capabilities)
                 report.Capabilities.Add(new CapabilityHealth { Capability = capability, Status = StatusFor(capability) });
@@ -124,6 +128,9 @@ namespace UnityGLTF.KhrCharacter
                 case CharacterCapability.Character:
                     return CapabilityStatus.Active;
                 case CharacterCapability.Expression:
+                    return (ExpressionResponses != null || Expressions != null)
+                        ? CapabilityStatus.Active
+                        : CapabilityStatus.Inert;
                 case CharacterCapability.Morphtarget:
                 case CharacterCapability.Joint:
                 case CharacterCapability.Texture:
@@ -149,9 +156,9 @@ namespace UnityGLTF.KhrCharacter
         }
 
         // A skeleton mapping is "degraded" (present but only partially driven) when it resolved no bones at all,
-        // or when a declared joint that maps to a *required* humanoid bone failed to bind (the baker records
-        // those in the chosen direction's report and clears Report.IsValid). Optional joints that are simply
-        // absent (jaw/eyes/toes/...) do NOT degrade a rig that otherwise resolved its required bones.
+        // when generic association resolution was invalid, or when the optional Unity Humanoid adapter's selected
+        // mapping lacks a recognized HumanTrait-required role. That adapter-health policy does not make the glTF
+        // mapping invalid. Optional Unity roles (jaw/eyes/toes/...) may be absent without degrading the adapter.
         private bool SkeletonMappingDegraded()
         {
             var result = Skeleton.Result;

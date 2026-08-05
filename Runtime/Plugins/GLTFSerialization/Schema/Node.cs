@@ -48,6 +48,7 @@ namespace GLTF.Schema
 		/// A floating-point 4x4 transformation matrix stored in column-major order.
 		/// </summary>
 		public Matrix4x4 Matrix = Matrix4x4.Identity;
+		public bool HasMatrix;
 
 		/// <summary>
 		/// The index of the mesh in this node.
@@ -107,6 +108,7 @@ namespace GLTF.Schema
 				Skin = new SkinId(node.Skin, gltfRoot);
 			}
 
+			HasMatrix = node.HasMatrix;
 			if (node.Matrix != null)
 			{
 				Matrix = new Matrix4x4(node.Matrix);
@@ -187,6 +189,7 @@ namespace GLTF.Schema
 							);
 
 						node.Matrix = mat;
+						node.HasMatrix = true;
 						break;
 					case "mesh":
 						node.Mesh = MeshId.Deserialize(root, reader);
@@ -242,7 +245,7 @@ namespace GLTF.Schema
 				writer.WriteValue(Skin.Id);
 			}
 
-			if (Matrix != Matrix4x4.Identity)
+			if (HasMatrix || (Matrix != null && !Matrix.Equals(Matrix4x4.Identity)))
 			{
 				writer.WritePropertyName("matrix");
 				writer.WriteStartArray();

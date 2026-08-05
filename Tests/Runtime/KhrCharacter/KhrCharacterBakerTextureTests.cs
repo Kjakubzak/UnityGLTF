@@ -62,8 +62,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         [UnityTest]
         public IEnumerator Controller_AppliesUvToMaterialPropertyBlock()
         {
-            var shader = Shader.Find("Unlit/Texture");
-            if (shader == null) { Assert.Ignore("No suitable built-in shader available in this project."); yield break; }
+            var shader = FindTestShader();
 
             var go = new GameObject("quad", typeof(MeshFilter), typeof(MeshRenderer));
             _created.Add(go);
@@ -100,6 +99,164 @@ namespace UnityGLTF.KhrCharacter.Tests
             var mpb = new MaterialPropertyBlock();
             mr.GetPropertyBlock(mpb, 0);
             AssertV4(new Vector4(1f, 1f, 1f, 0f), mpb.GetVector(propId)); // base (1,1,0,0) + delta (0,0,1,0)
+        }
+
+        [UnityTest]
+        public IEnumerator SharedGltfMaterial_FansOutToEveryRendererUse()
+        {
+            var shader = FindTestShader();
+
+            var material = new Material(shader);
+            _created.Add(material);
+            var first = MakeRenderer();
+            var second = MakeRenderer();
+            first.sharedMaterial = material;
+            second.sharedMaterial = material;
+
+            var root = new GLTFRoot
+            {
+                Meshes = new List<GLTFMesh>(),
+                Nodes = new List<Node>(),
+            };
+            root.Meshes.Add(new GLTFMesh
+            {
+                Primitives = new List<MeshPrimitive>
+                {
+                    new MeshPrimitive { Material = new MaterialId { Id = 0, Root = root } },
+                },
+            });
+            root.Nodes.Add(new Node { Mesh = new MeshId { Id = 0, Root = root } });
+            root.Nodes.Add(new Node { Mesh = new MeshId { Id = 0, Root = root } });
+            var nodeObjects = new Dictionary<int, GameObject>
+            {
+                [0] = first.gameObject,
+                [1] = second.gameObject,
+            };
+
+            var bindings = KhrCharacterBaker.ResolveRendererSlots(root, nodeObjects, 0);
+            Assert.That(bindings, Has.Count.EqualTo(2));
+
+            int propId = Shader.PropertyToID("_MainTex_ST");
+            var baseSt = new Vector4(1f, 1f, 0f, 0f);
+            var stValues = new[] { baseSt, new Vector4(1f, 1f, 0.5f, 0f) };
+            var drivers = new List<TextureDriver>();
+            foreach (var binding in bindings)
+                KhrCharacterBaker.BuildUvTransformDriver(
+                    binding.Renderer,
+                    binding.Slot,
+                    propId,
+                    new[] { 0f, 1f },
+                    stValues,
+                    baseSt,
+                    InterpolationType.LINEAR,
+                    drivers,
+                    "_MainTex",
+                    "pbrMetallicRoughness/baseColorTexture",
+                    TextureTransformTarget.Offset);
+
+            var set = new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack
+                    {
+                        Name = "scroll",
+                        Domains = ExpressionDomain.Texture,
+                        TextureDrivers = drivers.ToArray(),
+                    },
+                },
+            };
+            set.RebuildIndex();
+            var controller = first.gameObject.AddComponent<ExpressionController>();
+            controller.Initialize(set);
+            controller.SetWeight("scroll", 1f);
+            yield return null;
+
+            var block = new MaterialPropertyBlock();
+            first.GetPropertyBlock(block, 0);
+            AssertV4(stValues[1], block.GetVector(propId));
+            block.Clear();
+            second.GetPropertyBlock(block, 0);
+            AssertV4(stValues[1], block.GetVector(propId));
+        }
+
+        [UnityTest]
+        public IEnumerator ScaleAndOffset_KeepIndependentSamplers()
+        {
+            var shader = FindTestShader();
+
+            var renderer = MakeRenderer();
+            var material = new Material(shader);
+            _created.Add(material);
+            renderer.sharedMaterial = material;
+            int propId = Shader.PropertyToID("_MainTex_ST");
+            var baseSt = new Vector4(1f, 1f, 0f, 0f);
+            var drivers = new List<TextureDriver>();
+
+            KhrCharacterBaker.BuildUvTransformDriver(
+                renderer,
+                0,
+                propId,
+                new[] { 0f, 1f },
+                new[] { baseSt, new Vector4(2f, 2f, 0f, -1f) },
+                baseSt,
+                InterpolationType.LINEAR,
+                drivers,
+                transformTarget: TextureTransformTarget.Scale);
+            KhrCharacterBaker.BuildUvTransformDriver(
+                renderer,
+                0,
+                propId,
+                new[] { 0f, 0.25f, 1f },
+                new[]
+                {
+                    baseSt,
+                    new Vector4(1f, 1f, 0.25f, 0f),
+                    new Vector4(1f, 1f, 0.75f, 0f),
+                },
+                baseSt,
+                InterpolationType.STEP,
+                drivers,
+                transformTarget: TextureTransformTarget.Offset);
+
+            Assert.That(drivers, Has.Count.EqualTo(2));
+            Assert.That(drivers[0].Sampler.Times, Has.Length.EqualTo(2));
+            Assert.That(drivers[0].Sampler.Interp, Is.EqualTo(Interp.Linear));
+            Assert.That(drivers[0].TransformTarget, Is.EqualTo(TextureTransformTarget.Scale));
+            Assert.That(drivers[1].Sampler.Times, Has.Length.EqualTo(3));
+            Assert.That(drivers[1].Sampler.Interp, Is.EqualTo(Interp.Step));
+            Assert.That(drivers[1].TransformTarget, Is.EqualTo(TextureTransformTarget.Offset));
+
+            var set = new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack
+                    {
+                        Name = "mixedUv",
+                        Domains = ExpressionDomain.Texture,
+                        TextureDrivers = drivers.ToArray(),
+                    },
+                },
+            };
+            set.RebuildIndex();
+            var controller = renderer.gameObject.AddComponent<ExpressionController>();
+            controller.Initialize(set);
+            controller.SetWeight("mixedUv", 0.5f);
+            yield return null;
+
+            var block = new MaterialPropertyBlock();
+            renderer.GetPropertyBlock(block, 0);
+            AssertV4(new Vector4(1.5f, 1.5f, 0.25f, -0.5f), block.GetVector(propId));
+        }
+
+        private static Shader FindTestShader()
+        {
+            var shader = Shader.Find("Unlit/Texture")
+                ?? Shader.Find("Standard")
+                ?? Shader.Find("Hidden/InternalErrorShader");
+            Assert.IsNotNull(shader, "A deterministic built-in shader is required for texture adapter tests.");
+            return shader;
         }
 
         private static void AssertV4(Vector4 e, Vector4 a)
