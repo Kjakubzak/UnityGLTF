@@ -275,6 +275,7 @@ namespace UnityGLTF.KhrCharacter
 
         public void ResetAll()
         {
+            _vocabWeights.Clear();
             if (_weights == null) return;
             for (int i = 0; i < _weights.Length; i++)
             {
