@@ -51,7 +51,6 @@ namespace UnityGLTF
 					newLight.spotAngle = (float) light.Spot.OuterConeAngle * 2 / Mathf.Deg2Rad;
 				}
 
-				nodeObj.transform.localRotation *= SchemaExtensions.InvertDirection;
 				return true;
 			}
 

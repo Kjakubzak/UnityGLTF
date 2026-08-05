@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Reflection;
 using System.Text.RegularExpressions;
 using GLTF.Schema;
 using Newtonsoft.Json.Linq;
@@ -60,6 +61,13 @@ namespace UnityGLTF.KhrCharacter.Tests
             var exporter = new GLTFSceneExporter(transforms, new ExportContext(settings));
             exporter.SaveGLBToByteArray("scene");
             return exporter.GetRoot();
+        }
+
+        private static void ClearLiveDescriptorMirror<T>(object component, string fieldName)
+        {
+            var field = component.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(field);
+            ((List<T>)field.GetValue(component)).Clear();
         }
 
         // Resolves the output accessor backing an animation channel's sampler.
@@ -1415,16 +1423,16 @@ namespace UnityGLTF.KhrCharacter.Tests
         [Test]
         public void LookatTargetExport_EmitsNodeExtension()
         {
-            // A GazeSolver authored target exports as a KHR_node_lookat_target on the target's node, carrying hint.
-            // Declared used, never required.
+            // A passive marker set exports KHR_node_lookat_target on the target's node, carrying hint. Newly
+            // authored markers are declared used-only.
             var root = new GameObject("char");
             _created.Add(root);
             root.AddComponent<KhrCharacter>();
 
             var targetNode = new GameObject("gazeTarget").transform; targetNode.SetParent(root.transform, false);
 
-            root.AddComponent<GazeSolver>().Bind(
-                new List<LookAtTarget> { new LookAtTarget { Node = targetNode, Hint = "eye_target" } }, null);
+            root.AddComponent<LookAtTargetSet>().Bind(
+                new List<LookAtTarget> { new LookAtTarget { Node = targetNode, Hint = "eye_target" } });
 
             var gltf = ExportToGltfRoot(root);
 
@@ -1437,7 +1445,102 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsTrue(gltf.ExtensionsUsed != null && gltf.ExtensionsUsed.Contains(KHR_node_lookat_target.EXTENSION_NAME),
                 "KHR_node_lookat_target must be declared in extensionsUsed");
             Assert.IsTrue(gltf.ExtensionsRequired == null || !gltf.ExtensionsRequired.Contains(KHR_node_lookat_target.EXTENSION_NAME),
-                "KHR_node_lookat_target must NOT be required (neutrality)");
+                "newly authored look-at markers are used-only");
+        }
+
+        [Test]
+        public void StandaloneNodeAnnotations_ExportWithoutCharacterExtension()
+        {
+            var root = new GameObject("ordinaryAsset");
+            _created.Add(root);
+            var cameraNode = new GameObject("cameraHint").transform; cameraNode.SetParent(root.transform, false);
+            var markerNode = new GameObject("marker").transform; markerNode.SetParent(root.transform, false);
+
+            var cameraSet = root.AddComponent<CameraHintSet>();
+            cameraSet.Bind(new List<CameraHint>
+            {
+                new CameraHint { Role = "detail", Node = cameraNode, Target = markerNode },
+            });
+            var lookAtSet = root.AddComponent<LookAtTargetSet>();
+            lookAtSet.Bind(new List<LookAtTarget>
+            {
+                new LookAtTarget { Node = markerNode, Hint = "camera_target" },
+            });
+
+            // Imported prefab assets can be exported in edit mode before Awake rebuilds the live mirrors.
+            ClearLiveDescriptorMirror<CameraHint>(cameraSet, "_hints");
+            ClearLiveDescriptorMirror<LookAtTarget>(lookAtSet, "_targets");
+
+            var gltf = ExportToGltfRoot(root);
+
+            Assert.IsNotNull(NodeExtension<KHR_node_camera_hint>(
+                gltf, FindNodeIndex(gltf, "cameraHint"), KHR_node_camera_hint.EXTENSION_NAME));
+            Assert.IsNotNull(NodeExtension<KHR_node_lookat_target>(
+                gltf, FindNodeIndex(gltf, "marker"), KHR_node_lookat_target.EXTENSION_NAME));
+            Assert.IsTrue(gltf.Extensions == null || !gltf.Extensions.ContainsKey(KHR_character.EXTENSION_NAME),
+                "standalone annotations must not synthesize a KHR_character root designation");
+            Assert.IsTrue(gltf.ExtensionsUsed == null || !gltf.ExtensionsUsed.Contains(KHR_character.EXTENSION_NAME));
+        }
+
+        [Test]
+        public void LookAtRequiredAndPayloadProvenance_SurviveDuplicateSetOrdering()
+        {
+            var root = new GameObject("ordinaryAsset");
+            _created.Add(root);
+            var marker = new GameObject("marker").transform; marker.SetParent(root.transform, false);
+            var requiredSetHost = new GameObject("requiredSetHost");
+            requiredSetHost.transform.SetParent(root.transform, false);
+
+            // The used-only duplicate is discovered first. Requiredness is root-level and must still be upgraded.
+            root.AddComponent<LookAtTargetSet>().Bind(new List<LookAtTarget>
+            {
+                new LookAtTarget { Node = marker, Hint = "used_first" },
+            });
+            requiredSetHost.AddComponent<LookAtTargetSet>().Bind(new List<LookAtTarget>
+            {
+                new LookAtTarget
+                {
+                    Node = marker,
+                    Hint = "required_second",
+                    ExtensionsJson = "{\"ACME_marker_payload\":{\"version\":1}}",
+                    ExtrasJson = "{\"tag\":\"hero\"}",
+                    AdditionalPropertiesJson = "{\"futureMarkerField\":true}",
+                    RequiredCompanionExtensions = new[] { "ACME_marker_payload" },
+                },
+            }, requiredOnImport: true);
+
+            LogAssert.Expect(LogType.Warning, new Regex("already carries extension 'KHR_node_lookat_target'"));
+            var gltf = ExportToGltfRoot(root);
+            Assert.IsTrue(gltf.ExtensionsRequired.Contains(KHR_node_lookat_target.EXTENSION_NAME),
+                "an imported required declaration must survive duplicate ordering");
+
+            // Duplicate extension objects cannot coexist on one node, so the first descriptor wins. Exercise the
+            // payload path separately on a distinct required marker in the same set.
+            var payloadMarker = new GameObject("payloadMarker").transform;
+            payloadMarker.SetParent(requiredSetHost.transform, false);
+            requiredSetHost.GetComponent<LookAtTargetSet>().Bind(new List<LookAtTarget>
+            {
+                new LookAtTarget
+                {
+                    Node = payloadMarker,
+                    Hint = "payload",
+                    ExtensionsJson = "{\"ACME_marker_payload\":{\"version\":1}}",
+                    ExtrasJson = "{\"tag\":\"hero\"}",
+                    AdditionalPropertiesJson = "{\"futureMarkerField\":true}",
+                    RequiredCompanionExtensions = new[] { "ACME_marker_payload" },
+                },
+            }, requiredOnImport: true);
+
+            gltf = ExportToGltfRoot(root);
+            var ext = NodeExtension<KHR_node_lookat_target>(
+                gltf, FindNodeIndex(gltf, "payloadMarker"), KHR_node_lookat_target.EXTENSION_NAME);
+            Assert.IsNotNull(ext);
+            var wire = (JObject)ext.Serialize().Value;
+            Assert.AreEqual(1, wire["extensions"]?["ACME_marker_payload"]?["version"]?.Value<int>());
+            Assert.AreEqual("hero", wire["extras"]?["tag"]?.Value<string>());
+            Assert.IsTrue(wire["futureMarkerField"]?.Value<bool>() == true);
+            Assert.IsTrue(gltf.ExtensionsUsed.Contains("ACME_marker_payload"));
+            Assert.IsTrue(gltf.ExtensionsRequired.Contains("ACME_marker_payload"));
         }
 
         [Test]
@@ -1456,8 +1559,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             {
                 new CameraHint { Role = "orbit", Label = "Orbit", Node = camNode, Target = faceNode },
             });
-            root.AddComponent<GazeSolver>().Bind(
-                new List<LookAtTarget> { new LookAtTarget { Node = faceNode, Hint = "gaze" } }, null);
+            root.AddComponent<LookAtTargetSet>().Bind(
+                new List<LookAtTarget> { new LookAtTarget { Node = faceNode, Hint = "gaze" } });
 
             var gltf = ExportToGltfRoot(root);
 
@@ -1613,11 +1716,11 @@ namespace UnityGLTF.KhrCharacter.Tests
             var emptyHintNode = new GameObject("emptyHintNode").transform; emptyHintNode.SetParent(root.transform, false);
             var validHintNode = new GameObject("validHintNode").transform; validHintNode.SetParent(root.transform, false);
 
-            root.AddComponent<GazeSolver>().Bind(new List<LookAtTarget>
+            root.AddComponent<LookAtTargetSet>().Bind(new List<LookAtTarget>
             {
                 new LookAtTarget { Node = emptyHintNode, Hint = "" },           // empty hint -> omitted, {} stays valid
                 new LookAtTarget { Node = validHintNode, Hint = "eye_target" }, // valid hint -> kept
-            }, null);
+            });
 
             var gltf = ExportToGltfRoot(root);
 
@@ -1642,8 +1745,8 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             var targetNode = new GameObject("gazeTarget").transform; targetNode.SetParent(root.transform, false);
 
-            root.AddComponent<GazeSolver>().Bind(
-                new List<LookAtTarget> { new LookAtTarget { Node = targetNode, Hint = null } }, null);
+            root.AddComponent<LookAtTargetSet>().Bind(
+                new List<LookAtTarget> { new LookAtTarget { Node = targetNode, Hint = null } });
 
             var gltf = ExportToGltfRoot(root);
 
@@ -1653,10 +1756,9 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void GazeSolver_NoAuthoredTargets_EmitsNothing()
+        public void GazeSolver_DoesNotAuthorLookAtMarkers()
         {
-            // A GazeSolver with zero authored targets (it is attached whenever expressions exist) must emit no
-            // KHR_node_lookat_target on any node, and must not declare the extension.
+            // The optional host adapter is not marker storage and must not cause KHR_node_lookat_target export.
             var root = new GameObject("char");
             _created.Add(root);
             var ctrl = new GameObject("ctrl").transform; ctrl.SetParent(root.transform, false);
@@ -1667,7 +1769,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                     new ExpressionTrack { Name = "blink", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) } },
                 },
             });
-            root.AddComponent<GazeSolver>().Bind(new List<LookAtTarget>(), null);   // no authored targets
+            root.AddComponent<GazeSolver>().Bind(root.GetComponent<ExpressionController>());
 
             var gltf = ExportToGltfRoot(root);
 

@@ -4,14 +4,17 @@ using UnityEngine;
 namespace UnityGLTF.KhrCharacter
 {
     /// <summary>
-    /// Exposes authored <c>KHR_node_camera_hint</c> entries and, on request, drives a caller-supplied camera.
-    /// Advisory only — it never creates or takes over a camera.
+    /// Exposes passive <c>KHR_node_camera_hint</c> descriptors. <see cref="Apply"/> is one optional Unity host
+    /// adapter with a world-up policy; the extension itself does not select, create, activate, or drive a camera.
     /// </summary>
     [DisallowMultipleComponent]
     public class CameraHintSet : MonoBehaviour
     {
         private readonly List<CameraHint> _hints = new List<CameraHint>();
-        public IReadOnlyList<CameraHint> Hints => _hints;
+        public IReadOnlyList<CameraHint> Hints
+            => _hints.Count > 0
+                ? _hints
+                : (_serializedHints ?? (IReadOnlyList<CameraHint>)System.Array.Empty<CameraHint>());
 
         // Persisted so an editor-imported prefab can rehydrate on Awake (the live import calls Bind, which also
         // stores here). CameraHint is [Serializable] and its Transform/Camera refs survive prefab serialization.
@@ -35,15 +38,18 @@ namespace UnityGLTF.KhrCharacter
 
         public bool TryGetByRole(string role, out CameraHint hint)
         {
-            for (int i = 0; i < _hints.Count; i++)
+            foreach (var candidate in Hints)
             {
-                if (_hints[i] != null && _hints[i].Role == role) { hint = _hints[i]; return true; }
+                if (candidate != null && candidate.Role == role) { hint = candidate; return true; }
             }
             hint = null;
             return false;
         }
 
-        /// <summary>Move a caller-supplied camera to the hint.</summary>
+        /// <summary>
+        /// Applies a descriptor to a caller-supplied camera using Unity world-up for a noncoincident target.
+        /// Selection, roll, projection adaptation, timing, and ownership remain host policy.
+        /// </summary>
         public void Apply(CameraHint hint, Camera camera, bool copyProjection = true)
         {
             if (hint == null || camera == null || hint.Node == null) return;
@@ -54,13 +60,11 @@ namespace UnityGLTF.KhrCharacter
                 if (dir.sqrMagnitude > 1e-12f)
                     camera.transform.SetPositionAndRotation(hint.Node.position, Quaternion.LookRotation(dir, Vector3.up));
                 else
-                    camera.transform.position = hint.Node.position; // target coincides with the node: keep orientation
+                    ApplyAuthoredPose(hint, camera);
             }
             else
             {
-                // A camera-hint node is a plain transform; glTF cameras look down -Z, which UnityGLTF resolves
-                // by applying a 180-degree Y rotation to imported camera nodes (ImporterCameras.cs). Match that.
-                camera.transform.SetPositionAndRotation(hint.Node.position, hint.Node.rotation * Quaternion.Euler(0f, 180f, 0f));
+                ApplyAuthoredPose(hint, camera);
             }
 
             if (copyProjection && hint.Projection != null)
@@ -69,7 +73,18 @@ namespace UnityGLTF.KhrCharacter
                 camera.nearClipPlane = hint.Projection.nearClipPlane;
                 camera.farClipPlane = hint.Projection.farClipPlane;
                 camera.orthographic = hint.Projection.orthographic;
+                camera.orthographicSize = hint.Projection.orthographicSize;
             }
+        }
+
+        private static void ApplyAuthoredPose(CameraHint hint, Camera camera)
+        {
+            // A plain glTF transform uses -Z camera forward, while a node whose core camera or punctual light was
+            // imported has already received UnityGLTF's shared forward-axis conversion.
+            var rotation = hint.NodeTransformHasForwardAxisConversion
+                ? hint.Node.rotation
+                : hint.Node.rotation * Quaternion.Euler(0f, 180f, 0f);
+            camera.transform.SetPositionAndRotation(hint.Node.position, rotation);
         }
     }
 }

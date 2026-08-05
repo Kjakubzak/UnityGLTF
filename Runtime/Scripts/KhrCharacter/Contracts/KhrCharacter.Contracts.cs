@@ -310,12 +310,26 @@ namespace UnityGLTF.KhrCharacter
         public string Role;
         public string Label;
         public Transform Node;
-        public Camera Projection;   // optional referenced camera (FOV/clip)
+        public Camera Projection;   // optional host-bound representation of the advisory camera definition
         public Transform Target;    // optional targetNode
+        [UnityEngine.Serialization.FormerlySerializedAs("NodeUsesUnityCameraOrientation")]
+        public bool NodeTransformHasForwardAxisConversion;
+        public string ExtensionsJson;
+        public string ExtrasJson;
+        public string AdditionalPropertiesJson;
+        public string[] RequiredCompanionExtensions;
     }
 
     [Serializable]
-    public class LookAtTarget { public Transform Node; public string Hint; }
+    public class LookAtTarget
+    {
+        public Transform Node;
+        public string Hint;
+        public string ExtensionsJson;
+        public string ExtrasJson;
+        public string AdditionalPropertiesJson;
+        public string[] RequiredCompanionExtensions;
+    }
 
     // ── Evaluator policy implemented by the runtime ExpressionController ──────
     public interface IExpressionSemantics

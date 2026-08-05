@@ -32,15 +32,17 @@ namespace UnityGLTF.KhrCharacter
         {
             try
             {
+                // These node annotations are independent extensions with no KHR_character dependency. Export
+                // every authored set under the selected export roots even when no character designation exists.
+                ExportNodeFeatures(exporter, gltfRoot);
+
                 // Find the character root and components (edit-time safe)
                 var root = FindCharacterRoot(exporter);
                 if (root == null) return;
 
-                var controller = root.GetComponentInChildren<ExpressionController>();
-                var skeleton = root.GetComponentInChildren<SkeletonMap>();
-                // Node-feature components: include-inactive (imported roots are often inactive at edit time).
-                var cameraHints = root.GetComponentInChildren<CameraHintSet>(true);
-                var gaze = root.GetComponentInChildren<GazeSolver>(true);
+                var controller = root.GetComponentInChildren<ExpressionController>(true);
+                var skeleton = root.GetComponentInChildren<SkeletonMap>(true);
+                var hasDesignation = root.GetComponentInChildren<KhrCharacter>(true) != null;
 
                 // Source of truth: prefer live, fall back to baked (edit-time safety)
                 var expressionSet = controller?.Set ?? controller?.BakedSet;
@@ -49,12 +51,8 @@ namespace UnityGLTF.KhrCharacter
                 bool hasExpressions = expressionSet?.Expressions != null && expressionSet.Expressions.Length > 0;
                 bool hasSkeleton = HasSkeletonMappings(skeletonResult);
                 bool hasReferencePose = HasReferencePoses(skeletonResult);
-                // F6: a character may carry node-level features (camera hints / look-at targets) even without
-                // expressions/skeleton — include them in the gate so the root KHR_character + node extensions still emit.
-                bool hasNodeFeatures = (cameraHints?.Hints != null && cameraHints.Hints.Count > 0)
-                    || (gaze?.AuthoredTargets != null && gaze.AuthoredTargets.Count > 0);
 
-                if (!hasExpressions && !hasSkeleton && !hasReferencePose && !hasNodeFeatures)
+                if (!hasDesignation && !hasExpressions && !hasSkeleton && !hasReferencePose)
                 {
                     // Nothing to export
                     return;
@@ -90,8 +88,6 @@ namespace UnityGLTF.KhrCharacter
                     }
                 }
 
-                // F6: Export node-level features (camera hints / look-at targets) from the runtime components.
-                ExportNodeFeatures(exporter, gltfRoot, cameraHints, gaze);
             }
             catch (Exception ex)
             {
@@ -179,81 +175,135 @@ namespace UnityGLTF.KhrCharacter
             exporter.DeclareExtensionUsage(KHR_character.EXTENSION_NAME, isRequired: false);
         }
 
-        // F6: emits the node-level KHR character extensions (KHR_node_camera_hint / KHR_node_lookat_target) from the
-        // runtime components, mirroring how core export emits KHR_node_visibility (node.AddExtension +
-        // DeclareExtensionUsage, never required — GLTFSceneExporter.cs). Both are official KHR node extensions, so a
-        // plain viewer ignores unknown node extensions and renders normally. Node identity round-trips because the
-        // hint/target nodes are ordinary nodes in the exported hierarchy. Iterates in stored order for determinism.
+        // Emits the independent KHR_node_camera_hint / KHR_node_lookat_target extensions from every passive set
+        // under the selected export roots. Node identity round-trips because entries refer to ordinary exported
+        // Transforms. Newly authored look-at sets are used-only; imported required provenance is preserved.
         //
         // Camera-index boundary: KHR_node_camera_hint.camera is OMITTED unless the referenced Camera was already
         // exported onto its own node (we only READ gltfRoot.Nodes[camNode].Camera.Id). GLTFSceneExporter.ExportCamera
-        // is PRIVATE and there is no public GetCameraId, so we never force-export a camera here — spec-legal since
-        // `camera` is optional. Import also does not populate CameraHint.Projection today, so in practice `camera` is
-        // omitted; closing that round-trip is a separate, optional add-on (role/label/targetNode/hint DO round-trip).
-        private void ExportNodeFeatures(GLTFSceneExporter exporter, GLTFRoot gltfRoot, CameraHintSet cameraHints, GazeSolver gaze)
+        // is private and there is no public GetCameraId, so we never force-export a camera here. Import binds
+        // Projection when the referenced definition is also instantiated by an ordinary core camera node.
+        private void ExportNodeFeatures(GLTFSceneExporter exporter, GLTFRoot gltfRoot)
         {
-            if (cameraHints?.Hints != null)
+            var roots = exporter?.RootTransforms;
+            if (roots == null) return;
+
+            // Requiredness is a root-level declaration. Aggregate it before emitting so duplicate-set traversal
+            // cannot lose imported required provenance when a used-only entry for the same node emits first.
+            bool lookAtRequired = false;
+            foreach (var root in roots)
             {
-                foreach (var hint in cameraHints.Hints)
-                {
-                    if (hint?.Node == null) continue;
-                    int nodeIdx = exporter.GetTransformIndex(hint.Node);
-                    if (nodeIdx < 0)
-                    {
-                        Debug.LogWarning($"[KHR_character] Camera-hint node '{hint.Node.name}' is not part of the export; skipping.");
-                        continue;
-                    }
-
-                    // KHR_node_camera_hint.role is spec-required (minLength:1) and cannot be omitted, so a hint with
-                    // no role could only ever serialize as an invalid extension. Skip it entirely (mirrors the
-                    // not-in-export guard above and the importer's missing-role warning) — never emit an empty role.
-                    if (string.IsNullOrEmpty(hint.Role))
-                    {
-                        Debug.LogWarning($"[KHR_character] Camera-hint node '{hint.Node.name}' has no 'role' (spec-required, minLength:1); skipping its camera hint.");
-                        continue;
-                    }
-
-                    var ext = new KHR_node_camera_hint { Role = hint.Role, Label = hint.Label };
-
-                    if (hint.Target != null)
-                    {
-                        int targetIdx = exporter.GetTransformIndex(hint.Target);
-                        // Spec: a camera hint MUST NOT reference its own node; omit self / out-of-export targets.
-                        if (targetIdx >= 0 && targetIdx != nodeIdx) ext.TargetNode = targetIdx;
-                    }
-
-                    // Best-effort optional camera index (see boundary note above): only when the referenced camera's
-                    // node was already exported with a camera. Never calls the private ExportCamera.
-                    if (hint.Projection != null)
-                    {
-                        int camNodeIdx = exporter.GetTransformIndex(hint.Projection.transform);
-                        if (camNodeIdx >= 0 && gltfRoot.Nodes[camNodeIdx].Camera != null)
-                            ext.Camera = gltfRoot.Nodes[camNodeIdx].Camera.Id;
-                    }
-
-                    if (TryAddNodeExtension(gltfRoot, nodeIdx, KHR_node_camera_hint.EXTENSION_NAME, ext))
-                        exporter.DeclareExtensionUsage(KHR_node_camera_hint.EXTENSION_NAME, isRequired: false);
-                }
+                if (root == null) continue;
+                foreach (var set in root.GetComponentsInChildren<LookAtTargetSet>(true))
+                    if (set != null) lookAtRequired |= set.RequiredOnImport;
             }
 
-            if (gaze?.AuthoredTargets != null)
+            var visitedCameraSets = new HashSet<CameraHintSet>();
+            var visitedLookAtSets = new HashSet<LookAtTargetSet>();
+            foreach (var root in roots)
             {
-                foreach (var target in gaze.AuthoredTargets)
+                if (root == null) continue;
+                foreach (var cameraHints in root.GetComponentsInChildren<CameraHintSet>(true))
                 {
-                    if (target?.Node == null) continue;
-                    int nodeIdx = exporter.GetTransformIndex(target.Node);
-                    if (nodeIdx < 0)
-                    {
-                        Debug.LogWarning($"[KHR_character] Look-at target node '{target.Node.name}' is not part of the export; skipping.");
+                    if (cameraHints == null || !visitedCameraSets.Add(cameraHints) || cameraHints.Hints == null)
                         continue;
-                    }
+                    foreach (var hint in cameraHints.Hints)
+                    {
+                        if (hint?.Node == null) continue;
+                        int nodeIdx = exporter.GetTransformIndex(hint.Node);
+                        if (nodeIdx < 0)
+                        {
+                            Debug.LogWarning($"[KHR_character] Camera-hint node '{hint.Node.name}' is not part of the export; skipping.");
+                            continue;
+                        }
 
-                    // An empty {} is valid: presence alone marks the node as a look-at target; hint is optional.
-                    if (TryAddNodeExtension(gltfRoot, nodeIdx, KHR_node_lookat_target.EXTENSION_NAME,
-                            new KHR_node_lookat_target { Hint = target.Hint }))
-                        exporter.DeclareExtensionUsage(KHR_node_lookat_target.EXTENSION_NAME, isRequired: false);
+                        // KHR_node_camera_hint.role is spec-required (minLength:1); never emit an invalid object.
+                        if (string.IsNullOrEmpty(hint.Role))
+                        {
+                            Debug.LogWarning($"[KHR_character] Camera-hint node '{hint.Node.name}' has no 'role' (spec-required, minLength:1); skipping its camera hint.");
+                            continue;
+                        }
+
+                        var companionExtensions = ParseObject(hint.ExtensionsJson);
+                        var ext = new KHR_node_camera_hint
+                        {
+                            Role = hint.Role,
+                            Label = hint.Label,
+                            Extensions = companionExtensions,
+                            Extras = ParseToken(hint.ExtrasJson),
+                            AdditionalProperties = ParseObject(hint.AdditionalPropertiesJson),
+                        };
+
+                        if (hint.Target != null)
+                        {
+                            int targetIdx = exporter.GetTransformIndex(hint.Target);
+                            // Spec: a camera hint MUST NOT reference its own node; omit self / out-of-export targets.
+                            if (targetIdx >= 0 && targetIdx != nodeIdx) ext.TargetNode = targetIdx;
+                        }
+
+                        // Best-effort optional camera index (see boundary note above): only when the referenced camera's
+                        // node was already exported with a camera. Never calls the private ExportCamera.
+                        if (hint.Projection != null)
+                        {
+                            int camNodeIdx = exporter.GetTransformIndex(hint.Projection.transform);
+                            if (camNodeIdx >= 0 && gltfRoot.Nodes[camNodeIdx].Camera != null)
+                                ext.Camera = gltfRoot.Nodes[camNodeIdx].Camera.Id;
+                        }
+
+                        if (TryAddNodeExtension(gltfRoot, nodeIdx, KHR_node_camera_hint.EXTENSION_NAME, ext))
+                        {
+                            // Camera hints MUST NOT be required.
+                            exporter.DeclareExtensionUsage(KHR_node_camera_hint.EXTENSION_NAME, isRequired: false);
+                            DeclareCompanionExtensions(exporter, companionExtensions, hint.RequiredCompanionExtensions);
+                        }
+                    }
+                }
+
+                foreach (var lookAtTargets in root.GetComponentsInChildren<LookAtTargetSet>(true))
+                {
+                    if (lookAtTargets == null || !visitedLookAtSets.Add(lookAtTargets) || lookAtTargets.Targets == null)
+                        continue;
+                    foreach (var target in lookAtTargets.Targets)
+                    {
+                        if (target?.Node == null) continue;
+                        int nodeIdx = exporter.GetTransformIndex(target.Node);
+                        if (nodeIdx < 0)
+                        {
+                            Debug.LogWarning($"[KHR_character] Look-at target node '{target.Node.name}' is not part of the export; skipping.");
+                            continue;
+                        }
+
+                        var companionExtensions = ParseObject(target.ExtensionsJson);
+                        // An empty {} is valid: presence alone marks the node as a look-at target; hint is optional.
+                        if (TryAddNodeExtension(gltfRoot, nodeIdx, KHR_node_lookat_target.EXTENSION_NAME,
+                                new KHR_node_lookat_target
+                                {
+                                    Hint = target.Hint,
+                                    Extensions = companionExtensions,
+                                    Extras = ParseToken(target.ExtrasJson),
+                                    AdditionalProperties = ParseObject(target.AdditionalPropertiesJson),
+                                }))
+                        {
+                            exporter.DeclareExtensionUsage(
+                                KHR_node_lookat_target.EXTENSION_NAME,
+                                isRequired: lookAtRequired);
+                            DeclareCompanionExtensions(
+                                exporter, companionExtensions, target.RequiredCompanionExtensions);
+                        }
+                    }
                 }
             }
+        }
+
+        private static void DeclareCompanionExtensions(
+            GLTFSceneExporter exporter, JObject extensions, string[] requiredExtensions)
+        {
+            if (extensions == null) return;
+            var required = requiredExtensions != null
+                ? new HashSet<string>(requiredExtensions)
+                : new HashSet<string>();
+            foreach (var extension in extensions.Properties())
+                exporter.DeclareExtensionUsage(extension.Name, required.Contains(extension.Name));
         }
 
         // Node.AddExtension throws if the key already exists. A node may legitimately carry BOTH a camera hint and a

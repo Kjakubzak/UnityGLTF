@@ -11,15 +11,17 @@ Runtime, import, and export support for the Khronos Character/Avatar extension s
 ## What it does
 
 On import of a glTF whose root carries `KHR_character`, the plugin attaches a small set of components under
-a single `KhrCharacter` hub component:
+a single `KhrCharacter` hub component. The independent camera-hint and look-at-target node extensions also
+import on ordinary glTF assets without a character root.
 
 | Component | Responsibility |
 |---|---|
 | `KhrCharacter` | Hub: capability list, readiness, references to the components below. |
 | `ExpressionController` | Drives morph / joint / texture expressions each frame (`Components/ExpressionController.cs`). |
 | `SkeletonMap` | Holds the resolved vocabulary→bone mapping + reference pose; can (re)build a Unity humanoid Avatar. |
-| `GazeSolver` | Spec-aligned, **expression-driven** gaze: drives look-* expression weights toward a target, measured against a `ReferenceFrame` (see [Gaze / look-at](#gaze--look-at)). |
-| `CameraHintSet` | Advisory camera framing hints (never creates or owns a camera). |
+| `LookAtTargetSet` | Passive live `Transform` markers for `KHR_node_lookat_target`; never selects or drives a consumer. |
+| `CameraHintSet` | Passive advisory camera descriptors (never creates, owns, selects, or activates a camera). |
+| `GazeSolver` | Optional Unity host adapter with an application-configured target, expression vocabulary, and response curve. It is never auto-created by import. |
 | `ViewModeController` | First/third-person view utility (no extension required). |
 
 Capabilities are derived from the extensions actually present and the data actually baked
@@ -33,8 +35,9 @@ importing character assets:
 - **Project-wide:** Project Settings → UnityGLTF → Import → enable **"KHR Character / Avatar Extensions"**.
 - **Per-import (code):** enable the plugin on the `GLTFSettings`/import context you pass to the importer.
 
-When disabled, character assets still import as plain glTF; unknown extensions round-trip as
-`DefaultExtension` and are never rejected.
+When disabled, used-only extension data can still import as ordinary glTF metadata. An asset that lists a
+behavioral extension in `extensionsRequired` is rejected unless an enabled plugin claims its complete minimum
+support; schema recognition alone is not a support claim.
 
 ## Export
 
@@ -54,6 +57,8 @@ When enabled, the plugin writes the following extensions from a Unity character 
   - `KHR_character_expression_mapping`: Vocabulary mapping sets.
 - **`KHR_character_skeleton_mapping`**: Rig vocabulary → glTF node association dictionary (`{ vocabularyJoint: { node, name? } }`).
 - **`KHR_character_reference_pose`**: Reference pose animation (e.g., T-Pose) with bone TRS channels.
+- **`KHR_node_camera_hint` / `KHR_node_lookat_target`**: Independent passive node annotations. They export
+  from all matching sets under the selected export roots and do not synthesize `KHR_character`.
 
 ### Scope rule (facial expressions only)
 
@@ -99,12 +104,13 @@ loading in a third-party viewer; they are documented so consumers know what is a
   import baker reconstructs `Additive` + priority `0` regardless, so the exporter writes **no** vendor `extras`
   at all — the expression wire is fully Khronos-neutral. They may return later via a ratified representation. Each
   sub-extension lists its animation channels under the `channels` (plural) key.
-- **Camera hints / look-at targets export, but the camera projection index does not round-trip.** `CameraHintSet`
-  hints export as `KHR_node_camera_hint` (`role`, `label`, `targetNode`) and `GazeSolver` authored targets export
-  as `KHR_node_lookat_target` (`hint`); all of these round-trip. The optional `camera` index is **omitted** unless
-  the referenced camera was already exported onto its own node — `GLTFSceneExporter.ExportCamera` is private and
-  there is no public way to force-export a camera here, and import does not populate the projection link today.
-  `camera` is optional in the spec, so the omission is conformant.
+- **Camera hints / look-at targets preserve passive descriptor payloads.** `CameraHintSet` and
+  `LookAtTargetSet` preserve their known fields, `extensions`, `extras`, unknown same-object properties, and
+  required companion-extension provenance. Imported required look-at use is preserved; newly authored markers
+  are used-only, and camera hints are always used-only. The optional camera projection index round-trips when
+  the referenced camera definition is also instantiated by an ordinary exported core-camera node. A projection
+  definition with no instantiated Unity `Camera` cannot currently be force-exported because
+  `GLTFSceneExporter.ExportCamera` is private, so that optional reference is omitted.
 - **One `KHR_character` root designation per glTF asset.** `rootNode` identifies the author-selected character
   root; it does not assert scene membership, skin ownership, skeleton membership, descendant coverage, or that
   the asset contains only one character-like object. If an export set contains multiple character components,
@@ -205,34 +211,30 @@ the character stays in Generic mode and `HumanoidAvailable` remains false.
 
 ## Gaze / look-at
 
-`GazeSolver` is the **spec-aligned**, vendor-neutral gaze component. It is **expression-driven only**: it maps
-the angle between a gaze origin and the target onto the four look-direction expression weights
-(`lookLeft/Right/Up/Down`), each **saturating to 1 at 90°** (`saturate(angle / (π/2))`). It carries **no**
-eye-bone rotation and **no** non-spec clamps.
+`KHR_node_lookat_target` is implemented by `LookAtTargetSet`, a passive collection that exposes each evaluated
+marker instance and reads its current global position. Importing a marker never creates `GazeSolver`, assigns a
+consumer, or writes expression weights. Parent transforms and host-selected animation state naturally affect the
+reported point through the live Unity `Transform`.
+
+`GazeSolver` is a separate, explicitly configured Unity host adapter. It maps the angle between a host-selected
+origin and target onto four configured expression names, using this adapter's 90° saturation response. The marker
+extension defines none of that vocabulary, linking, selection, response, scheduling, or animation behavior.
 
 - **Reference frame (gaze origin).** `GazeSolver.ReferenceFrame` is an inspector-settable `Transform` resolved
   **explicit → mapped `head` bone → root transform**. Because it does not require a humanoid skeleton, a
   **non-humanoid** character drives look expressions by setting `ReferenceFrame` alone (no `SkeletonMap`). The
   field serializes with the prefab and is the explicit origin a future exporter reads/writes.
-- **Auto-detected look names.** At import the look directions bind to whichever expressions actually exist in
-  the baked set, using a vendor-neutral ordered candidate list per direction (camelCase / snake_case / eye-/
-  eyes-/gaze- prefixes — not VRM only); unmatched directions keep the default and stay inert (`SetWeight`
-  no-ops on unknown names). The names remain public/inspector-editable, so detection is overridable
-  (`KhrCharacterImportContext.BindLookExpressionNames`).
+- **Expression names are host configuration.** The adapter's four public names are inspector-editable. Import
+  does not infer a vocabulary or connect marker hints to expression labels.
 
 ### `EyeAimConstraint` — non-spec eye aiming (opt-in)
 
 Geometric eye-bone aiming (rotate the eye bones toward the target, clamped to `MaxYaw/PitchDegrees`, re-based
 to rest when inactive) is an **engine-only convenience that is NOT part of KHR_character**. It lives in a
 separate `EyeAimConstraint` component that the importer **never attaches** — add it manually when you want it.
-This keeps the KHR import path purely expression-driven, matching the spec (the non-spec `MaxYaw/MaxPitchDegrees`
-clamps are not on `GazeSolver`).
 
-> **Vendor-neutral stance.** The KHR gaze path takes **no dependency on `VRMC_character_expression_lookat`**
-> (it is recognized but kept strictly separate — `KhrCharacterExtensionNames.VrmcExpressionLookat`). The 90°
-> saturation matches the VRM convention but is implemented as a neutral convention, not a VRM import. The spec
-> gaps here — no KHR gaze origin / `referenceNode`, no KHR look vocabulary, the "1 at 90°" rule living only in
-> VRMC — are routed to the glTF PR #2512 discussion.
+> **Boundary.** The passive KHR marker takes no dependency on `VRMC_character_expression_lookat`. The optional
+> Unity adapter's four-name vocabulary and 90° response are host policy, not portable KHR semantics.
 
 ## Expression authoring
 
@@ -267,6 +269,8 @@ The baked data is import-time only, but the components survive being saved as a 
   rehydrates it in `Awake` (a live import calls `Initialize` directly).
 - `SkeletonMap` persists a `SerializableSkeletonMapping` (Unity cannot serialize the
   `Dictionary<string,Transform>`) and converts back to the runtime `SkeletonMappingResult` on load.
+- `CameraHintSet` and `LookAtTargetSet` persist passive descriptors and intra-hierarchy `Transform` references;
+  `KhrCharacter` rehydrates both hub links without creating a gaze consumer.
 
 ## Key files
 
@@ -274,7 +278,8 @@ The baked data is import-time only, but the components survive being saved as a 
 - Import/baking: `Import/KhrCharacterImportPlugin.cs`, `Import/KhrCharacterBaker.cs`,
   `Import/KhrCharacterSkeletonBaker.cs`
 - Export: `Export/KhrCharacterExportPlugin.cs`, `Export/KhrCharacterExportContext.cs`
-- Runtime: `Components/ExpressionController.cs`, `Components/SkeletonMap.cs`, `Components/GazeSolver.cs`,
+- Runtime: `Components/ExpressionController.cs`, `Components/SkeletonMap.cs`, `Components/CameraHintSet.cs`,
+  `Components/LookAtTargetSet.cs`, `Components/GazeSolver.cs` (optional host adapter), and
   `Components/EyeAimConstraint.cs` (non-spec, opt-in eye aiming)
 - Authoring: `Authoring/CharacterExpressionSetAsset.cs`
 - Evaluation policy: `Evaluation/AdditiveExpressionSemantics.cs`

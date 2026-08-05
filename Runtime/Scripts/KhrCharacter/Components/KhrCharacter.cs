@@ -25,6 +25,7 @@ namespace UnityGLTF.KhrCharacter
         public ExpressionController Expressions { get; internal set; }
         public GazeSolver Gaze { get; internal set; }
         public CameraHintSet CameraHints { get; internal set; }
+        public LookAtTargetSet LookAtTargets { get; internal set; }
         public SkeletonMap Skeleton { get; internal set; }
         public ViewModeController View { get; internal set; }
         public int DesignatedRootNodeIndex => _designatedRootNodeIndex;
@@ -58,6 +59,7 @@ namespace UnityGLTF.KhrCharacter
             if (Expressions == null) Expressions = GetComponent<ExpressionController>();
             if (Gaze == null) Gaze = GetComponent<GazeSolver>();
             if (CameraHints == null) CameraHints = GetComponent<CameraHintSet>();
+            if (LookAtTargets == null) LookAtTargets = GetComponent<LookAtTargetSet>();
             if (Skeleton == null) Skeleton = GetComponent<SkeletonMap>();
             if (View == null) View = GetComponent<ViewModeController>();
 
@@ -131,7 +133,7 @@ namespace UnityGLTF.KhrCharacter
                 case CharacterCapability.CameraHint:
                     return CameraHints != null ? CapabilityStatus.Active : CapabilityStatus.Inert;
                 case CharacterCapability.LookAtTarget:
-                    return Gaze != null ? CapabilityStatus.Active : CapabilityStatus.Inert;
+                    return LookAtTargets != null ? CapabilityStatus.Active : CapabilityStatus.Inert;
                 case CharacterCapability.SkeletonMapping:
                     if (Skeleton == null) return CapabilityStatus.Inert;
                     return SkeletonMappingDegraded() ? CapabilityStatus.Degraded : CapabilityStatus.Active;

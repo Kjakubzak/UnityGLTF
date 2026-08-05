@@ -1,6 +1,5 @@
 using GLTF.Schema;
 using UnityEngine;
-using UnityGLTF.Extensions;
 
 namespace UnityGLTF
 {
@@ -39,7 +38,6 @@ namespace UnityGLTF
             if (_options.CameraImport == CameraImportOption.ImportAndCameraDisabled)
                 unityCamera.enabled = false;
 			
-            nodeObj.transform.localRotation *= SchemaExtensions.InvertDirection;
             return true;
         }
     }

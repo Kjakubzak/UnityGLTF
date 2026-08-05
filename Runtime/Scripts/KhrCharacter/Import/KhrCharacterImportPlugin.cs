@@ -1,5 +1,7 @@
 using System.Collections.Generic;
 using GLTF.Schema;
+using GLTF.Schema.KHR_lights_punctual;
+using Newtonsoft.Json;
 using UnityEngine;
 using UnityGLTF.Plugins;
 
@@ -41,9 +43,27 @@ namespace UnityGLTF.KhrCharacter
 
         // UnityGLTF doesn't expose a GameObject -> node-index map, so build our own from the node callbacks.
         private readonly Dictionary<int, GameObject> _nodeIndexToGo = new Dictionary<int, GameObject>();
+        private readonly Dictionary<int, Camera> _cameraIndexToProjection = new Dictionary<int, Camera>();
         private readonly HashSet<string> _presentExtensions = new HashSet<string>();
-        private readonly List<(int nodeIndex, KHR_node_camera_hint hint)> _cameraHints = new List<(int, KHR_node_camera_hint)>();
-        private readonly List<(int nodeIndex, KHR_node_lookat_target target)> _lookatTargets = new List<(int, KHR_node_lookat_target)>();
+        private readonly List<CameraHintRecord> _cameraHints = new List<CameraHintRecord>();
+        private readonly List<LookAtTargetRecord> _lookatTargets = new List<LookAtTargetRecord>();
+        private readonly HashSet<Transform> _cameraHintNodes = new HashSet<Transform>();
+        private readonly HashSet<Transform> _lookAtTargetNodes = new HashSet<Transform>();
+        private HashSet<string> _requiredExtensions = new HashSet<string>();
+        private bool _lookAtRequired;
+
+        private sealed class CameraHintRecord
+        {
+            public Transform Node;
+            public KHR_node_camera_hint Hint;
+            public bool NodeTransformHasForwardAxisConversion;
+        }
+
+        private sealed class LookAtTargetRecord
+        {
+            public Transform Node;
+            public KHR_node_lookat_target Target;
+        }
 
         public KhrCharacterImportContext(GLTFImportContext context, RigImportMode rigMode = RigImportMode.Humanoid)
         {
@@ -51,15 +71,25 @@ namespace UnityGLTF.KhrCharacter
             _rigMode = rigMode;
         }
 
+        public override bool SupportsRequiredExtension(string extensionName)
+            => extensionName == KhrCharacterExtensionNames.NodeLookatTarget;
+
         public override void OnAfterImportRoot(GLTFRoot gltfRoot)
         {
             // Detect by name from the root extensions. This works whether the extension deserialized to a
             // typed object or to a raw DefaultExtension.
             _presentExtensions.Clear();
             _nodeIndexToGo.Clear();
+            _cameraIndexToProjection.Clear();
             _cameraHints.Clear();
             _lookatTargets.Clear();
+            _cameraHintNodes.Clear();
+            _lookAtTargetNodes.Clear();
             _characterRootNodeIndex = -1;
+            _requiredExtensions = gltfRoot?.ExtensionsRequired != null
+                ? new HashSet<string>(gltfRoot.ExtensionsRequired)
+                : new HashSet<string>();
+            _lookAtRequired = _requiredExtensions.Contains(KhrCharacterExtensionNames.NodeLookatTarget);
             if (gltfRoot?.Extensions != null)
             {
                 foreach (var key in gltfRoot.Extensions.Keys)
@@ -88,8 +118,12 @@ namespace UnityGLTF.KhrCharacter
 
         public override void OnAfterImportNode(Node node, int nodeIndex, GameObject nodeObject)
         {
-            if (!_isCharacter) return;
-            _nodeIndexToGo[nodeIndex] = nodeObject;
+            if (nodeObject != null) _nodeIndexToGo[nodeIndex] = nodeObject;
+            if (node?.Camera != null && nodeObject != null)
+            {
+                var projection = nodeObject.GetComponent<Camera>();
+                if (projection != null) _cameraIndexToProjection[node.Camera.Id] = projection;
+            }
             if (node?.Extensions == null) return;
 
             // Node-level extensions (camera hint / look-at target) live on nodes; detect + record them here.
@@ -102,12 +136,24 @@ namespace UnityGLTF.KhrCharacter
                 if (canonical == KhrCharacterExtensionNames.NodeCameraHint)
                 {
                     var hint = AsCameraHint(kv.Value);
-                    if (hint != null) _cameraHints.Add((nodeIndex, hint));
+                    var transform = nodeObject != null ? nodeObject.transform : null;
+                    if (hint != null && transform != null && _cameraHintNodes.Add(transform))
+                        _cameraHints.Add(new CameraHintRecord
+                        {
+                            Node = transform,
+                            Hint = hint,
+                            NodeTransformHasForwardAxisConversion =
+                                (node.Camera != null && nodeObject.GetComponent<Camera>() != null)
+                                || (node.Extensions.ContainsKey(KHR_lights_punctualExtensionFactory.EXTENSION_NAME)
+                                    && nodeObject.GetComponent<Light>() != null),
+                        });
                 }
                 else if (canonical == KhrCharacterExtensionNames.NodeLookatTarget)
                 {
                     var target = AsLookatTarget(kv.Value);
-                    if (target != null) _lookatTargets.Add((nodeIndex, target));
+                    var transform = nodeObject != null ? nodeObject.transform : null;
+                    if (target != null && transform != null && _lookAtTargetNodes.Add(transform))
+                        _lookatTargets.Add(new LookAtTargetRecord { Node = transform, Target = target });
                 }
             }
         }
@@ -115,7 +161,15 @@ namespace UnityGLTF.KhrCharacter
         public override void OnAfterImportScene(GLTFScene scene, int sceneIndex, GameObject sceneObject)
         {
             // OnAfterImportScene is the last callback invoked at runtime (OnAfterImport is editor-only).
-            if (!_isCharacter || sceneObject == null) return;
+            if (sceneObject == null) return;
+
+            // These two node annotations have no dependency on KHR_character. Expose them even for an otherwise
+            // ordinary glTF asset; look-at required use is satisfied by the passive live-point set itself.
+            if (!_isCharacter)
+            {
+                WireNodeFeatures(sceneObject, null);
+                return;
+            }
 
             var hub = sceneObject.GetComponent<KhrCharacter>();
             if (hub == null) hub = sceneObject.AddComponent<KhrCharacter>();
@@ -332,76 +386,73 @@ namespace UnityGLTF.KhrCharacter
             if (_cameraHints.Count > 0)
             {
                 var hints = new List<CameraHint>();
-                foreach (var (nodeIndex, raw) in _cameraHints)
+                foreach (var record in _cameraHints)
                 {
-                    if (!_nodeIndexToGo.TryGetValue(nodeIndex, out var go) || go == null) continue;
+                    var raw = record.Hint;
+                    if (record.Node == null || raw == null) continue;
                     Transform target = null;
                     if (raw.TargetNode.HasValue && _nodeIndexToGo.TryGetValue(raw.TargetNode.Value, out var tgo) && tgo != null)
                         target = tgo.transform;
-                    hints.Add(new CameraHint { Role = raw.Role, Label = raw.Label, Node = go.transform, Target = target });
+                    Camera projection = null;
+                    if (raw.Camera.HasValue) _cameraIndexToProjection.TryGetValue(raw.Camera.Value, out projection);
+                    hints.Add(new CameraHint
+                    {
+                        Role = raw.Role,
+                        Label = raw.Label,
+                        Node = record.Node,
+                        Projection = projection,
+                        Target = target,
+                        NodeTransformHasForwardAxisConversion = record.NodeTransformHasForwardAxisConversion,
+                        ExtensionsJson = raw.Extensions?.ToString(Formatting.None),
+                        ExtrasJson = raw.Extras?.ToString(Formatting.None),
+                        AdditionalPropertiesJson = raw.AdditionalProperties?.ToString(Formatting.None),
+                        RequiredCompanionExtensions = GetRequiredCompanionExtensions(raw.Extensions),
+                    });
                 }
                 if (hints.Count > 0)
                 {
                     var component = sceneObject.GetComponent<CameraHintSet>() ?? sceneObject.AddComponent<CameraHintSet>();
                     component.Bind(hints);
-                    hub.CameraHints = component;
+                    if (hub != null) hub.CameraHints = component;
                 }
             }
 
-            // Look-at targets -> GazeSolver (also attached when expressions exist so it can drive look-* weights).
+            // Look-at targets remain passive metadata. A host may explicitly add/configure GazeSolver or any
+            // other consumer, but importing a marker never creates behavior or writes expression weights.
             var lookTargets = new List<LookAtTarget>();
-            foreach (var (nodeIndex, raw) in _lookatTargets)
+            foreach (var record in _lookatTargets)
             {
-                if (!_nodeIndexToGo.TryGetValue(nodeIndex, out var go) || go == null) continue;
-                lookTargets.Add(new LookAtTarget { Node = go.transform, Hint = raw.Hint });
+                var raw = record.Target;
+                if (record.Node == null || raw == null) continue;
+                lookTargets.Add(new LookAtTarget
+                {
+                    Node = record.Node,
+                    Hint = raw.Hint,
+                    ExtensionsJson = raw.Extensions?.ToString(Formatting.None),
+                    ExtrasJson = raw.Extras?.ToString(Formatting.None),
+                    AdditionalPropertiesJson = raw.AdditionalProperties?.ToString(Formatting.None),
+                    RequiredCompanionExtensions = GetRequiredCompanionExtensions(raw.Extensions),
+                });
             }
-            if (lookTargets.Count > 0 || hub.Expressions != null)
+            if (lookTargets.Count > 0)
             {
-                var gaze = sceneObject.GetComponent<GazeSolver>() ?? sceneObject.AddComponent<GazeSolver>();
-                gaze.Bind(lookTargets, hub.Expressions, hub.Skeleton);
-                BindLookExpressionNames(gaze, hub.Expressions);
-                hub.Gaze = gaze;
+                var component = sceneObject.GetComponent<LookAtTargetSet>() ?? sceneObject.AddComponent<LookAtTargetSet>();
+                component.Bind(lookTargets, _lookAtRequired);
+                if (hub != null) hub.LookAtTargets = component;
             }
 
             // ViewModeController is a passive utility (no extension required); expose it for app code.
-            hub.View = sceneObject.GetComponent<ViewModeController>() ?? sceneObject.AddComponent<ViewModeController>();
+            if (hub != null)
+                hub.View = sceneObject.GetComponent<ViewModeController>() ?? sceneObject.AddComponent<ViewModeController>();
         }
 
-        // Look-direction expression name candidates, ordered by preference. Vendor-neutral: covers common
-        // spellings/conventions (camelCase, snake_case, eye/eyes/gaze prefixes), not VRM only. The first entry
-        // matches the GazeSolver default.
-        private static readonly string[] LookRightCandidates = { "lookRight", "look_right", "lookatRight", "eyeLookRight", "eyesLookRight", "gazeRight" };
-        private static readonly string[] LookLeftCandidates  = { "lookLeft", "look_left", "lookatLeft", "eyeLookLeft", "eyesLookLeft", "gazeLeft" };
-        private static readonly string[] LookUpCandidates    = { "lookUp", "look_up", "lookatUp", "eyeLookUp", "eyesLookUp", "gazeUp" };
-        private static readonly string[] LookDownCandidates  = { "lookDown", "look_down", "lookatDown", "eyeLookDown", "eyesLookDown", "gazeDown" };
-
-        // Bind each of the four look directions to whichever expression actually exists in the baked set, so the
-        // gaze solver drives the model's real expression names instead of a hardcoded vocabulary. Falls back to
-        // the GazeSolver default when no candidate matches (SetWeight no-ops on an unknown name -> inert). The
-        // names stay public/inspector-editable, so this auto-detection is overridable. Internal for unit tests.
-        internal static void BindLookExpressionNames(GazeSolver gaze, ExpressionController expressions)
+        private string[] GetRequiredCompanionExtensions(Newtonsoft.Json.Linq.JObject extensions)
         {
-            if (expressions == null) return;
-            var handles = expressions.Expressions;
-            if (handles == null || handles.Count == 0) return;
-
-            // Case-insensitive match -> actual baked name (ExpressionController.SetWeight is case-sensitive).
-            var byLower = new Dictionary<string, string>();
-            foreach (var h in handles)
-                if (!string.IsNullOrEmpty(h.Name)) byLower[h.Name.ToLowerInvariant()] = h.Name;
-
-            if (TryResolveLookName(byLower, LookRightCandidates, out var right)) gaze.LookRight = right;
-            if (TryResolveLookName(byLower, LookLeftCandidates, out var left)) gaze.LookLeft = left;
-            if (TryResolveLookName(byLower, LookUpCandidates, out var up)) gaze.LookUp = up;
-            if (TryResolveLookName(byLower, LookDownCandidates, out var down)) gaze.LookDown = down;
-        }
-
-        private static bool TryResolveLookName(Dictionary<string, string> byLower, string[] candidates, out string matched)
-        {
-            foreach (var c in candidates)
-                if (byLower.TryGetValue(c.ToLowerInvariant(), out matched)) return true;
-            matched = null;
-            return false;
+            if (extensions == null) return System.Array.Empty<string>();
+            var required = new List<string>();
+            foreach (var extension in extensions.Properties())
+                if (_requiredExtensions.Contains(extension.Name)) required.Add(extension.Name);
+            return required.ToArray();
         }
 
         private void WireSkeleton(GameObject sceneObject, KhrCharacter hub)

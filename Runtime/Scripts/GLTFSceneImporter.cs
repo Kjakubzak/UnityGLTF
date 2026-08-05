@@ -1228,6 +1228,8 @@ namespace UnityGLTF
 
 				var hasLight = ConstructLights(nodeObj, node);
 				var hasCamera = ConstructCamera(nodeObj, node);
+				if (hasLight || hasCamera)
+					nodeObj.transform.localRotation *= SchemaExtensions.InvertDirection;
 
 				// Cameras and lights have a different forward axis in glTF vs. Unity.
 				// Thus, when importing lights and cameras we have to flip them.

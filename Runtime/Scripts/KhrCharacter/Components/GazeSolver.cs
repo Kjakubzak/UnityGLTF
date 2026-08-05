@@ -1,14 +1,11 @@
-using System.Collections.Generic;
 using UnityEngine;
 
 namespace UnityGLTF.KhrCharacter
 {
     /// <summary>
-    /// Spec-aligned, expression-driven gaze solver. Drives look left/right/up/down expression weights toward a
-    /// target, measured against a <see cref="ReferenceFrame"/> (the gaze origin). Runs before
-    /// <see cref="ExpressionController"/> (execution order 50 &lt; 100) so it feeds the same-frame evaluation.
-    /// Each direction saturates to 1 at 90° (per the look-expression convention); a target behind the head is
-    /// clamped, never flipped.
+    /// Optional Unity host adapter that drives configured expression weights toward a host-selected target.
+    /// Its vocabulary, 90-degree response curve, world-space target selection, and update policy are not behavior
+    /// defined by <c>KHR_node_lookat_target</c> or <c>KHR_character_expression</c>.
     ///
     /// This component is intentionally vendor-neutral and carries no geometric eye-bone aiming: that engine-only
     /// convenience lives in the separate, opt-in <see cref="EyeAimConstraint"/> (not part of KHR_character).
@@ -31,20 +28,11 @@ namespace UnityGLTF.KhrCharacter
         [Tooltip("Optional gaze origin/measurement frame. Falls back to the mapped head bone, then this transform.")]
         public Transform ReferenceFrame;
 
-        // Look-expression names. Auto-detected from the model's baked expressions at import (see
-        // KhrCharacterImportContext.BindLookExpressionNames); override per model vocabulary if needed.
+        // Host-configured look-expression names. The imported marker provides no expression vocabulary or link.
         public string LookLeft = "lookLeft";
         public string LookRight = "lookRight";
         public string LookUp = "lookUp";
         public string LookDown = "lookDown";
-
-        private readonly List<LookAtTarget> _authoredTargets = new List<LookAtTarget>();
-        public IReadOnlyList<LookAtTarget> AuthoredTargets => _authoredTargets;
-
-        // Persisted so an editor-imported prefab can restore its authored targets (the live import calls Bind,
-        // which also stores here). LookAtTarget is [Serializable] and its Transform ref survives serialization.
-        // Hidden from the inspector: it's baked data, surfaced read-only by GazeSolverEditor in Play mode.
-        [SerializeField, HideInInspector] private List<LookAtTarget> _serializedTargets = new List<LookAtTarget>();
 
         private ExpressionController _expressions;
         private Transform _head;
@@ -60,11 +48,8 @@ namespace UnityGLTF.KhrCharacter
             Mode = LookAtMode.CustomTarget;
         }
 
-        public void Bind(IReadOnlyList<LookAtTarget> authoredTargets, ExpressionController expressions, SkeletonMap skeleton = null)
+        public void Bind(ExpressionController expressions, SkeletonMap skeleton = null)
         {
-            _authoredTargets.Clear();
-            if (authoredTargets != null) _authoredTargets.AddRange(authoredTargets);
-            _serializedTargets = new List<LookAtTarget>(_authoredTargets);   // persist for prefab rehydration
             _expressions = expressions;
             ResolveHead(skeleton);
             _lazyBound = true;   // a live bind fully resolves links; skip the LateUpdate lazy path
@@ -81,13 +66,13 @@ namespace UnityGLTF.KhrCharacter
         private void LateUpdate()
         {
             if (!_lazyBound) LazyBind();
-            if (Mode == LookAtMode.None || Weight <= 0f) { ResetOutputs(); return; }
-            if (!TryGetTargetPosition(out var targetPos)) { ResetOutputs(); return; }
+            if (Mode == LookAtMode.None || Weight <= 0f) return;
+            if (!TryGetTargetPosition(out var targetPos)) return;
 
             // Frame resolution order: explicit ReferenceFrame -> mapped head -> root transform.
             var frame = ReferenceFrame != null ? ReferenceFrame : (_head != null ? _head : transform);
             var toTarget = targetPos - frame.position;
-            if (toTarget.sqrMagnitude < 1e-10f) { ResetOutputs(); return; }
+            if (toTarget.sqrMagnitude < 1e-10f) return;
 
             // Measure yaw/pitch in the gaze frame so the decomposition is consistent with the chosen origin.
             var local = frame.InverseTransformDirection(toTarget.normalized);
@@ -103,8 +88,6 @@ namespace UnityGLTF.KhrCharacter
         private void LazyBind()
         {
             _lazyBound = true;
-            if (_authoredTargets.Count == 0 && _serializedTargets != null && _serializedTargets.Count > 0)
-                _authoredTargets.AddRange(_serializedTargets);
             if (_expressions == null) _expressions = GetComponent<ExpressionController>();
             if (_head == null) ResolveHead(GetComponent<SkeletonMap>());
         }
@@ -130,7 +113,7 @@ namespace UnityGLTF.KhrCharacter
         private void DriveExpressions(float yaw, float pitch)
         {
             if (_expressions == null) return;
-            const float half = Mathf.PI * 0.5f; // saturate(angle / (pi/2)) per the look-expression convention
+            const float half = Mathf.PI * 0.5f; // this adapter's host-selected 90-degree saturation response
             SetIfPresent(LookRight, Mathf.Clamp01(Mathf.Max(yaw, 0f) / half) * Weight);
             SetIfPresent(LookLeft, Mathf.Clamp01(Mathf.Max(-yaw, 0f) / half) * Weight);
             SetIfPresent(LookUp, Mathf.Clamp01(Mathf.Max(pitch, 0f) / half) * Weight);
@@ -142,7 +125,8 @@ namespace UnityGLTF.KhrCharacter
             if (!string.IsNullOrEmpty(name)) _expressions.SetWeight(name, value);
         }
 
-        private void ResetOutputs()
+        /// <summary>Explicitly clears the four configured adapter outputs.</summary>
+        public void ClearOutputs()
         {
             if (_expressions == null) return;
             SetIfPresent(LookRight, 0f);

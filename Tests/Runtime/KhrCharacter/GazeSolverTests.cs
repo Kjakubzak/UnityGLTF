@@ -9,8 +9,8 @@ namespace UnityGLTF.KhrCharacter.Tests
     /// <summary>
     /// Play-mode tests for the expression-driven GazeSolver: it drives look-* weights through the controller
     /// (verified via blendshape output) measured against its ReferenceFrame, works on a non-humanoid object with
-    /// no SkeletonMap, honors overridden look-expression names, and the importer auto-detects look names from the
-    /// baked set. Geometric eye-bone aiming now lives in EyeAimConstraint (see EyeAimConstraintTests).
+    /// no SkeletonMap, and honors explicitly configured look-expression names. Geometric eye-bone aiming now
+    /// lives in EyeAimConstraint (see EyeAimConstraintTests).
     /// </summary>
     public class GazeSolverTests
     {
@@ -79,7 +79,7 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             var target = NewGo("target");
             var gaze = go.AddComponent<GazeSolver>();
-            gaze.Bind(new List<LookAtTarget>(), ec, null);
+            gaze.Bind(ec, null);
             gaze.Target = target.transform;
             gaze.Mode = GazeSolver.LookAtMode.CustomTarget;
 
@@ -108,7 +108,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             refFrame.transform.rotation = Quaternion.Euler(0f, 180f, 0f);
 
             var gaze = go.AddComponent<GazeSolver>();
-            gaze.Bind(new List<LookAtTarget>(), ec, null); // no SkeletonMap
+            gaze.Bind(ec, null); // no SkeletonMap
             gaze.ReferenceFrame = refFrame.transform;
 
             var target = NewGo("target");
@@ -130,7 +130,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             var ec = MakeController(go, ("gaze_right", Morph(smr, 0)), ("gaze_left", Morph(smr, 1)));
 
             var gaze = go.AddComponent<GazeSolver>();
-            gaze.Bind(new List<LookAtTarget>(), ec, null);
+            gaze.Bind(ec, null);
             gaze.LookRight = "gaze_right";
             gaze.LookLeft = "gaze_left";
 
@@ -144,25 +144,22 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(0f, smr.GetBlendShapeWeight(1), 1e-2f);
         }
 
-        // The importer binds each look direction to whichever expression actually exists in the baked set
-        // (vendor-neutral spellings), and keeps the default when a direction is absent.
-        [Test]
-        public void ImporterAutoDetect_BindsRealLookNames_AndFallsBack()
+        [UnityTest]
+        public IEnumerator InactiveAdapter_DoesNotOverwriteExternalExpressionInput()
         {
             var go = NewGo("char");
-            var smr = MakeSmr(go, 3);
-            var ec = MakeController(go,
-                ("look_right", Morph(smr, 0)),   // snake_case
-                ("look_left", Morph(smr, 1)),
-                ("eyeLookUp", Morph(smr, 2)));   // eye- prefix; "down" deliberately absent
+            var smr = MakeSmr(go, 1);
+            var expressions = MakeController(go, ("lookRight", Morph(smr, 0)));
+            expressions.SetWeight("lookRight", 0.65f);
 
             var gaze = go.AddComponent<GazeSolver>();
-            KhrCharacterImportContext.BindLookExpressionNames(gaze, ec);
+            gaze.Bind(expressions);
+            gaze.Mode = GazeSolver.LookAtMode.None;
 
-            Assert.AreEqual("look_right", gaze.LookRight);
-            Assert.AreEqual("look_left", gaze.LookLeft);
-            Assert.AreEqual("eyeLookUp", gaze.LookUp);
-            Assert.AreEqual("lookDown", gaze.LookDown, "absent direction keeps the GazeSolver default");
+            yield return null;
+            Assert.AreEqual(0.65f, smr.GetBlendShapeWeight(0), 1e-2f,
+                "an inactive optional adapter must not zero an animation system's input");
         }
+
     }
 }

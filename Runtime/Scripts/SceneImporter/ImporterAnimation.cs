@@ -560,9 +560,12 @@ namespace UnityGLTF
 						case GLTFAnimationChannelPath.rotation:
 							propertyNames = new string[]
 								{ "localRotation.x", "localRotation.y", "localRotation.z", "localRotation.w" };
-							bool flipRotation = (targetNode.Extensions != null
-							                 && targetNode.Extensions.ContainsKey(KHR_lights_punctualExtensionFactory.EXTENSION_NAME)
-							                 && Context.TryGetPlugin<LightsPunctualImportContext>(out _));
+							bool importsCamera = targetNode.Camera != null
+							                     && _options.CameraImport != CameraImportOption.None;
+							bool importsLight = targetNode.Extensions != null
+							                    && targetNode.Extensions.ContainsKey(KHR_lights_punctualExtensionFactory.EXTENSION_NAME)
+							                    && Context.TryGetPlugin<LightsPunctualImportContext>(out _);
+							bool flipRotation = importsCamera || importsLight;
 							SetAnimationCurve(clip, relativePath, propertyNames, input, output,
 								samplerCache.Interpolation, typeof(Transform),
 								(data, frame) =>

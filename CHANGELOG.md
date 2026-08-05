@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 - add: export of `KHR_character`, `KHR_character_expression` (+ `_morphtarget` / `_joint` / `_texture` / `_mask` / `_mapping`), `KHR_character_skeleton_mapping`, and `KHR_character_reference_pose` — joints and the reference pose export as native TRS; morph weights and texture (UV-transform / index-swap) channels export via `KHR_animation_pointer`
 - add: runtime rig-mode switcher (`SkeletonMap.SwitchRigMode`) to toggle an imported character between Generic and a Mecanim humanoid Avatar without re-importing
 - add: import baking of expression / skeleton / reference-pose data onto runtime components; imported expression and reference-pose animation clips no longer auto-play (the runtime controller drives expressions itself) but remain explicitly playable
-- note: vendor-neutral — no `KHR_*` extension is marked required, and the exported wire carries no vendor `extras` token (fully Khronos-neutral); `blendMode`/priority are intentionally not exported and may return via a ratified representation later; export/import round-trip caveats are documented in `Runtime/Scripts/KhrCharacter/README.md`
+- add: standalone passive `KHR_node_camera_hint` and `KHR_node_lookat_target` metadata import/export; look-at markers expose live per-instance global points without auto-creating gaze behavior, preserve imported required-use and glTFProperty payload provenance, and camera hints remain used-only
+- note: vendor-neutral — newly authored character extensions are used-only, while imported required declarations are preserved where the implementation satisfies the extension's minimum behavior; `blendMode`/priority are intentionally not exported and may return via a ratified representation later; export/import round-trip caveats are documented in `Runtime/Scripts/KhrCharacter/README.md`
 
 ## [2.19.5] - 2026-04-29
 - fix: compiler error in Unity 6.3 > wrong ifdef
