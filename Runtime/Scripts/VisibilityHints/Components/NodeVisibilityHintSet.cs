@@ -4,14 +4,9 @@ using UnityEngine;
 namespace UnityGLTF.VisibilityHints
 {
     /// <summary>
-    /// Scene-root component holding the authored <c>KHR_node_visibility_hint</c> entries (one per hinted node) and
-    /// resolving them onto renderers. A node hint applies to the node <b>and its subtree</b>; a hint on a descendant
-    /// overrides an ancestor's hint for that descendant's subtree. Resolution walks each renderer up to the nearest
-    /// authored ancestor-or-self and registers the renderer with the <see cref="ViewContextController"/> using that
-    /// role.
-    ///
-    /// <para>The entry list is serialized so an editor-imported prefab rehydrates on <see cref="Awake"/>; a live
-    /// import instead calls <see cref="Bind"/> directly.</para>
+    /// Serialized <c>KHR_node_visibility_hint</c> annotations and their nearest-ancestor resolution. Resolution is
+    /// performed as a pure query so a descendant hint can replace an inherited hint independently for each node
+    /// instance and render view.
     /// </summary>
     [DisallowMultipleComponent]
     public class NodeVisibilityHintSet : MonoBehaviour
@@ -22,66 +17,57 @@ namespace UnityGLTF.VisibilityHints
             public Transform Node;
             public string Role;
             public string Label;
+            public string ExtensionsJson;
+            public string ExtrasJson;
+            public string AdditionalPropertiesJson;
+            public string[] RequiredCompanionExtensions;
         }
 
-        // Baked data, surfaced only through Entries. HideInInspector: it is authored/imported, not hand-edited.
         [SerializeField, HideInInspector] private List<NodeVisibilityEntry> _entries = new List<NodeVisibilityEntry>();
+        [SerializeField, HideInInspector] private bool _requiredOnImport;
+        [System.NonSerialized] private Dictionary<Transform, NodeVisibilityEntry> _entryByNode;
+        [System.NonSerialized] private bool _indexDirty = true;
 
         public IReadOnlyList<NodeVisibilityEntry> Entries => _entries;
+        public bool RequiredOnImport => _requiredOnImport;
 
-        // Runtime-only (not serialized): reset to false on an Instantiate/deserialize clone so Awake re-resolves.
-        private bool _resolved;
-
-        /// <summary>Bind authored entries (live import) and immediately resolve them onto renderers.</summary>
-        public void Bind(IReadOnlyList<NodeVisibilityEntry> entries)
+        public void Bind(IReadOnlyList<NodeVisibilityEntry> entries, bool requiredOnImport = false)
         {
             _entries = entries != null ? new List<NodeVisibilityEntry>(entries) : new List<NodeVisibilityEntry>();
-            _resolved = false;
-            Resolve();
+            _requiredOnImport = requiredOnImport;
+            _indexDirty = true;
         }
 
-        // Rehydrate a deserialized prefab. A live import calls Bind itself (which sets _resolved), so this only
-        // fires for a clone/prefab whose _resolved reset to false.
-        private void Awake()
+        /// <summary>Rebuilds key lookup after runtime code changes an entry's node reference.</summary>
+        public void RefreshIndex() => _indexDirty = true;
+
+        private void OnValidate() => _indexDirty = true;
+
+        private void EnsureIndex()
         {
-            if (!_resolved) Resolve();
+            if (!_indexDirty && _entryByNode != null) return;
+            _entryByNode = new Dictionary<Transform, NodeVisibilityEntry>();
+            if (_entries != null)
+                foreach (var entry in _entries)
+                    if (entry?.Node != null) _entryByNode[entry.Node] = entry;
+            _indexDirty = false;
         }
 
-        private void Resolve()
+        public string ResolveRole(Transform node)
         {
-            if (_resolved) return;
-            if (_entries == null || _entries.Count == 0) return; // stay unresolved so a later Bind still runs
-            _resolved = true;
-
-            var controller = GetComponent<ViewContextController>();
-            if (controller == null) controller = gameObject.AddComponent<ViewContextController>();
-
-            var roleByNode = new Dictionary<Transform, string>();
-            foreach (var e in _entries)
-                if (e != null && e.Node != null && !roleByNode.ContainsKey(e.Node))
-                    roleByNode[e.Node] = e.Role;
-
-            var renderers = GetComponentsInChildren<Renderer>(true);
-            foreach (var renderer in renderers)
+            if (node == null || (node != transform && !node.IsChildOf(transform))) return null;
+            EnsureIndex();
+            for (var current = node; current != null; current = current.parent)
             {
-                var role = ResolveRoleFor(renderer.transform, roleByNode);
-                if (role == null) continue; // no hint applies to this renderer -> leave it at its default visibility
-                var viewRole = ViewContextController.ParseRole(role);
-                if (viewRole == ViewContextController.ViewRole.Always) continue; // always visible -> nothing to manage
-                controller.RegisterRenderer(renderer, viewRole);
-            }
-        }
-
-        // Nearest authored ancestor-or-self wins (descendant hint overrides ancestor). Walk stops at the scene root
-        // this component lives on.
-        private string ResolveRoleFor(Transform t, Dictionary<Transform, string> roleByNode)
-        {
-            for (var cur = t; cur != null; cur = cur.parent)
-            {
-                if (roleByNode.TryGetValue(cur, out var role)) return role;
-                if (cur == transform) break;
+                if (_entryByNode.TryGetValue(current, out var entry)) return entry.Role;
+                if (current == transform) break;
             }
             return null;
         }
+
+        public bool ShouldRenderVisualContent(
+            Transform node, string activeContext, bool ancestorInclusiveCoreVisible)
+            => VisibilityHintEvaluator.ShouldRenderNodeVisualContent(
+                ResolveRole(node), activeContext, ancestorInclusiveCoreVisible);
     }
 }

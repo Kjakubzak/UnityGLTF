@@ -61,5 +61,24 @@ namespace UnityGLTF.Plugins
 		{
 
 		}
+
+		/// <summary>
+		/// Returns true only when this plugin provides the complete behavior required by an extension listed in
+		/// <c>extensionsRequired</c>. Schema recognition alone is not runtime support.
+		/// </summary>
+		public virtual bool SupportsRequiredExtension(string extensionName) => false;
+
+		/// <summary>
+		/// Allows a plugin to preserve semantic identity between glTF mesh definitions before Unity mesh data or
+		/// objects exist. This may be called from an import worker thread; implementations must only inspect the
+		/// supplied schema data and thread-safe plugin state.
+		/// </summary>
+		public virtual bool CanShareMeshData(GLTFMesh mesh, int meshIndex) => true;
+
+		/// <summary>
+		/// Allows a plugin to preserve semantic identity for meshes whose non-geometry metadata would be lost by
+		/// post-import geometry-only resource deduplication.
+		/// </summary>
+		public virtual bool CanDeduplicateMesh(Mesh mesh) => true;
 	}
 }

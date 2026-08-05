@@ -41,6 +41,12 @@ namespace GLTF.Schema
 		public string ExtensionName;
 
 		/// <summary>
+		/// True when recognizing this extension's JSON is insufficient to support an asset that lists it in
+		/// <c>extensionsRequired</c>. An importer plugin must explicitly claim the corresponding runtime behavior.
+		/// </summary>
+		public bool RequiresRuntimeSupportForRequiredUse;
+
+		/// <summary>
 		/// Deserializes the input token
 		/// </summary>
 		/// <param name="root">Root node if needed for deserailization</param>

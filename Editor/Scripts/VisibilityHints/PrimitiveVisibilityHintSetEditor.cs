@@ -71,6 +71,7 @@ namespace UnityGLTF.VisibilityHints.Editor
             el.FindPropertyRelative("SubMesh").intValue = 0;
             el.FindPropertyRelative("Role").stringValue = VisibilityHintExtensionNames.RoleAlways;
             el.FindPropertyRelative("Label").stringValue = string.Empty;
+            NodeVisibilityHintSetEditor.ResetPayload(el);
         }
 
         // Append every (mesh, sub-mesh) slot reachable in the subtree that isn't already present, defaulting to
@@ -100,6 +101,7 @@ namespace UnityGLTF.VisibilityHints.Editor
                     el.FindPropertyRelative("SubMesh").intValue = sub;
                     el.FindPropertyRelative("Role").stringValue = VisibilityHintExtensionNames.RoleAlways;
                     el.FindPropertyRelative("Label").stringValue = string.Empty;
+                    NodeVisibilityHintSetEditor.ResetPayload(el);
                 }
             }
         }

@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using GLTF.Schema;
+using Newtonsoft.Json.Linq;
 using UnityEngine;
 using UnityGLTF.Plugins;
 
@@ -15,14 +16,16 @@ namespace UnityGLTF.VisibilityHints
     /// <item><see cref="AfterPrimitiveExport"/> adds <c>KHR_mesh_primitive_visibility_hint</c> to any exported
     /// primitive whose <c>(mesh, sub-mesh)</c> is an authored entry.</item>
     /// </list>
-    /// Both are declared used (never required) so plain viewers still load the asset. The authored role is read
-    /// from the serialized entries, not from live material state.
+    /// Newly authored entries are declared used-only; an imported required declaration is preserved. The authored
+    /// role and glTFProperty payload are read from serialized entries, never from host rendering state.
     /// </summary>
     public class VisibilityHintExportContext : GLTFExportPluginContext
     {
         private bool _mapsBuilt;
         private Dictionary<Transform, NodeVisibilityHintSet.NodeVisibilityEntry> _nodeMap;
         private Dictionary<(Mesh mesh, int subMesh), PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry> _primMap;
+        private bool _nodeRequired;
+        private bool _primitiveRequired;
 
         public override void AfterNodeExport(GLTFSceneExporter exporter, GLTFRoot gltfRoot, Transform transform, Node node)
         {
@@ -36,9 +39,22 @@ namespace UnityGLTF.VisibilityHints
                 return;
             }
 
+            var companionExtensions = ParseObject(entry.ExtensionsJson);
             if (TryAddExtension(node, VisibilityHintExtensionNames.NodeVisibilityHint,
-                    new KHR_node_visibility_hint { Role = entry.Role, Label = entry.Label }))
-                exporter.DeclareExtensionUsage(VisibilityHintExtensionNames.NodeVisibilityHint, isRequired: false);
+                    new KHR_node_visibility_hint
+                    {
+                        Role = entry.Role,
+                        Label = entry.Label,
+                        Extensions = companionExtensions,
+                        Extras = ParseToken(entry.ExtrasJson),
+                        AdditionalProperties = ParseObject(entry.AdditionalPropertiesJson),
+                    }))
+            {
+                exporter.DeclareExtensionUsage(
+                    VisibilityHintExtensionNames.NodeVisibilityHint, isRequired: _nodeRequired);
+                DeclareCompanionExtensions(
+                    exporter, companionExtensions, entry.RequiredCompanionExtensions);
+            }
         }
 
         public override void AfterPrimitiveExport(GLTFSceneExporter exporter, Mesh mesh, MeshPrimitive primitive, int index)
@@ -52,9 +68,22 @@ namespace UnityGLTF.VisibilityHints
                 return;
             }
 
+            var companionExtensions = ParseObject(entry.ExtensionsJson);
             if (TryAddExtension(primitive, VisibilityHintExtensionNames.MeshPrimitiveVisibilityHint,
-                    new KHR_mesh_primitive_visibility_hint { Role = entry.Role, Label = entry.Label }))
-                exporter.DeclareExtensionUsage(VisibilityHintExtensionNames.MeshPrimitiveVisibilityHint, isRequired: false);
+                    new KHR_mesh_primitive_visibility_hint
+                    {
+                        Role = entry.Role,
+                        Label = entry.Label,
+                        Extensions = companionExtensions,
+                        Extras = ParseToken(entry.ExtrasJson),
+                        AdditionalProperties = ParseObject(entry.AdditionalPropertiesJson),
+                    }))
+            {
+                exporter.DeclareExtensionUsage(
+                    VisibilityHintExtensionNames.MeshPrimitiveVisibilityHint, isRequired: _primitiveRequired);
+                DeclareCompanionExtensions(
+                    exporter, companionExtensions, entry.RequiredCompanionExtensions);
+            }
         }
 
         // Collect authored entries once, from every hint-set component under the export roots (include-inactive:
@@ -72,11 +101,17 @@ namespace UnityGLTF.VisibilityHints
             {
                 if (root == null) continue;
                 foreach (var set in root.GetComponentsInChildren<NodeVisibilityHintSet>(true))
+                {
+                    _nodeRequired |= set.RequiredOnImport;
                     foreach (var e in set.Entries)
                         if (e != null && e.Node != null) _nodeMap[e.Node] = e;
+                }
                 foreach (var set in root.GetComponentsInChildren<PrimitiveVisibilityHintSet>(true))
+                {
+                    _primitiveRequired |= set.RequiredOnImport;
                     foreach (var e in set.Entries)
                         if (e != null && e.Mesh != null && e.SubMesh >= 0) _primMap[(e.Mesh, e.SubMesh)] = e;
+                }
             }
         }
 
@@ -86,6 +121,31 @@ namespace UnityGLTF.VisibilityHints
             if (target.Extensions != null && target.Extensions.ContainsKey(name)) return false;
             target.AddExtension(name, ext);
             return true;
+        }
+
+        private static JObject ParseObject(string json)
+        {
+            if (string.IsNullOrEmpty(json)) return null;
+            try { return JObject.Parse(json); }
+            catch { return null; }
+        }
+
+        private static JToken ParseToken(string json)
+        {
+            if (string.IsNullOrEmpty(json)) return null;
+            try { return JToken.Parse(json); }
+            catch { return null; }
+        }
+
+        private static void DeclareCompanionExtensions(
+            GLTFSceneExporter exporter, JObject extensions, string[] requiredExtensions)
+        {
+            if (extensions == null) return;
+            var required = requiredExtensions != null
+                ? new HashSet<string>(requiredExtensions)
+                : new HashSet<string>();
+            foreach (var extension in extensions.Properties())
+                exporter.DeclareExtensionUsage(extension.Name, required.Contains(extension.Name));
         }
     }
 }

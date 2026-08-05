@@ -4,11 +4,6 @@ using UnityEngine;
 
 namespace UnityGLTF.VisibilityHints.Tests
 {
-    /// <summary>
-    /// Tests <see cref="NodeVisibilityHintSet"/> subtree-inheritance resolution: a node hint applies to its whole
-    /// subtree, a descendant hint overrides an ancestor, renderers with no applicable hint are left untouched, and
-    /// the resolution survives a serialize -> deserialize (Instantiate) rehydrate.
-    /// </summary>
     public class SubtreeInheritanceTests
     {
         private readonly List<Object> _created = new List<Object>();
@@ -16,8 +11,8 @@ namespace UnityGLTF.VisibilityHints.Tests
         [TearDown]
         public void TearDown()
         {
-            foreach (var o in _created)
-                if (o != null) Object.DestroyImmediate(o);
+            foreach (var created in _created)
+                if (created != null) Object.DestroyImmediate(created);
             _created.Clear();
         }
 
@@ -28,103 +23,116 @@ namespace UnityGLTF.VisibilityHints.Tests
             return go;
         }
 
-        private GameObject NewChild(GameObject parent, string name)
+        private static GameObject NewChild(GameObject parent, string name)
         {
             var go = new GameObject(name);
             go.transform.SetParent(parent.transform, false);
-            return go; // owned by the root; destroyed with it
+            return go;
         }
 
-        private static Renderer FindRenderer(GameObject root, string name)
+        private static Transform FindTransform(GameObject root, string name)
         {
-            foreach (var r in root.GetComponentsInChildren<Renderer>(true))
-                if (r.name == name) return r;
+            foreach (var candidate in root.GetComponentsInChildren<Transform>(true))
+                if (candidate.name == name) return candidate;
             return null;
         }
 
         [Test]
-        public void SubtreeInheritance_DescendantOverridesAncestor()
+        public void NearestDescendantHintReplacesInheritedHint()
         {
-            // root > A(third_person) > B(inherits A) > C(first_person, overrides A)
             var root = NewGo("root");
-            var a = NewChild(root, "A"); var aR = a.AddComponent<MeshRenderer>();
-            var b = NewChild(a, "B"); var bR = b.AddComponent<MeshRenderer>();
-            var c = NewChild(b, "C"); var cR = c.AddComponent<MeshRenderer>();
-
+            var a = NewChild(root, "A");
+            var b = NewChild(a, "B");
+            var c = NewChild(b, "C");
             var set = root.AddComponent<NodeVisibilityHintSet>();
-            set.Bind(new List<NodeVisibilityHintSet.NodeVisibilityEntry>
+            set.Bind(new[]
             {
                 new NodeVisibilityHintSet.NodeVisibilityEntry { Node = a.transform, Role = "third_person" },
                 new NodeVisibilityHintSet.NodeVisibilityEntry { Node = c.transform, Role = "first_person" },
             });
 
-            var view = root.GetComponent<ViewContextController>();
-            Assert.IsNotNull(view, "Bind must add a ViewContextController to the scene root");
-
-            // Default ThirdPerson.
-            Assert.IsTrue(aR.enabled, "A (third_person) is visible in third-person");
-            Assert.IsTrue(bR.enabled, "B inherits A's third_person -> visible in third-person");
-            Assert.IsFalse(cR.enabled, "C (first_person override) is hidden in third-person");
-
-            view.Mode = ViewContextController.ViewContext.FirstPerson;
-            Assert.IsFalse(aR.enabled, "A hidden in first-person");
-            Assert.IsFalse(bR.enabled, "B inherits A -> hidden in first-person");
-            Assert.IsTrue(cR.enabled, "C (first_person) visible in first-person");
+            Assert.AreEqual("third_person", set.ResolveRole(a.transform));
+            Assert.AreEqual("third_person", set.ResolveRole(b.transform));
+            Assert.AreEqual("first_person", set.ResolveRole(c.transform));
+            Assert.IsFalse(set.ShouldRenderVisualContent(a.transform, "first_person", true));
+            Assert.IsFalse(set.ShouldRenderVisualContent(b.transform, "first_person", true));
+            Assert.IsTrue(set.ShouldRenderVisualContent(c.transform, "first_person", true));
         }
 
         [Test]
-        public void NonHintedRenderer_LeftUntouched()
+        public void ExplicitAlwaysHintOverridesInheritedRole()
         {
-            // D is a sibling with no hint on itself or any ancestor -> never registered, always default-enabled.
             var root = NewGo("root");
-            var a = NewChild(root, "A"); a.AddComponent<MeshRenderer>();
-            var d = NewChild(root, "D"); var dR = d.AddComponent<MeshRenderer>();
-
-            root.AddComponent<NodeVisibilityHintSet>().Bind(new List<NodeVisibilityHintSet.NodeVisibilityEntry>
+            var parent = NewChild(root, "parent");
+            var child = NewChild(parent, "child");
+            var set = root.AddComponent<NodeVisibilityHintSet>();
+            set.Bind(new[]
             {
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = a.transform, Role = "third_person" },
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = parent.transform, Role = "third_person" },
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = child.transform, Role = "always" },
             });
 
-            var view = root.GetComponent<ViewContextController>();
-            Assert.IsTrue(dR.enabled, "a renderer with no applicable hint stays enabled");
-            view.Mode = ViewContextController.ViewContext.FirstPerson;
-            Assert.IsTrue(dR.enabled, "a non-hinted renderer is unaffected by mode changes");
+            Assert.IsFalse(set.ShouldRenderVisualContent(parent.transform, "first_person", true));
+            Assert.IsTrue(set.ShouldRenderVisualContent(child.transform, "first_person", true));
         }
 
         [Test]
-        public void Rehydrate_Instantiate_ReappliesInheritance()
+        public void DuplicateNodeEntriesUseLastAuthoredValueLikeExport()
         {
-            // A baked prefab (serialized entries) must re-resolve on the clone's Awake, without a fresh import.
             var root = NewGo("root");
-            var a = NewChild(root, "A"); a.AddComponent<MeshRenderer>();
-            var b = NewChild(a, "B"); b.AddComponent<MeshRenderer>();
-            var c = NewChild(b, "C"); c.AddComponent<MeshRenderer>();
-
-            root.AddComponent<NodeVisibilityHintSet>().Bind(new List<NodeVisibilityHintSet.NodeVisibilityEntry>
+            var node = NewChild(root, "node");
+            var set = root.AddComponent<NodeVisibilityHintSet>();
+            set.Bind(new[]
             {
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = a.transform, Role = "third_person" },
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = c.transform, Role = "first_person" },
+                new NodeVisibilityHintSet.NodeVisibilityEntry
+                    { Node = node.transform, Role = "third_person" },
+                new NodeVisibilityHintSet.NodeVisibilityEntry
+                    { Node = node.transform, Role = "first_person" },
             });
 
-            // Instantiate reproduces serialize -> deserialize: entries are deep-copied (intra-hierarchy Transform
-            // refs remap to the clone) and _resolved resets, so the clone's Awake re-resolves.
+            Assert.AreEqual("first_person", set.ResolveRole(node.transform));
+            Assert.IsTrue(set.ShouldRenderVisualContent(node.transform, "first_person", true));
+            Assert.IsFalse(set.ShouldRenderVisualContent(node.transform, "third_person", true));
+        }
+
+        [Test]
+        public void UnannotatedNodeUsesVisibleFallback()
+        {
+            var root = NewGo("root");
+            var annotated = NewChild(root, "annotated");
+            var plain = NewChild(root, "plain");
+            var set = root.AddComponent<NodeVisibilityHintSet>();
+            set.Bind(new[]
+            {
+                new NodeVisibilityHintSet.NodeVisibilityEntry
+                    { Node = annotated.transform, Role = "third_person" },
+            });
+
+            Assert.IsNull(set.ResolveRole(plain.transform));
+            Assert.IsTrue(set.ShouldRenderVisualContent(plain.transform, "first_person", true));
+        }
+
+        [Test]
+        public void InstantiatePreservesAnnotationsWithoutResolvingPersistentState()
+        {
+            var root = NewGo("root");
+            var parent = NewChild(root, "parent");
+            var child = NewChild(parent, "child");
+            root.AddComponent<NodeVisibilityHintSet>().Bind(new[]
+            {
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = parent.transform, Role = "third_person" },
+            });
+
             var clone = Object.Instantiate(root);
             _created.Add(clone);
+            var cloneSet = clone.GetComponent<NodeVisibilityHintSet>();
+            var cloneChild = FindTransform(clone, "child");
 
-            var cloneView = clone.GetComponent<ViewContextController>();
-            Assert.IsNotNull(cloneView, "the clone rehydrates a ViewContextController on Awake");
-            var aR = FindRenderer(clone, "A");
-            var bR = FindRenderer(clone, "B");
-            var cR = FindRenderer(clone, "C");
-
-            Assert.IsTrue(aR.enabled);
-            Assert.IsTrue(bR.enabled);
-            Assert.IsFalse(cR.enabled);
-
-            cloneView.Mode = ViewContextController.ViewContext.FirstPerson;
-            Assert.IsFalse(aR.enabled);
-            Assert.IsFalse(bR.enabled);
-            Assert.IsTrue(cR.enabled);
+            Assert.IsNotNull(cloneSet);
+            Assert.AreEqual("third_person", cloneSet.ResolveRole(cloneChild));
+            Assert.IsFalse(cloneSet.ShouldRenderVisualContent(cloneChild, "first_person", true));
+            Assert.IsTrue(cloneSet.ShouldRenderVisualContent(cloneChild, null, true));
+            Assert.AreSame(child.transform, FindTransform(root, "child"));
         }
     }
 }

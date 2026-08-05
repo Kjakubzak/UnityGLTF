@@ -73,6 +73,15 @@ namespace UnityGLTF.VisibilityHints.Editor
             el.FindPropertyRelative("Node").objectReferenceValue = null;
             el.FindPropertyRelative("Role").stringValue = VisibilityHintExtensionNames.RoleAlways;
             el.FindPropertyRelative("Label").stringValue = string.Empty;
+            ResetPayload(el);
+        }
+
+        internal static void ResetPayload(SerializedProperty element)
+        {
+            element.FindPropertyRelative("ExtensionsJson").stringValue = string.Empty;
+            element.FindPropertyRelative("ExtrasJson").stringValue = string.Empty;
+            element.FindPropertyRelative("AdditionalPropertiesJson").stringValue = string.Empty;
+            element.FindPropertyRelative("RequiredCompanionExtensions").arraySize = 0;
         }
 
         /// <summary>

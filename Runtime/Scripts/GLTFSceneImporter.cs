@@ -485,7 +485,6 @@ namespace UnityGLTF
 					_isRunning = true;
 				}
 				
-				// TODO check where the right place is to call OnBeforeImport as early as possible
 				foreach (var plugin in Context.Plugins)
 				{
 					plugin.OnBeforeImport();
@@ -525,6 +524,7 @@ namespace UnityGLTF
 				{
 					plugin.OnAfterImportRoot(_gltfRoot);
 				}
+				ValidateRequiredExtensionSupport(_gltfRoot, Context.Plugins);
 
 				cancellationToken.ThrowIfCancellationRequested();
 
@@ -791,12 +791,18 @@ namespace UnityGLTF
 					
 					var meshHashes = MeshHashUtility.ComputeMeshHashes(meshes);
 					
-					var groups = meshHashes.GroupBy(kv => kv.Value).ToDictionary( kv => kv.Key, kv => kv.ToList());
+					var deduplicableMeshes = new HashSet<Mesh>(meshes.Where(mesh =>
+						Context.Plugins.All(plugin => plugin.CanDeduplicateMesh(mesh))));
+					var groups = meshHashes
+						.Where(kv => deduplicableMeshes.Contains(kv.Key))
+						.GroupBy(kv => kv.Value)
+						.ToDictionary(kv => kv.Key, kv => kv.ToList());
 					var usedHashes = new List<long>();
 
 					// Assign for each mesh-hash with group-count > 1, the first mesh of this hash-group
 					foreach (var m in meshfilters)
 					{
+						if (!deduplicableMeshes.Contains(m.sharedMesh)) continue;
 						var hash = meshHashes[m.sharedMesh];
 						var hashGroup = groups[hash];
 						if (hashGroup.Count > 1)
@@ -808,6 +814,7 @@ namespace UnityGLTF
 
 					foreach (var s in smr)
 					{
+						if (!deduplicableMeshes.Contains(s.sharedMesh)) continue;
 						var hash = meshHashes[s.sharedMesh];
 						var hashGroup = groups[hash];
 						if (hashGroup.Count > 1)
@@ -848,6 +855,24 @@ namespace UnityGLTF
 			catch (Exception e)
 			{
 				Debug.LogException(e);
+			}
+		}
+
+		internal static void ValidateRequiredExtensionSupport(
+			GLTFRoot root, IReadOnlyList<GLTFImportPluginContext> plugins)
+		{
+			if (root?.ExtensionsRequired == null) return;
+			foreach (var extensionName in root.ExtensionsRequired)
+			{
+				bool supportedByPlugin = plugins != null
+					&& plugins.Any(plugin => plugin.SupportsRequiredExtension(extensionName));
+				if (supportedByPlugin) continue;
+				var factory = GLTFProperty.TryGetExtension(extensionName);
+				if (factory != null && !factory.RequiresRuntimeSupportForRequiredUse) continue;
+				throw new GLTFLoadException(
+					factory == null
+						? $"Required extension '{extensionName}' is not supported."
+						: $"Required extension '{extensionName}' is recognized but its required runtime behavior is unsupported.");
 			}
 		}
 
@@ -1618,6 +1643,8 @@ namespace UnityGLTF
 				{
 					await LoadJson(_gltfFileName);
 				}
+				// Partial loads do not return the scene-level metadata/controller required to honor these behaviors.
+				ValidateRequiredExtensionSupport(_gltfRoot, plugins: null);
 
 				if (_assetCache == null)
 				{

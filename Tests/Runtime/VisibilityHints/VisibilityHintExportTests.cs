@@ -9,8 +9,8 @@ namespace UnityGLTF.VisibilityHints.Tests
     /// <summary>
     /// Export tests: authored <see cref="NodeVisibilityHintSet"/> / <see cref="PrimitiveVisibilityHintSet"/>
     /// entries emit <c>KHR_node_visibility_hint</c> / <c>KHR_mesh_primitive_visibility_hint</c> on the right
-    /// node/primitive, declared used (never required), and export reads the authored role — not live material
-    /// state. Runs in PlayMode (the export pipeline needs the Unity runtime).
+    /// node/primitive. New entries are used-only, imported required policy is preserved, and export reads authored
+    /// metadata rather than live rendering state. Runs in PlayMode because the export pipeline needs Unity runtime.
     /// </summary>
     public class VisibilityHintExportTests
     {
@@ -127,7 +127,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             Assert.IsTrue(gltf.ExtensionsUsed != null && gltf.ExtensionsUsed.Contains(KHR_node_visibility_hint.EXTENSION_NAME),
                 "KHR_node_visibility_hint must be declared in extensionsUsed");
             Assert.IsTrue(gltf.ExtensionsRequired == null || !gltf.ExtensionsRequired.Contains(KHR_node_visibility_hint.EXTENSION_NAME),
-                "KHR_node_visibility_hint must NOT be required (neutrality)");
+                "newly authored hints use the exporter's conservative used-only policy");
         }
 
         [Test]
@@ -151,15 +151,34 @@ namespace UnityGLTF.VisibilityHints.Tests
             Assert.IsTrue(gltf.ExtensionsUsed != null && gltf.ExtensionsUsed.Contains(KHR_mesh_primitive_visibility_hint.EXTENSION_NAME),
                 "KHR_mesh_primitive_visibility_hint must be declared in extensionsUsed");
             Assert.IsTrue(gltf.ExtensionsRequired == null || !gltf.ExtensionsRequired.Contains(KHR_mesh_primitive_visibility_hint.EXTENSION_NAME),
-                "KHR_mesh_primitive_visibility_hint must NOT be required (neutrality)");
+                "newly authored hints use the exporter's conservative used-only policy");
         }
 
         [Test]
-        public void PrimitiveHint_ExportReadsAuthoredRole_NotLiveMaterialState()
+        public void ImportedRequiredPolicy_IsPreservedOnExport()
         {
-            // A first_person slot is swapped to the invisible material in the default ThirdPerson context at
-            // Bind time. Export must still emit role "first_person" from the authored entry — never inferring
-            // visibility from the (now invisible) live material.
+            var root = NewGo("root");
+            var head = MakeMeshChild(root, "head", out var mesh);
+            root.AddComponent<NodeVisibilityHintSet>().Bind(new[]
+            {
+                new NodeVisibilityHintSet.NodeVisibilityEntry
+                    { Node = head.transform, Role = "third_person" },
+            }, requiredOnImport: true);
+            root.AddComponent<PrimitiveVisibilityHintSet>().Bind(new[]
+            {
+                new PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry
+                    { Mesh = mesh, SubMesh = 0, Role = "third_person" },
+            }, requiredOnImport: true);
+
+            var gltf = ExportToGltfRoot(root);
+
+            CollectionAssert.Contains(gltf.ExtensionsRequired, KHR_node_visibility_hint.EXTENSION_NAME);
+            CollectionAssert.Contains(gltf.ExtensionsRequired, KHR_mesh_primitive_visibility_hint.EXTENSION_NAME);
+        }
+
+        [Test]
+        public void PrimitiveHint_ExportReadsAuthoredRole_NotHostPredicateState()
+        {
             var root = NewGo("root");
             MakeMeshChild(root, "arms", out var mesh);
 
@@ -168,11 +187,16 @@ namespace UnityGLTF.VisibilityHints.Tests
                 new PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry { Mesh = mesh, SubMesh = 0, Role = "first_person" },
             });
 
+            var controller = root.AddComponent<ViewContextController>();
+            controller.SetActiveContext("third_person");
+            Assert.IsFalse(controller.ShouldRenderPrimitive(
+                root.GetComponentInChildren<MeshRenderer>(), 0, true));
+
             var gltf = ExportToGltfRoot(root);
 
             var hint = FindPrimitiveHint(gltf);
-            Assert.IsNotNull(hint, "the hint must still export even though the slot is currently swapped to invisible");
-            Assert.AreEqual("first_person", hint.Role, "export reads the authored role, not live material state");
+            Assert.IsNotNull(hint, "host predicate state must not remove authored metadata");
+            Assert.AreEqual("first_person", hint.Role, "export reads the authored role, not a query result");
         }
     }
 }

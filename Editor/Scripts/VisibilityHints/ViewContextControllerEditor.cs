@@ -4,11 +4,7 @@ using UnityEngine;
 
 namespace UnityGLTF.VisibilityHints.Editor
 {
-    /// <summary>
-    /// Inspector for <see cref="ViewContextController"/>. In Play mode it exposes a Mode popup
-    /// (ThirdPerson / FirstPerson) that drives <see cref="ViewContextController.Mode"/> to preview visibility
-    /// live; at edit time it explains that the entries are authored on the hint-set components.
-    /// </summary>
+    /// <summary>Inspector for the host-selected convenience context used by predicate queries.</summary>
     [CustomEditor(typeof(ViewContextController))]
     public class ViewContextControllerEditor : UnityEditor.Editor
     {
@@ -17,40 +13,36 @@ namespace UnityGLTF.VisibilityHints.Editor
         private void OnEnable()
         {
             _controller = target as ViewContextController;
-            if (_controller != null) _controller.OnViewContextChanged += OnModeChanged;
+            if (_controller != null) _controller.OnViewContextChanged += OnContextChanged;
         }
 
         private void OnDisable()
         {
-            if (_controller != null) _controller.OnViewContextChanged -= OnModeChanged;
+            if (_controller != null) _controller.OnViewContextChanged -= OnContextChanged;
         }
 
-        // Repaint only when Mode actually changes (e.g. driven by script), not every editor frame.
-        private void OnModeChanged(ViewContextController.ViewContext _) => Repaint();
+        private void OnContextChanged(string _) => Repaint();
 
         public override void OnInspectorGUI()
         {
             var controller = (ViewContextController)target;
-
-            if (Application.isPlaying)
+            bool hasContext = EditorGUILayout.Toggle("Supply Context", controller.HasActiveContext);
+            if (!hasContext)
             {
-                EditorGUI.BeginChangeCheck();
-                var mode = (ViewContextController.ViewContext)EditorGUILayout.EnumPopup("Mode", controller.Mode);
-                if (EditorGUI.EndChangeCheck())
-                    controller.Mode = mode; // setter re-applies visibility and raises OnViewContextChanged
-
-                EditorGUILayout.HelpBox(
-                    "Switch Mode to preview first/third-person visibility. Third-person-only renderers toggle off " +
-                    "and hinted sub-meshes swap to the invisible material (and restore) as you flip it.",
-                    MessageType.Info);
+                if (controller.HasActiveContext) controller.ClearActiveContext();
             }
             else
             {
-                EditorGUILayout.HelpBox(
-                    "Driven by the NodeVisibilityHintSet / PrimitiveVisibilityHintSet components on this object — " +
-                    "author hint entries there. Enter Play mode to preview visibility by switching Mode.",
-                    MessageType.Info);
+                string context = EditorGUILayout.TextField("Active Context", controller.ActiveContext ?? "first_person");
+                if (!controller.HasActiveContext || context != controller.ActiveContext)
+                    controller.SetActiveContext(context);
             }
+
+            EditorGUILayout.HelpBox(
+                "This component evaluates visibility predicates without changing renderers, materials, meshes, " +
+                "cameras, or authored visibility. A render integration must query the desired context for each " +
+                "view and omit content whose predicate is false.",
+                MessageType.Info);
         }
     }
 }

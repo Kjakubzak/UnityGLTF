@@ -1,121 +1,85 @@
 # View-Context Visibility Hints (UnityGLTF)
 
-Runtime, import, and export support for two view-context visibility extensions:
+This non-ratified, disabled-by-default plugin imports and exports:
 
-- **`KHR_node_visibility_hint`** (node): a `role` (`always` | `first_person` | `third_person`, plus
-  custom vocabulary) + optional `label`, applying to a node **and its subtree**.
-- **`KHR_mesh_primitive_visibility_hint`** (mesh primitive): the same `role`/`label`, self-only (per primitive).
+- `KHR_node_visibility_hint`, with nearest-ancestor inheritance and descendant replacement.
+- `KHR_mesh_primitive_visibility_hint`, attached to a shared mesh primitive but evaluated for each containing node instance.
 
-> **Status: non-ratified.** Both plugins are **disabled by default** and marked `[NonRatifiedPlugin]`. Data
-> shapes and behavior may change as the extensions evolve.
+The runtime's semantic layer exposes pure predicates. It does not mutate `Renderer.enabled`, materials, meshes, node activation, cameras, or authored/animated `KHR_node_visibility` state. Render integrations may use material/shader substitution, draw filtering, primitive splitting, or another observably equivalent route.
 
-This is a **standalone, generalized** plugin: it works on any asset that carries the hints and is **not** gated
-on character detection. It has **no dependency** on the KhrCharacter plugin and makes **no changes** to core
-UnityGLTF (it is auto-discovered by reflection like every other plugin).
+## Runtime query
 
-## Composition with `KHR_node_visibility`
-
-These hints **build on top of** core `KHR_node_visibility` (already fully supported in core UnityGLTF — this
-plugin never reimplements it). Core `KHR_node_visibility` maps to `GameObject.SetActive(false)`; these hints
-operate on `Renderer.enabled` / material slots of otherwise-active objects. The effective visibility is the
-logical **AND**: an inactive node never renders regardless of any hint.
-
-## What it does
-
-On import (when the plugin is enabled) of a glTF carrying either hint, the plugin attaches components to the
-imported scene root:
-
-| Component | Responsibility |
-|---|---|
-| `ViewContextController` | First/third-person switch. Node hints toggle `Renderer.enabled`; primitive hints swap a sub-mesh material. Set `Mode` to switch context; subscribe to `OnViewContextChanged`. |
-| `NodeVisibilityHintSet` | Authored node-hint entries + subtree-inheritance resolution (a descendant hint overrides an ancestor for its subtree). |
-| `PrimitiveVisibilityHintSet` | Authored primitive-hint entries (per shared mesh + sub-mesh) resolved onto every renderer that uses the hinted mesh. |
-| `InvisibleMaterialCache` | Shared, fully-transparent material used for the primitive material-swap. |
-
-### The per-primitive material swap is a *representation*
-
-A single `Renderer` cannot hide one sub-mesh via `Renderer.enabled`, so a hidden primitive is realized by
-swapping `renderer.sharedMaterials[subMesh]` to a cached invisible material (the same trick UnityGLTF's
-`MaterialVariants` uses). This is **Unity's representation of the hint data, not a normative runtime behavior**,
-and its exact appearance is render-pipeline dependent (the extension carries only a visibility `role`, not a
-material). Export **never** infers visibility from live material state — it emits the authored `role` from the
-serialized hint entries, so a slot currently swapped to the invisible material still round-trips correctly.
-
-## Enabling the plugins
-
-Both are `EnabledByDefault => false`. Enable them before importing/exporting:
-
-- **Project-wide:** Project Settings → UnityGLTF → Import / Export → enable **"KHR Visibility Hints (View Context)"**.
-- **Per-import/export (code):** enable the plugin on the `GLTFSettings` you pass to the importer/exporter.
-
-When disabled, assets still import/export as plain glTF; the unknown extensions round-trip as `DefaultExtension`
-and are never rejected.
-
-## Runtime usage
+Import attaches the authored `NodeVisibilityHintSet` and/or `PrimitiveVisibilityHintSet` plus one `ViewContextController` to the scene root. No active context is supplied by default, so hints do not suppress content.
 
 ```csharp
-// After importing (or on a rehydrated prefab) the scene root carries a ViewContextController.
-var view = importedRoot.GetComponent<ViewContextController>();
+var visibility = importedRoot.GetComponent<ViewContextController>();
 
-view.Mode = ViewContextController.ViewContext.FirstPerson; // hide third_person, show first_person
-view.OnViewContextChanged += ctx => Debug.Log($"View context is now {ctx}");
+// Independent queries for two views in the same frame; neither changes asset state.
+bool renderInFirstPerson = visibility.ShouldRenderPrimitiveForContext(
+    renderer, subMeshIndex, "first_person", ancestorInclusiveCoreVisible);
+bool renderInMirror = visibility.ShouldRenderPrimitiveForContext(
+    renderer, subMeshIndex, "mirror", ancestorInclusiveCoreVisible);
 ```
 
-## Editor tooling
+`ancestorInclusiveCoreVisible` is required: it is the caller's logical AND of current `KHR_node_visibility.visible` values on the node and its ancestors. The hints plugin does not infer that value from general-purpose Unity activation state.
 
-An **opt-in editor layer** (`Editor/Scripts/VisibilityHints/`, assembly `UnityGLTF.VisibilityHints.Editor`,
-Editor platform only) makes the hints viewable, authorable, and testable by hand. It adds **no** runtime
-components and makes **no** changes to core UnityGLTF.
+For a host with one convenience context, call `SetActiveContext(context)` and use `ShouldRenderNode` / `ShouldRenderPrimitive`. Call `ClearActiveContext()` to restore the no-context behavior. Explicit `*ForContext` queries are preferred for multi-view rendering.
 
-- **Authorable inspectors** on the hint-set components — the same inspector shows imported entries and lets you
-  add / edit / remove them:
-  - `NodeVisibilityHintSet` — a list of `(Node, role, label)` rows. The **role** is a popup of
-    `always` / `first_person` / `third_person` with a **Custom…** option that reveals a text field for
-    the open role vocabulary.
-  - `PrimitiveVisibilityHintSet` — a list of `(Mesh, sub-mesh, role, label)` rows, plus a **"Collect child
-    renderers"** button that scans the subtree and appends any missing `(mesh, sub-mesh)` slots as role `always`
-    for you to set (in the style of `MaterialVariants`).
-  - Edits are written through the serialized backing list (undoable) and never toggle a live renderer/material,
-    so editing an imported hint changes the serialized `Entries` (hence export and the next Play-mode resolve).
-- **Play-mode preview:** the `ViewContextController` inspector shows a **Mode** popup (ThirdPerson / FirstPerson)
-  in Play mode, so you can flip the view context live and watch third-person-only renderers disable and hinted
-  sub-meshes swap to the invisible material (and restore).
-- **Sample generator:** **GameObject → UnityGLTF → Generate Visibility Hints Sample** builds a small
-  Head + Body hierarchy (Head → `third_person`; a Body sub-mesh → `first_person`), leaves it in the
-  scene for inspection, and exports a `VisibilityHintsSample.glb` (with the export plugin enabled on a fresh,
-  isolated default-settings instance) to a folder you choose. Re-import it with the import plugin enabled to see
-  the components restored.
+## Standard roles
 
-## Round-trip notes
+Role and context strings are exact and case-sensitive:
 
-- **Roles are open vocabulary.** `always` / `first_person` / `third_person` map to the runtime view
-  roles; any unrecognized role is treated as `always` (never hidden) with a warning
-  (`ViewContextController.ParseRole`). Unknown fields on the extension survive via lossless `RawData` passthrough.
-- **`role` is required, `label` is optional (minLength:1).** Export skips a hint with an empty/missing role
-  (with a warning) and omits an empty label from the wire.
-- **Primitive hints are per-mesh.** The extension lives on the shared `meshes[m].primitives[i]`, so it applies
-  to every node that references that mesh. Runtime/export key by the Unity `Mesh` + sub-mesh index.
-- **Declared used, never required.** Both extensions are emitted into `extensionsUsed` (not
-  `extensionsRequired`), so a plain viewer still loads the asset.
-- **Serialize → rehydrate.** Authored entries persist in hidden serialized fields; `NodeVisibilityHintSet` /
-  `PrimitiveVisibilityHintSet` re-resolve on `Awake` so an editor-imported prefab is live without a fresh import.
+| role | no context | `first_person` context | any other supplied context |
+|---|---|---|---|
+| `always` | visible | visible | visible |
+| `first_person` | visible | visible | hidden |
+| `third_person` | visible | hidden | visible |
+| unrecognized | visible | visible | visible |
 
-## Key files
+An unrecognized custom role remains valid metadata and uses the visible fallback unless a separately supported specification defines its semantics.
 
-- Schema (wire classes + factories, `namespace GLTF.Schema`): `Schema/KHR_node_visibility_hint.cs`,
-  `Schema/KHR_mesh_primitive_visibility_hint.cs`; names/roles: `Schema/VisibilityHintExtensionNames.cs`;
-  factory registration: `Schema/VisibilityHintSchemaRegistration.cs`
-- Runtime: `Components/ViewContextController.cs`, `Components/NodeVisibilityHintSet.cs`,
-  `Components/PrimitiveVisibilityHintSet.cs`, `Components/InvisibleMaterialCache.cs`
-- Import: `Import/VisibilityHintImportPlugin.cs`, `Import/VisibilityHintImportContext.cs`
-- Export: `Export/VisibilityHintExportPlugin.cs`, `Export/VisibilityHintExportContext.cs`
-- Editor tooling (opt-in, Editor platform): `Editor/Scripts/VisibilityHints/` — inspectors
-  (`NodeVisibilityHintSetEditor.cs`, `PrimitiveVisibilityHintSetEditor.cs`, `ViewContextControllerEditor.cs`) +
-  sample generator (`VisibilityHintSampleGenerator.cs`)
-- Tests: `Tests/Runtime/VisibilityHints/`
+## Rendering boundary
 
-## Future consolidation
+The plugin provides metadata preservation and the standard predicates, not a complete render-pipeline adapter. A consumer claiming support when either extension is listed in `extensionsRequired` must integrate these predicates into each visual render view and omit hidden node or primitive content from all relevant visual passes. The stock metadata plugin does not make that claim and rejects required use unless the host explicitly enables the corresponding `HostSupportsRequiredNodeUse` or `HostSupportsRequiredPrimitiveUse` capability after providing a complete integration.
 
-`ViewContextController` intentionally duplicates the first/third-person logic in the KhrCharacter
-`ViewModeController` (no cross-dependency by design). A future refactor could let KhrCharacter delegate to this
-generalized controller.
+Newly authored entries use a conservative `extensionsUsed`-only export policy. An imported required declaration is preserved on round-trip.
+
+### Optional scoped material adapter
+
+`ScopedMaterialVisibilityAdapter` is one Unity-specific renderer route. The host supplies a pipeline-compatible no-draw material and applies it in a short-lived scope around one view render:
+
+```csharp
+using (adapter.ApplyForView(renderers, context, ResolveAncestorInclusiveCoreVisibility))
+{
+    RenderOneView(camera); // host/render-pipeline-specific
+}
+```
+
+The adapter replaces only that renderer instance's hidden material slots and restores exact references on disposal. It never modifies a `Material` asset. The supplied shader must contribute to no relevant color, depth, shadow, depth-normal, motion-vector, or pipeline-specific pass; alpha zero alone is insufficient. The adapter covers renderer output only, so it is not by itself a complete required-use implementation for every possible node visual feature. Hosts are responsible for camera ordering, reentrancy, XR, and applying the scope separately to every renderer instance.
+
+The helper requires exactly one material slot per mesh sub-mesh and rejects overlapping scopes for the same renderer. Built-in render-pipeline hosts may scope a direct camera render; SRP/URP hosts generally integrate through pipeline camera callbacks or render requests. Material assignments must remain stable for the duration of a scope.
+
+## Composition
+
+For node visual content:
+
+```text
+renderNodeVisualContent = hintVisible AND coreVisible
+```
+
+For a primitive instance:
+
+```text
+renderPrimitiveInstance = primitiveHintVisible AND nodeHintVisible AND coreVisible
+```
+
+A descendant node hint replaces its inherited node hint. It can therefore make its own content hint-visible even when an ancestor's hint is false. An ancestor `KHR_node_visibility.visible: false` remains part of `coreVisible` and cannot be overridden.
+
+## Import, export, and authoring
+
+- Enable `VisibilityHintImportPlugin` or `VisibilityHintExportPlugin` on the relevant `GLTFSettings`; both are disabled by default.
+- Export reads authored entries, not runtime query results, and preserves `extensions`, `extras`, and additional JSON properties.
+- Empty roles are skipped on export because `role` is required and nonempty.
+- Primitive entries are keyed by Unity `Mesh` and sub-mesh index; the same primitive role is combined independently with each containing node's predicate.
+- Primitive-hinted meshes opt out of UnityGLTF's geometry-only mesh deduplication so distinct glTF primitive metadata cannot collapse.
+- The editor inspectors author the serialized hint entries. The controller inspector only selects a convenience query context; it does not preview rendering by mutating the scene.

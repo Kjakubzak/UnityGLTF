@@ -9,7 +9,7 @@ namespace UnityGLTF.VisibilityHints.Tests
 {
     /// <summary>
     /// Wire-level tests for the two visibility-hint extension factories: authored serialize -> deserialize
-    /// round-trips, lossless <c>RawData</c> passthrough (custom fields survive), the optional-label
+    /// round-trips, preservation of additional properties and glTFProperty payloads, the optional-label
     /// <c>minLength:1</c> guard, and the missing-<c>role</c> warning.
     /// </summary>
     public class SchemaRoundTripTests
@@ -37,9 +37,8 @@ namespace UnityGLTF.VisibilityHints.Tests
         }
 
         [Test]
-        public void NodeHint_RawData_PassesThroughUnknownFieldsLosslessly()
+        public void NodeHint_AdditionalProperties_PassThroughLosslessly()
         {
-            // A deserialized hint keeps the raw token; re-serializing must preserve custom/unknown fields verbatim.
             var json = new JProperty(KHR_node_visibility_hint.EXTENSION_NAME, new JObject(
                 new JProperty("role", "custom_role"),
                 new JProperty("label", "Custom"),
@@ -52,11 +51,11 @@ namespace UnityGLTF.VisibilityHints.Tests
             var obj = (JObject)ext.Serialize().Value;
             Assert.AreEqual("custom_role", obj["role"]?.Value<string>());
             Assert.AreEqual("Custom", obj["label"]?.Value<string>());
-            Assert.AreEqual(7, obj["vendorFlag"]?.Value<int>(), "unknown fields must survive via RawData passthrough");
+            Assert.AreEqual(7, obj["vendorFlag"]?.Value<int>());
         }
 
         [Test]
-        public void PrimitiveHint_RawData_PassesThroughUnknownFieldsLosslessly()
+        public void PrimitiveHint_AdditionalProperties_PassThroughLosslessly()
         {
             var json = new JProperty(KHR_mesh_primitive_visibility_hint.EXTENSION_NAME, new JObject(
                 new JProperty("role", "third_person"),
@@ -66,7 +65,25 @@ namespace UnityGLTF.VisibilityHints.Tests
             Assert.IsNotNull(ext);
 
             var obj = (JObject)ext.Serialize().Value;
-            Assert.AreEqual("keepme", obj["extra"]?.Value<string>(), "unknown fields must survive via RawData passthrough");
+            Assert.AreEqual("keepme", obj["extra"]?.Value<string>());
+        }
+
+        [Test]
+        public void NodeHint_PreservesExtensionsAndExtrasWhileAllowingRoleEdits()
+        {
+            var json = new JProperty(KHR_node_visibility_hint.EXTENSION_NAME, new JObject
+            {
+                { "role", "third_person" },
+                { "extensions", new JObject { { "ACME_visibility", new JObject { { "mode", 3 } } } } },
+                { "extras", new JObject { { "author", "test" } } },
+            });
+            var ext = (KHR_node_visibility_hint)new KHR_node_visibility_hint_Factory().Deserialize(null, json);
+            ext.Role = "first_person";
+
+            var serialized = (JObject)ext.Serialize().Value;
+            Assert.AreEqual("first_person", serialized["role"]?.Value<string>());
+            Assert.AreEqual(3, serialized["extensions"]?["ACME_visibility"]?["mode"]?.Value<int>());
+            Assert.AreEqual("test", serialized["extras"]?["author"]?.Value<string>());
         }
 
         [Test]

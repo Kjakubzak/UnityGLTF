@@ -1,137 +1,63 @@
 using System;
-using System.Collections.Generic;
 using UnityEngine;
 
 namespace UnityGLTF.VisibilityHints
 {
     /// <summary>
-    /// Generalized first/third-person view-context switch. Renderers registered from
-    /// <c>KHR_node_visibility_hint</c> are toggled via <see cref="Renderer.enabled"/>; primitive slots registered
-    /// from <c>KHR_mesh_primitive_visibility_hint</c> are realized by swapping a single sub-mesh material to a cached
-    /// invisible material and back (a single <see cref="Renderer"/> cannot hide one sub-mesh via
-    /// <see cref="Renderer.enabled"/>).
-    ///
-    /// <para>Composition with core <c>KHR_node_visibility</c>: that extension maps to
-    /// <see cref="GameObject.SetActive(bool)"/>, so an inactive node never renders regardless of these hints. The
-    /// effective visibility is therefore the logical AND of core node visibility and the hint's view-role — this
-    /// controller only manages <see cref="Renderer.enabled"/> / material slots of otherwise-active objects.</para>
-    ///
-    /// <para>This is a standalone, generalized equivalent of the KhrCharacter <c>ViewModeController</c>; the
-    /// per-primitive material swap is framed as Unity's representation of the hint data, not a normative runtime
-    /// behaviour. A future consolidation could let KhrCharacter delegate to this controller.</para>
+    /// Non-mutating facade for evaluating imported node and primitive visibility hints. A render integration can
+    /// query an explicit context independently for each view and instance, then omit content whose predicate is
+    /// false. This component does not change renderers, materials, meshes, cameras, or authored visibility state.
     /// </summary>
     [DisallowMultipleComponent]
     public class ViewContextController : MonoBehaviour
     {
-        public enum ViewContext { ThirdPerson, FirstPerson }
-        public enum ViewRole { Always, FirstPerson, ThirdPerson }
+        [SerializeField] private bool _hasActiveContext;
+        [SerializeField] private string _activeContext;
 
-        [SerializeField] private ViewContext _mode = ViewContext.ThirdPerson;
+        public event Action<string> OnViewContextChanged;
 
-        /// <summary>Raised after <see cref="Mode"/> changes and the new visibility has been applied.</summary>
-        public event Action<ViewContext> OnViewContextChanged;
+        /// <summary>Host-selected convenience context, or null when no context is supplied.</summary>
+        public string ActiveContext => _hasActiveContext ? _activeContext : null;
 
-        private readonly List<(Renderer renderer, ViewRole role)> _renderers = new List<(Renderer, ViewRole)>();
-        private readonly List<PrimitiveSlot> _primitiveSlots = new List<PrimitiveSlot>();
+        public bool HasActiveContext => _hasActiveContext;
 
-        private struct PrimitiveSlot
+        public void SetActiveContext(string context)
         {
-            public Renderer Renderer;
-            public int SubMesh;
-            public Material Original;
-            public Material Invisible;
-            public ViewRole Role;
+            bool hasContext = context != null;
+            if (_hasActiveContext == hasContext && (!_hasActiveContext || _activeContext == context)) return;
+            _hasActiveContext = hasContext;
+            _activeContext = hasContext ? context : null;
+            OnViewContextChanged?.Invoke(ActiveContext);
         }
 
-        public ViewContext Mode
+        public void ClearActiveContext() => SetActiveContext(null);
+
+        public bool ShouldRenderNode(Transform node, bool ancestorInclusiveCoreVisible)
+            => ShouldRenderNodeForContext(node, ActiveContext, ancestorInclusiveCoreVisible);
+
+        public bool ShouldRenderNodeForContext(
+            Transform node, string context, bool ancestorInclusiveCoreVisible)
         {
-            get => _mode;
-            set
-            {
-                if (_mode == value) return;
-                _mode = value;
-                ApplyAll();
-                OnViewContextChanged?.Invoke(_mode);
-            }
+            var nodeHints = GetComponent<NodeVisibilityHintSet>();
+            var role = nodeHints != null ? nodeHints.ResolveRole(node) : null;
+            return VisibilityHintEvaluator.ShouldRenderNodeVisualContent(
+                role, context, ancestorInclusiveCoreVisible);
         }
 
-        /// <summary>Register a whole renderer (node hint). Its <see cref="Renderer.enabled"/> follows the role.</summary>
-        public void RegisterRenderer(Renderer renderer, ViewRole role)
-        {
-            if (renderer == null) return;
-            _renderers.Add((renderer, role));
-            renderer.enabled = IsVisible(role, _mode);
-        }
+        public bool ShouldRenderPrimitive(
+            Renderer renderer, int subMesh, bool ancestorInclusiveCoreVisible)
+            => ShouldRenderPrimitiveForContext(
+                renderer, subMesh, ActiveContext, ancestorInclusiveCoreVisible);
 
-        /// <summary>
-        /// Register a single sub-mesh slot (primitive hint). When the role says the slot should be hidden in the
-        /// current context, <c>renderer.sharedMaterials[subMesh]</c> is swapped to <paramref name="invisible"/>;
-        /// otherwise it is restored to <paramref name="original"/>.
-        /// </summary>
-        public void RegisterPrimitiveSlot(Renderer renderer, int subMesh, Material original, Material invisible, ViewRole role)
+        public bool ShouldRenderPrimitiveForContext(
+            Renderer renderer, int subMesh, string context, bool ancestorInclusiveCoreVisible)
         {
-            if (renderer == null || subMesh < 0) return;
-            var slot = new PrimitiveSlot
-            {
-                Renderer = renderer,
-                SubMesh = subMesh,
-                Original = original,
-                Invisible = invisible,
-                Role = role,
-            };
-            _primitiveSlots.Add(slot);
-            ApplySlot(slot);
-        }
-
-        /// <summary>Re-apply the visibility policy to every registered renderer and primitive slot.</summary>
-        public void ApplyAll()
-        {
-            for (int i = 0; i < _renderers.Count; i++)
-            {
-                var (renderer, role) = _renderers[i];
-                if (renderer != null) renderer.enabled = IsVisible(role, _mode);
-            }
-            for (int i = 0; i < _primitiveSlots.Count; i++)
-                ApplySlot(_primitiveSlots[i]);
-        }
-
-        private void ApplySlot(PrimitiveSlot slot)
-        {
-            if (slot.Renderer == null) return;
-            var materials = slot.Renderer.sharedMaterials; // returns a copy; must reassign to take effect
-            if (slot.SubMesh < 0 || slot.SubMesh >= materials.Length) return;
-
-            var desired = IsVisible(slot.Role, _mode) ? slot.Original : slot.Invisible;
-            if (materials[slot.SubMesh] == desired) return;
-            materials[slot.SubMesh] = desired;
-            slot.Renderer.sharedMaterials = materials;
-        }
-
-        private static bool IsVisible(ViewRole role, ViewContext mode)
-        {
-            switch (role)
-            {
-                case ViewRole.ThirdPerson: return mode == ViewContext.ThirdPerson;
-                case ViewRole.FirstPerson: return mode == ViewContext.FirstPerson;
-                default: return true; // Always
-            }
-        }
-
-        /// <summary>
-        /// Maps a glTF <c>role</c> string to a <see cref="ViewRole"/>. Unknown/custom roles fall back to
-        /// <see cref="ViewRole.Always"/> (never hidden) with a warning, per the spec's open role vocabulary.
-        /// </summary>
-        public static ViewRole ParseRole(string role)
-        {
-            switch (role)
-            {
-                case VisibilityHintExtensionNames.RoleFirstPerson: return ViewRole.FirstPerson;
-                case VisibilityHintExtensionNames.RoleThirdPerson: return ViewRole.ThirdPerson;
-                case VisibilityHintExtensionNames.RoleAlways: return ViewRole.Always;
-                default:
-                    Debug.LogWarning($"[VisibilityHints] Unknown visibility role '{role}'; treating as '{VisibilityHintExtensionNames.RoleAlways}'.");
-                    return ViewRole.Always;
-            }
+            var nodeHints = GetComponent<NodeVisibilityHintSet>();
+            var primitiveHints = GetComponent<PrimitiveVisibilityHintSet>();
+            var nodeRole = nodeHints != null ? nodeHints.ResolveRole(renderer != null ? renderer.transform : null) : null;
+            var primitiveRole = primitiveHints != null ? primitiveHints.ResolveRole(renderer, subMesh) : null;
+            return VisibilityHintEvaluator.ShouldRenderPrimitiveInstance(
+                nodeRole, primitiveRole, context, ancestorInclusiveCoreVisible);
         }
     }
 }

@@ -8,8 +8,8 @@ namespace UnityGLTF.VisibilityHints.Editor
     /// <summary>
     /// Editor menu that builds a small sample hierarchy exercising both view-context visibility-hint extensions
     /// and exports it to a <c>.glb</c> (with the VisibilityHints export plugin enabled on a fresh, isolated
-    /// default-settings instance). The hierarchy is left in the scene so the inspectors and the Play-mode Mode toggle can be tried
-    /// against it, and the exported file re-imports (with the import plugin enabled) with the components restored.
+    /// default-settings instance). The hierarchy is left in the scene so its authored entries and predicate-query
+    /// component can be inspected, and the exported file re-imports with the metadata restored.
     /// </summary>
     public static class VisibilityHintSampleGenerator
     {

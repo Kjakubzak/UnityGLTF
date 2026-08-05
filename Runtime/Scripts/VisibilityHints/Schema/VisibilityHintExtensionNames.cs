@@ -5,7 +5,7 @@ namespace UnityGLTF.VisibilityHints
     /// <summary>
     /// Canonical identifiers for the view-context visibility-hint extensions and the standard <c>role</c>
     /// vocabulary. Custom role strings are allowed by the spec; the runtime treats any unrecognized role as
-    /// <c>always</c> (see <see cref="ViewContextController.ParseRole"/>).
+    /// <c>always</c> (see <see cref="VisibilityHintEvaluator.IsRoleVisible"/>).
     /// </summary>
     public static class VisibilityHintExtensionNames
     {

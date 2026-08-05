@@ -4,15 +4,8 @@ using UnityEngine;
 namespace UnityGLTF.VisibilityHints
 {
     /// <summary>
-    /// Scene-root component holding the authored <c>KHR_mesh_primitive_visibility_hint</c> entries and resolving
-    /// them onto renderer sub-mesh slots. A primitive hint is self-only (no subtree inheritance) but, because it
-    /// lives on a shared <c>meshes[m].primitives[i]</c>, it applies to <b>every</b> renderer that uses that mesh.
-    /// Each affected <c>(renderer, subMesh)</c> is registered with the <see cref="ViewContextController"/> as a
-    /// material-swap slot (see <see cref="InvisibleMaterialCache"/>).
-    ///
-    /// <para>Entries are keyed by the shared Unity <see cref="Mesh"/> + sub-mesh index (which matches the glTF
-    /// primitive index). The list is serialized so an editor-imported prefab rehydrates on <see cref="Awake"/>; a
-    /// live import instead calls <see cref="Bind"/> directly.</para>
+    /// Serialized <c>KHR_mesh_primitive_visibility_hint</c> annotations. The annotation belongs to a shared mesh
+    /// primitive, while complete visibility remains a per-containing-node, per-view query.
     /// </summary>
     [DisallowMultipleComponent]
     public class PrimitiveVisibilityHintSet : MonoBehaviour
@@ -24,72 +17,67 @@ namespace UnityGLTF.VisibilityHints
             public int SubMesh;
             public string Role;
             public string Label;
+            public string ExtensionsJson;
+            public string ExtrasJson;
+            public string AdditionalPropertiesJson;
+            public string[] RequiredCompanionExtensions;
         }
 
         [SerializeField, HideInInspector] private List<PrimitiveVisibilityEntry> _entries = new List<PrimitiveVisibilityEntry>();
+        [SerializeField, HideInInspector] private bool _requiredOnImport;
+        [System.NonSerialized]
+        private Dictionary<(Mesh mesh, int subMesh), PrimitiveVisibilityEntry> _entryByPrimitive;
+        [System.NonSerialized] private bool _indexDirty = true;
 
         public IReadOnlyList<PrimitiveVisibilityEntry> Entries => _entries;
+        public bool RequiredOnImport => _requiredOnImport;
 
-        private bool _resolved;
-
-        /// <summary>Bind authored entries (live import) and immediately resolve them onto renderer sub-mesh slots.</summary>
-        public void Bind(IReadOnlyList<PrimitiveVisibilityEntry> entries)
+        public void Bind(IReadOnlyList<PrimitiveVisibilityEntry> entries, bool requiredOnImport = false)
         {
             _entries = entries != null ? new List<PrimitiveVisibilityEntry>(entries) : new List<PrimitiveVisibilityEntry>();
-            _resolved = false;
-            Resolve();
+            _requiredOnImport = requiredOnImport;
+            _indexDirty = true;
         }
 
-        private void Awake()
+        /// <summary>Rebuilds key lookup after runtime code changes an entry's mesh or sub-mesh reference.</summary>
+        public void RefreshIndex() => _indexDirty = true;
+
+        private void OnValidate() => _indexDirty = true;
+
+        private void EnsureIndex()
         {
-            if (!_resolved) Resolve();
+            if (!_indexDirty && _entryByPrimitive != null) return;
+            _entryByPrimitive = new Dictionary<(Mesh, int), PrimitiveVisibilityEntry>();
+            if (_entries != null)
+                foreach (var entry in _entries)
+                    if (entry?.Mesh != null && entry.SubMesh >= 0)
+                        _entryByPrimitive[(entry.Mesh, entry.SubMesh)] = entry;
+            _indexDirty = false;
         }
 
-        private void Resolve()
+        public string ResolveRole(Renderer renderer, int subMesh)
+            => ResolveRole(GetRendererMesh(renderer), subMesh);
+
+        public string ResolveRole(Mesh mesh, int subMesh)
         {
-            if (_resolved) return;
-            if (_entries == null || _entries.Count == 0) return;
-            _resolved = true;
-
-            var controller = GetComponent<ViewContextController>();
-            if (controller == null) controller = gameObject.AddComponent<ViewContextController>();
-
-            // mesh -> (subMesh -> role)
-            var byMesh = new Dictionary<Mesh, Dictionary<int, string>>();
-            foreach (var e in _entries)
-            {
-                if (e == null || e.Mesh == null || e.SubMesh < 0) continue;
-                if (!byMesh.TryGetValue(e.Mesh, out var subMap))
-                    byMesh[e.Mesh] = subMap = new Dictionary<int, string>();
-                subMap[e.SubMesh] = e.Role;
-            }
-            if (byMesh.Count == 0) return;
-
-            var invisible = InvisibleMaterialCache.Get();
-            var renderers = GetComponentsInChildren<Renderer>(true);
-            foreach (var renderer in renderers)
-            {
-                var mesh = GetRendererMesh(renderer);
-                if (mesh == null || !byMesh.TryGetValue(mesh, out var subMap)) continue;
-
-                var materials = renderer.sharedMaterials;
-                foreach (var kv in subMap)
-                {
-                    int subMesh = kv.Key;
-                    if (subMesh < 0 || subMesh >= materials.Length) continue;
-                    var viewRole = ViewContextController.ParseRole(kv.Value);
-                    if (viewRole == ViewContextController.ViewRole.Always) continue; // always visible -> no swap needed
-                    controller.RegisterPrimitiveSlot(renderer, subMesh, materials[subMesh], invisible, viewRole);
-                }
-            }
+            if (mesh == null || subMesh < 0) return null;
+            EnsureIndex();
+            return _entryByPrimitive.TryGetValue((mesh, subMesh), out var entry) ? entry.Role : null;
         }
 
-        // Resolves the mesh a renderer draws: SkinnedMeshRenderer carries it directly; MeshRenderer reads its
-        // sibling MeshFilter. Both expose sharedMaterials via the Renderer base type.
+        public bool ShouldRenderPrimitiveInstance(
+            Renderer renderer,
+            int subMesh,
+            string resolvedNodeRole,
+            string activeContext,
+            bool ancestorInclusiveCoreVisible)
+            => VisibilityHintEvaluator.ShouldRenderPrimitiveInstance(
+                resolvedNodeRole, ResolveRole(renderer, subMesh), activeContext, ancestorInclusiveCoreVisible);
+
         private static Mesh GetRendererMesh(Renderer renderer)
         {
-            if (renderer is SkinnedMeshRenderer smr) return smr.sharedMesh;
-            var filter = renderer.GetComponent<MeshFilter>();
+            if (renderer is SkinnedMeshRenderer skinned) return skinned.sharedMesh;
+            var filter = renderer != null ? renderer.GetComponent<MeshFilter>() : null;
             return filter != null ? filter.sharedMesh : null;
         }
     }
