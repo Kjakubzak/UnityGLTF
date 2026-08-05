@@ -27,6 +27,8 @@ namespace UnityGLTF.KhrCharacter
         public CameraHintSet CameraHints { get; internal set; }
         public SkeletonMap Skeleton { get; internal set; }
         public ViewModeController View { get; internal set; }
+        public int DesignatedRootNodeIndex => _designatedRootNodeIndex;
+        public Transform DesignatedRoot => _designatedRoot;
 
         private readonly List<CharacterCapability> _capabilities = new List<CharacterCapability>();
         public IReadOnlyList<CharacterCapability> Capabilities => _capabilities;
@@ -35,6 +37,8 @@ namespace UnityGLTF.KhrCharacter
         // that this component was deserialized from a baked asset (vs added fresh by a live import). Hidden from
         // the inspector: it's baked data, surfaced read-only by KhrCharacterEditor rather than hand-edited.
         [SerializeField, HideInInspector] private List<CharacterCapability> _serializedCapabilities = new List<CharacterCapability>();
+        [SerializeField, HideInInspector] private int _designatedRootNodeIndex = -1;
+        [SerializeField, HideInInspector] private Transform _designatedRoot;
 
         public bool Has(CharacterCapability capability) => _capabilities.Contains(capability);
 
@@ -65,6 +69,12 @@ namespace UnityGLTF.KhrCharacter
             _capabilities.Clear();
             if (capabilities != null) _capabilities.AddRange(capabilities);
             _serializedCapabilities = new List<CharacterCapability>(_capabilities);   // persist for prefab rehydration
+        }
+
+        internal void SetDesignation(int nodeIndex, Transform resolvedTransform)
+        {
+            _designatedRootNodeIndex = nodeIndex;
+            _designatedRoot = resolvedTransform;
         }
 
         internal void MarkReady()

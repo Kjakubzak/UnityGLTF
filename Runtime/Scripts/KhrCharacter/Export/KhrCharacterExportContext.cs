@@ -100,12 +100,9 @@ namespace UnityGLTF.KhrCharacter
         // MaterialVariantsPlugin). Include-inactive: imported character roots are frequently inactive at edit
         // time (consistent with AfterSceneExport's edit-time-safe intent).
         //
-        // F6 (multi-character stopgap): PR #2512 models ONE character per glTF document (KHR_character is a root
-        // singleton with a single rootNode). With multiple character-bearing roots in the export set we keep the
-        // deterministic first-in-RootTransforms-order selection and emit a warning naming the skipped roots, so
-        // nothing is silently dropped. True multi-character export needs a schema RFC + import rework (out of
-        // scope); the documented workflow is one glTF document per character. (A single root nesting two
-        // characters is not separately diagnosed here — GetComponentInChildren takes the first component.)
+        // KHR_character provides one author-selected root designation. When the export set contains several
+        // character components, choose one deterministically for that designation and leave the others as
+        // ordinary glTF content; the extension does not assert that the asset contains only one character.
         private Transform FindCharacterRoot(GLTFSceneExporter exporter)
         {
             var roots = exporter?.RootTransforms;
@@ -130,9 +127,8 @@ namespace UnityGLTF.KhrCharacter
             {
                 Debug.LogWarning(
                     $"[KHR_character] Export contains {characterRootNames.Count} character roots " +
-                    $"({string.Join(", ", characterRootNames)}); PR #2512 is one-character-per-document. " +
-                    $"Exporting '{selected.name}'; the rest are skipped. To export multiple characters, export each " +
-                    "character root to a separate glTF (one document per character).");
+                    $"({string.Join(", ", characterRootNames)}). Designating '{selected.name}' as rootNode; " +
+                    "additional roots remain ordinary glTF content unless exported separately with their own designation.");
             }
 
             return selected;
@@ -155,9 +151,6 @@ namespace UnityGLTF.KhrCharacter
             // Additive metadata: declare as USED (not REQUIRED) so plain glTF viewers that don't
             // understand KHR_character still load the asset; KHR-aware importers detect it by presence.
             exporter.DeclareExtensionUsage(KHR_character.EXTENSION_NAME, isRequired: false);
-            // KHR_character has a declaration-only dependency on KHR_xmp_json_ld. Metadata-free
-            // assets declare support without emitting a packet definition or packet reference.
-            exporter.DeclareExtensionUsage(KhrCharacterExtensionNames.XmpJsonLd, isRequired: false);
         }
 
         // F6: emits the node-level KHR character extensions (KHR_node_camera_hint / KHR_node_lookat_target) from the

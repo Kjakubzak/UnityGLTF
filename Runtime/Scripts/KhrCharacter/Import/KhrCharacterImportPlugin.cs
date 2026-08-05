@@ -37,6 +37,7 @@ namespace UnityGLTF.KhrCharacter
         private readonly GLTFImportContext _context;
         private readonly RigImportMode _rigMode;
         private bool _isCharacter;
+        private int _characterRootNodeIndex = -1;
 
         // UnityGLTF doesn't expose a GameObject -> node-index map, so build our own from the node callbacks.
         private readonly Dictionary<int, GameObject> _nodeIndexToGo = new Dictionary<int, GameObject>();
@@ -58,6 +59,7 @@ namespace UnityGLTF.KhrCharacter
             _nodeIndexToGo.Clear();
             _cameraHints.Clear();
             _lookatTargets.Clear();
+            _characterRootNodeIndex = -1;
             if (gltfRoot?.Extensions != null)
             {
                 foreach (var key in gltfRoot.Extensions.Keys)
@@ -68,6 +70,20 @@ namespace UnityGLTF.KhrCharacter
                 }
             }
             _isCharacter = _presentExtensions.Contains(KhrCharacterExtensionNames.Character);
+            if (_isCharacter)
+            {
+                var character = GetCharacterExtension(gltfRoot);
+                if (character?.RootNode == null
+                    || gltfRoot.Nodes == null
+                    || character.RootNode.Value < 0
+                    || character.RootNode.Value >= gltfRoot.Nodes.Count)
+                {
+                    Debug.LogError("[KHR_character] rootNode does not resolve to a top-level node index; character support is unavailable.");
+                    _isCharacter = false;
+                }
+                else
+                    _characterRootNodeIndex = character.RootNode.Value;
+            }
         }
 
         public override void OnAfterImportNode(Node node, int nodeIndex, GameObject nodeObject)
@@ -103,6 +119,8 @@ namespace UnityGLTF.KhrCharacter
 
             var hub = sceneObject.GetComponent<KhrCharacter>();
             if (hub == null) hub = sceneObject.AddComponent<KhrCharacter>();
+            _nodeIndexToGo.TryGetValue(_characterRootNodeIndex, out var designatedRootObject);
+            hub.SetDesignation(_characterRootNodeIndex, designatedRootObject != null ? designatedRootObject.transform : null);
 
             // Parse KHR_character_expression once here and thread it into both consumers below (baking and
             // auto-play suppression), which both run only inside this single callback. Previously each re-parsed
@@ -448,6 +466,16 @@ namespace UnityGLTF.KhrCharacter
             if (ext is KHR_character_expression typed) return typed;
             if (ext is DefaultExtension raw && raw.ExtensionData != null)
                 return new KHR_character_expression_Factory().Deserialize(root, raw.ExtensionData) as KHR_character_expression;
+            return null;
+        }
+
+        private static KHR_character GetCharacterExtension(GLTFRoot root)
+        {
+            if (root?.Extensions == null) return null;
+            if (!root.Extensions.TryGetValue(KhrCharacterExtensionNames.Character, out var ext)) return null;
+            if (ext is KHR_character typed) return typed;
+            if (ext is DefaultExtension raw && raw.ExtensionData != null)
+                return new KHR_character_Factory().Deserialize(root, raw.ExtensionData) as KHR_character;
             return null;
         }
 

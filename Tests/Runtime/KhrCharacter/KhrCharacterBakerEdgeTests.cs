@@ -113,9 +113,10 @@ namespace UnityGLTF.KhrCharacter.Tests
             // itself is what N1 pins: detection keys on the KHR_character root extension.)
             var root = new GLTFRoot
             {
+                Nodes = new List<Node> { new Node { Name = "character" } },
                 Extensions = new Dictionary<string, IExtension>
                 {
-                    { KhrCharacterExtensionNames.Character, new KHR_character() },
+                    { KhrCharacterExtensionNames.Character, new KHR_character { RootNode = 0 } },
                 },
             };
             var ctx = new KhrCharacterImportContext((GLTFImportContext)null);

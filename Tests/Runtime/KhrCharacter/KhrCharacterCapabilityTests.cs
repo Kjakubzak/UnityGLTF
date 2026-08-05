@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using NUnit.Framework;
+using UnityEngine;
 
 namespace UnityGLTF.KhrCharacter.Tests
 {
@@ -49,6 +50,31 @@ namespace UnityGLTF.KhrCharacter.Tests
             CollectionAssert.DoesNotContain(caps, CharacterCapability.Expression);
             CollectionAssert.DoesNotContain(caps, CharacterCapability.Morphtarget);
             CollectionAssert.DoesNotContain(caps, CharacterCapability.Mapping);
+        }
+
+        [Test]
+        public void CharacterDesignation_PreservesResolvedIndexAndOptionalTransform()
+        {
+            var host = new GameObject("host");
+            var designated = new GameObject("designated");
+            try
+            {
+                var character = host.AddComponent<KhrCharacter>();
+                character.SetDesignation(7, designated.transform);
+
+                Assert.AreEqual(7, character.DesignatedRootNodeIndex);
+                Assert.AreSame(designated.transform, character.DesignatedRoot);
+
+                character.SetDesignation(9, null);
+                Assert.AreEqual(9, character.DesignatedRootNodeIndex,
+                    "the glTF node index remains resolved even when the node is not instantiated in this scene");
+                Assert.IsNull(character.DesignatedRoot);
+            }
+            finally
+            {
+                Object.DestroyImmediate(host);
+                Object.DestroyImmediate(designated);
+            }
         }
     }
 }

@@ -105,11 +105,10 @@ loading in a third-party viewer; they are documented so consumers know what is a
   the referenced camera was already exported onto its own node — `GLTFSceneExporter.ExportCamera` is private and
   there is no public way to force-export a camera here, and import does not populate the projection link today.
   `camera` is optional in the spec, so the omission is conformant.
-- **One character per glTF document (PR #2512).** `KHR_character` is a root singleton with a single `rootNode`, so
-  a document models exactly one character. If an export set contains multiple character roots, the exporter
-  deterministically emits the **first** (in `RootTransforms` order) and logs a warning naming the skipped roots —
-  nothing is silently dropped. To export multiple characters, export each character root to its **own** glTF
-  document (one document per character); each round-trips independently.
+- **One `KHR_character` root designation per glTF asset.** `rootNode` identifies the author-selected character
+  root; it does not assert scene membership, skin ownership, skeleton membership, descendant coverage, or that
+  the asset contains only one character-like object. If an export set contains multiple character components,
+  the exporter deterministically designates the first and leaves the others as ordinary glTF content.
 
 ## Compositing policy (additive vs. override)
 

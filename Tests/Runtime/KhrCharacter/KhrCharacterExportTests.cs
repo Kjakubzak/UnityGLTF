@@ -44,8 +44,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             return exporter.GetRoot();
         }
 
-        // Like ExportToGltfRoot but with MULTIPLE export roots in RootTransforms (for the F6 multi-character
-        // stopgap tests): the exporter sees several character roots and must deterministically emit only the first.
+        // Like ExportToGltfRoot but with multiple export roots: the exporter sees several character components
+        // and must deterministically select one rootNode designation.
         private static GLTFRoot ExportRootsToGltfRoot(params GameObject[] roots)
         {
             var settings = GLTFSettings.GetDefaultSettings();
@@ -724,7 +724,6 @@ namespace UnityGLTF.KhrCharacter.Tests
             var nestedTokens = new[]
             {
                 KhrCharacterExtensionNames.Character,
-                KhrCharacterExtensionNames.XmpJsonLd,
                 KHR_character_expression.EXTENSION_NAME,
                 KHR_character_expression_morphtarget.EXTENSION_NAME,
                 KHR_character_expression_joint.EXTENSION_NAME,
@@ -739,8 +738,9 @@ namespace UnityGLTF.KhrCharacter.Tests
                 Assert.IsTrue(gltf.ExtensionsRequired == null || !gltf.ExtensionsRequired.Contains(token),
                     $"{token} must NOT be in extensionsRequired (non-required, like the parent)");
             }
-            Assert.IsFalse(gltf.Extensions.ContainsKey(KhrCharacterExtensionNames.XmpJsonLd),
-                "the KHR_character dependency is declaration-only when no XMP metadata is authored");
+            Assert.IsFalse(gltf.ExtensionsUsed.Contains(KhrCharacterExtensionNames.XmpJsonLd),
+                "metadata-free character assets do not declare an XMP dependency");
+            Assert.IsFalse(gltf.Extensions.ContainsKey(KhrCharacterExtensionNames.XmpJsonLd));
         }
 
         [Test]
@@ -786,8 +786,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             var gltf = ExportToGltfRoot(root);
 
             Assert.IsNotNull(gltf.ExtensionsUsed);
-            Assert.IsTrue(gltf.ExtensionsUsed.Contains(KhrCharacterExtensionNames.XmpJsonLd),
-                "all KHR_character assets must declare the transitive XMP dependency");
+            Assert.IsFalse(gltf.ExtensionsUsed.Contains(KhrCharacterExtensionNames.XmpJsonLd),
+                "KHR_character does not impose a transitive XMP dependency");
             Assert.IsFalse(gltf.Extensions.ContainsKey(KhrCharacterExtensionNames.XmpJsonLd),
                 "metadata-free assets must not synthesize an XMP packet object");
             Assert.IsTrue(gltf.ExtensionsUsed.Contains(KHR_character_expression_morphtarget.EXTENSION_NAME),
@@ -1622,14 +1622,13 @@ namespace UnityGLTF.KhrCharacter.Tests
                 "KHR_node_lookat_target must not be declared when nothing was emitted");
         }
 
-        // ── #6: Multi-character stopgap (one character per document) ──────────────────────────────────────
+        // ── #6: Deterministic root designation with multiple character-like roots ─────────────────────────
 
         [Test]
         public void MultiCharacter_ExportsFirstDeterministically_AndWarns()
         {
-            // PR #2512 is one-character-per-document. With two character roots in the SAME export set, the exporter
-            // deterministically emits the FIRST (RootTransforms order) and logs a warning naming the skipped root;
-            // the second character's data must not leak into the document.
+            // KHR_character carries one rootNode designation. With two character roots in the same export set, the
+            // exporter designates the first RootTransforms entry and leaves the other as ordinary glTF content.
             var rootA = new GameObject("charA");
             _created.Add(rootA);
             var ctrlA = new GameObject("ctrlA").transform; ctrlA.SetParent(rootA.transform, false);
