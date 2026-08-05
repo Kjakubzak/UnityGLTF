@@ -136,7 +136,11 @@ namespace UnityGLTF.KhrCharacter
                     if (Skeleton == null) return CapabilityStatus.Inert;
                     return SkeletonMappingDegraded() ? CapabilityStatus.Degraded : CapabilityStatus.Active;
                 case CharacterCapability.ReferencePose:
-                    return (Skeleton != null && Skeleton.Result?.ReferencePose != null) ? CapabilityStatus.Active : CapabilityStatus.Inert;
+                    return (Skeleton != null
+                            && ((Skeleton.Result?.ReferencePoses != null && Skeleton.Result.ReferencePoses.Length > 0)
+                                || Skeleton.Result?.ReferencePose != null))
+                        ? CapabilityStatus.Active
+                        : CapabilityStatus.Inert;
                 default:
                     return CapabilityStatus.Inert;
             }

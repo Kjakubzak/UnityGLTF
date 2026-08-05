@@ -60,14 +60,21 @@ namespace UnityGLTF.KhrCharacter
         private void BindRuntimeState(SkeletonMappingResult result)
         {
             _result = result;
-            RigVocabularies = result?.SelectedRig != null ? new List<string> { result.SelectedRig } : new List<string>();
+            var identifiers = new List<string>();
+            if (result?.MappingSets != null)
+                foreach (var set in result.MappingSets)
+                    if (set?.Identifier != null) identifiers.Add(set.Identifier);
+            if (identifiers.Count == 0 && result?.SelectedRig != null)
+                identifiers.Add(result.SelectedRig);
+            RigVocabularies = identifiers;
         }
 
         private static bool HasSerializedBones(SerializableSkeletonMapping m)
             => m.Bones != null && m.Bones.Length > 0;
 
         private static bool HasSerializedReferencePose(SerializableSkeletonMapping m)
-            => m.ReferencePose?.Bones != null && m.ReferencePose.Bones.Length > 0;
+            => (m.ReferencePose?.Bones != null && m.ReferencePose.Bones.Length > 0)
+               || (m.ReferencePoses != null && m.ReferencePoses.Length > 0);
 
         // Test hook: the persisted joint-name order. Rehydrate must not reshuffle it (the deserialize path uses
         // BindRuntimeState, which does not rebuild the mirror via FromResult(ToResult(...))).
@@ -152,18 +159,58 @@ namespace UnityGLTF.KhrCharacter
             return _result?.Bones != null && vocabularyJoint != null && _result.Bones.TryGetValue(vocabularyJoint, out bone);
         }
 
+        public bool TryGetAssociation(string mappingSetIdentifier, string role, out Transform node)
+        {
+            node = null;
+            if (_result?.MappingSets == null || mappingSetIdentifier == null || role == null) return false;
+            foreach (var set in _result.MappingSets)
+                if (set?.Identifier == mappingSetIdentifier && set.Associations != null)
+                    return set.Associations.TryGetValue(role, out node);
+            return false;
+        }
+
+        public IReadOnlyList<ReferencePose> ReferencePoses
+        {
+            get
+            {
+                if (_result?.ReferencePoses != null && _result.ReferencePoses.Length > 0)
+                    return _result.ReferencePoses;
+                if (_result?.ReferencePose != null)
+                    return new[] { _result.ReferencePose };
+                return System.Array.Empty<ReferencePose>();
+            }
+        }
+
         /// <summary>Apply the baked reference pose transiently — e.g. before building a humanoid.</summary>
         public void ApplyReferencePose()
         {
             var pose = _result?.ReferencePose;
+            if (pose == null && _result?.ReferencePoses != null && _result.ReferencePoses.Length > 0)
+                pose = _result.ReferencePoses[0];
+            ApplyReferencePoseValues(pose);
+        }
+
+        public bool ApplyReferencePose(int animationIndex)
+        {
+            foreach (var pose in ReferencePoses)
+            {
+                if (pose == null || pose.AnimationIndex != animationIndex) continue;
+                ApplyReferencePoseValues(pose);
+                return true;
+            }
+            return false;
+        }
+
+        private static void ApplyReferencePoseValues(ReferencePose pose)
+        {
             if (pose?.Bones == null) return;
             for (int i = 0; i < pose.Bones.Length; i++)
             {
-                var b = pose.Bones[i];
-                if (b == null) continue;
-                if (pose.LocalPositions != null && i < pose.LocalPositions.Length) b.localPosition = pose.LocalPositions[i];
-                if (pose.LocalRotations != null && i < pose.LocalRotations.Length) b.localRotation = pose.LocalRotations[i];
-                if (pose.LocalScales != null && i < pose.LocalScales.Length) b.localScale = pose.LocalScales[i];
+                var bone = pose.Bones[i];
+                if (bone == null) continue;
+                if (pose.LocalPositions != null && i < pose.LocalPositions.Length) bone.localPosition = pose.LocalPositions[i];
+                if (pose.LocalRotations != null && i < pose.LocalRotations.Length) bone.localRotation = pose.LocalRotations[i];
+                if (pose.LocalScales != null && i < pose.LocalScales.Length) bone.localScale = pose.LocalScales[i];
             }
         }
 

@@ -17,6 +17,7 @@ namespace UnityGLTF.KhrCharacter.Tests
     /// </summary>
     public class KhrCharacterExportTests
     {
+        private const string SkeletonVocab = "https://example.com/skeleton/unity-humanoid/v1";
         private readonly List<Object> _created = new List<Object>();
 
         [TearDown]
@@ -801,12 +802,10 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void SkeletonMappingExport_WritesRigVocabularyDictionary()
+        public void SkeletonMappingExport_WritesVocabularyAssociationDictionary()
         {
-            // KHR_character_skeleton_mapping exports as skeletalRigMappings[rigName][canonicalJoint] = sourceNodeIndex,
-            // using the canonical humanoid vocabulary (leftUpperLeg/head/hips — the same set the rig switcher uses).
-            // Keys are the target-vocabulary joint names; values are glTF node indices (a glTFid into nodes[]) for
-            // the model's own rig.
+            // The outer key is a version-stable vocabulary URI. Role keys and their node associations are preserved;
+            // no Unity Humanoid completeness or anatomy semantics are written into the extension.
             var root = new GameObject("char");
             _created.Add(root);
             var hips = new GameObject("Hips").transform; hips.SetParent(root.transform, false);
@@ -820,7 +819,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                 {
                     { "hips", hips }, { "leftUpperLeg", leg }, { "head", head },
                 },
-                SelectedRig = "unityHumanoid",
+                SelectedRig = SkeletonVocab,
             });
 
             var gltf = ExportToGltfRoot(root);
@@ -829,8 +828,9 @@ namespace UnityGLTF.KhrCharacter.Tests
                 "KHR_character_skeleton_mapping root extension should be present");
             var ext = gltf.Extensions[KHR_character_skeleton_mapping.EXTENSION_NAME] as KHR_character_skeleton_mapping;
             Assert.IsNotNull(ext);
-            Assert.IsTrue(ext.SkeletalRigMappings.ContainsKey("unityHumanoid"), "the selected rig name keys the mapping");
-            var rig = ext.SkeletalRigMappings["unityHumanoid"];
+            Assert.IsTrue(ext.SkeletalRigMappings.ContainsKey(SkeletonVocab),
+                "the absolute vocabulary URI keys the mapping set");
+            var rig = ext.SkeletalRigMappings[SkeletonVocab];
 
             // Canonical target-vocabulary joint names (keys) -> source node INDICES (values) into nodes[].
             Assert.AreEqual(3, rig.Count);
@@ -871,7 +871,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             skel.Bind(new SkeletonMappingResult
             {
                 Bones = new Dictionary<string, Transform> { { "hips", bone } },
-                SelectedRig = "unityHumanoid",
+                SelectedRig = SkeletonVocab,
                 ReferencePose = new ReferencePose
                 {
                     PoseType = "TPose",
@@ -925,6 +925,62 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(scale.x, (float)sAcc.Min[0], 1e-4f, "scale must be exported raw (no handedness flip)");
             Assert.AreEqual(scale.y, (float)sAcc.Min[1], 1e-4f);
             Assert.AreEqual(scale.z, (float)sAcc.Min[2], 1e-4f);
+        }
+
+        [Test]
+        public void SkeletonAndReferencePoseExport_PreservesAllSetsAndDuplicatePoseLabels()
+        {
+            const string alternateVocab = "https://example.com/skeleton/alternate/v1";
+            var root = new GameObject("char");
+            _created.Add(root);
+            var hips = new GameObject("Hips").transform; hips.SetParent(root.transform, false);
+            var head = new GameObject("Head").transform; head.SetParent(hips, false);
+
+            root.AddComponent<SkeletonMap>().Bind(new SkeletonMappingResult
+            {
+                MappingSets = new[]
+                {
+                    new SkeletonMappingSetResult
+                    {
+                        Identifier = SkeletonVocab,
+                        Associations = new Dictionary<string, Transform> { { "hips", hips } },
+                    },
+                    new SkeletonMappingSetResult
+                    {
+                        Identifier = alternateVocab,
+                        Associations = new Dictionary<string, Transform> { { "head", head } },
+                    },
+                },
+                ReferencePoses = new[]
+                {
+                    new ReferencePose
+                    {
+                        AnimationIndex = 4, PoseType = "TPose", Bones = new[] { hips },
+                        LocalPositions = new[] { Vector3.one },
+                    },
+                    new ReferencePose
+                    {
+                        AnimationIndex = 9, PoseType = "TPose", Bones = new[] { head },
+                        LocalPositions = new[] { Vector3.up },
+                    },
+                },
+            });
+
+            var gltf = ExportToGltfRoot(root);
+            var mapping = gltf.Extensions[KHR_character_skeleton_mapping.EXTENSION_NAME]
+                as KHR_character_skeleton_mapping;
+            Assert.IsNotNull(mapping);
+            Assert.AreEqual(2, mapping.SkeletalRigMappings.Count);
+            Assert.IsTrue(mapping.SkeletalRigMappings.ContainsKey(SkeletonVocab));
+            Assert.IsTrue(mapping.SkeletalRigMappings.ContainsKey(alternateVocab));
+
+            int poseCount = 0;
+            foreach (var animation in gltf.Animations)
+                if (animation.Extensions != null
+                    && animation.Extensions.ContainsKey(KHR_character_reference_pose.EXTENSION_NAME))
+                    poseCount++;
+            Assert.AreEqual(2, poseCount,
+                "duplicate poseType labels do not collapse distinct animation-indexed reference poses");
         }
 
         [Test]

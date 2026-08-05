@@ -6,11 +6,15 @@ using UnityEngine;
 namespace UnityGLTF.KhrCharacter.Tests
 {
     /// <summary>
-    /// Tests skeleton-mapping resolution by glTF node index (including missing-index handling and multi-rig
-    /// selection) and the humanoid build's required-bone guard.
+    /// Tests generic skeleton-association resolution by glTF node index, preservation of multiple mapping sets,
+    /// and the separate Unity Humanoid adapter.
     /// </summary>
     public class SkeletonMappingTests
     {
+        private const string Vocab = "https://example.com/skeleton/v1";
+        private const string SparseVocab = "https://example.com/skeleton/sparse/v1";
+        private const string FullVocab = "https://example.com/skeleton/full/v1";
+
         private readonly List<UnityEngine.Object> _created = new List<UnityEngine.Object>();
 
         [TearDown]
@@ -34,7 +38,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         private static KHR_character_skeleton_mapping Mapping(Dictionary<string, KHR_character_skeleton_mapping.JointAssociation> rig)
             => new KHR_character_skeleton_mapping
             {
-                SkeletalRigMappings = new Dictionary<string, Dictionary<string, KHR_character_skeleton_mapping.JointAssociation>> { { "rig", rig } }
+                SkeletalRigMappings = new Dictionary<string, Dictionary<string, KHR_character_skeleton_mapping.JointAssociation>> { { Vocab, rig } }
             };
 
         [Test]
@@ -55,10 +59,11 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreSame(hips.transform, result.Bones["hips"]);
             Assert.AreSame(head.transform, result.Bones["head"]);
             Assert.IsTrue(result.Report.IsValid);
+            Assert.AreEqual(Vocab, result.MappingSets[0].Identifier);
         }
 
         [Test]
-        public void BakeSkeleton_MultipleRigs_PicksRigResolvingMostBones()
+        public void BakeSkeleton_MultipleSets_PreservesAllAndSelectsLargestForUnityAdapter()
         {
             var hips = NewGo("Hips_node");
             var head = NewGo("Head_node");
@@ -68,22 +73,24 @@ namespace UnityGLTF.KhrCharacter.Tests
             {
                 SkeletalRigMappings = new Dictionary<string, Dictionary<string, KHR_character_skeleton_mapping.JointAssociation>>
                 {
-                    { "sparse", new Dictionary<string, KHR_character_skeleton_mapping.JointAssociation> { { "hips", Joint(0) } } },
-                    { "full", new Dictionary<string, KHR_character_skeleton_mapping.JointAssociation> { { "hips", Joint(0) }, { "head", Joint(1) } } },
+                    { SparseVocab, new Dictionary<string, KHR_character_skeleton_mapping.JointAssociation> { { "hips", Joint(0) } } },
+                    { FullVocab, new Dictionary<string, KHR_character_skeleton_mapping.JointAssociation> { { "hips", Joint(0) }, { "head", Joint(1) } } },
                 }
             };
 
             var result = KhrCharacterSkeletonBaker.BakeSkeleton(new GLTFRoot(), nodeMap, ext);
 
             Assert.IsNotNull(result);
-            Assert.AreEqual("full", result.SelectedRig);
+            Assert.AreEqual(2, result.MappingSets.Length, "generic support preserves every mapping set");
+            Assert.AreEqual(1, result.MappingSets[0].Associations.Count);
+            Assert.AreEqual(2, result.MappingSets[1].Associations.Count);
+            Assert.AreEqual(FullVocab, result.SelectedRig, "largest-set selection is only the Unity adapter policy");
             Assert.AreEqual(2, result.Bones.Count);
         }
 
         [Test]
-        public void BakeSkeleton_UnresolvedRequiredJoint_FlagsMissingRequiredAndInvalid()
+        public void BakeSkeleton_UnresolvedAssociation_IsInvalidWithoutVocabularySpecificBoneClaims()
         {
-            // hips resolves; leftFoot (a REQUIRED humanoid bone) maps to an index with no node.
             var hips = NewGo("Hips_node");
             var nodeMap = new Dictionary<int, GameObject> { { 0, hips } };
             var ext = Mapping(new Dictionary<string, KHR_character_skeleton_mapping.JointAssociation>
@@ -97,15 +104,14 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsNotNull(result);
             Assert.AreSame(hips.transform, result.Bones["hips"]);
             Assert.IsFalse(result.Bones.ContainsKey("leftFoot"));
-            CollectionAssert.Contains(result.Report.MissingRequiredBones, "leftFoot");
-            Assert.IsFalse(result.Report.IsValid, "a missing required bone invalidates the mapping");
+            Assert.IsEmpty(result.Report.MissingRequiredBones,
+                "the generic extension does not define required roles for an external vocabulary");
+            Assert.IsFalse(result.Report.IsValid, "an association whose node cannot resolve is invalid");
         }
 
         [Test]
-        public void BakeSkeleton_UnresolvedOptionalJoint_StaysValid()
+        public void BakeSkeleton_UnresolvedRole_DoesNotApplyUnityHumanoidOptionality()
         {
-            // hips + head resolve; jaw (an OPTIONAL humanoid bone) maps to an absent index. The mapping is still
-            // valid with no missing *required* bone — only a warning is recorded.
             var hips = NewGo("Hips_node");
             var head = NewGo("Head_node");
             var nodeMap = new Dictionary<int, GameObject> { { 0, hips }, { 1, head } };
@@ -121,9 +127,10 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsNotNull(result);
             Assert.AreSame(hips.transform, result.Bones["hips"]);
             Assert.AreSame(head.transform, result.Bones["head"]);
-            Assert.AreEqual(0, result.Report.MissingRequiredBones.Count, "jaw is optional, not a required bone");
-            Assert.IsTrue(result.Report.IsValid, "an unresolved optional joint must not invalidate the mapping");
-            Assert.Greater(result.Report.Warnings.Count, 0, "the unresolved jaw still records a warning");
+            Assert.AreEqual(0, result.Report.MissingRequiredBones.Count);
+            Assert.IsFalse(result.Report.IsValid,
+                "generic node resolution cannot infer that a role is optional from Unity Humanoid conventions");
+            Assert.Greater(result.Report.Warnings.Count, 0);
         }
 
         [Test]
@@ -218,6 +225,46 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             Assert.Less(Vector3.Distance(target, bone.transform.localPosition), 1e-5f);
             Assert.Less(Quaternion.Angle(rot, bone.transform.localRotation), 0.01f);
+        }
+
+        [Test]
+        public void SkeletonMap_ExposesMappingSetsAndSelectsReferencePoseByAnimationIndex()
+        {
+            var hips = NewGo("hips").transform;
+            var head = NewGo("head").transform;
+            var target = new Vector3(0f, 3f, 0f);
+            var skel = NewGo("char").AddComponent<SkeletonMap>();
+            skel.Bind(new SkeletonMappingResult
+            {
+                MappingSets = new[]
+                {
+                    new SkeletonMappingSetResult
+                    {
+                        Identifier = Vocab,
+                        Associations = new Dictionary<string, Transform> { { "hips", hips } },
+                    },
+                    new SkeletonMappingSetResult
+                    {
+                        Identifier = FullVocab,
+                        Associations = new Dictionary<string, Transform> { { "head", head } },
+                    },
+                },
+                ReferencePoses = new[]
+                {
+                    new ReferencePose { AnimationIndex = 3, PoseType = "TPose", Bones = new[] { hips }, LocalPositions = new[] { Vector3.one } },
+                    new ReferencePose { AnimationIndex = 7, PoseType = "TPose", Bones = new[] { hips }, LocalPositions = new[] { target } },
+                },
+                Bones = new Dictionary<string, Transform> { { "hips", hips } },
+                SelectedRig = Vocab,
+            });
+
+            Assert.AreEqual(2, skel.RigVocabularies.Count);
+            Assert.IsTrue(skel.TryGetAssociation(FullVocab, "head", out var resolved));
+            Assert.AreSame(head, resolved);
+            Assert.AreEqual(2, skel.ReferencePoses.Count);
+            Assert.IsTrue(skel.ApplyReferencePose(7));
+            Assert.AreEqual(target, hips.localPosition);
+            Assert.IsFalse(skel.ApplyReferencePose(99));
         }
     }
 }

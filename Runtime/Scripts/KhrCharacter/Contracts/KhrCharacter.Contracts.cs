@@ -172,11 +172,20 @@ namespace UnityGLTF.KhrCharacter
     [Serializable]
     public class ReferencePose
     {
+        public int AnimationIndex;
         public string PoseType;          // "TPose"/"APose"/... (retarget pose; not the neutral/bind pose)
         public Transform[] Bones;
         public Vector3[] LocalPositions;
         public Quaternion[] LocalRotations;
         public Vector3[] LocalScales;
+    }
+
+    [Serializable]
+    public class SkeletonMappingSetResult
+    {
+        public string Identifier;
+        public Dictionary<string, Transform> Associations;
+        public ValidationReport Report = new ValidationReport();
     }
 
     [Serializable]
@@ -189,9 +198,11 @@ namespace UnityGLTF.KhrCharacter
 
     public class SkeletonMappingResult
     {
+        public SkeletonMappingSetResult[] MappingSets;
+        public ReferencePose[] ReferencePoses;
         public Dictionary<string, Transform> Bones;   // vocab joint name -> resolved Transform
-        public string SelectedRig;                    // e.g. "vrmHumanoid" / "unityHumanoid"
-        public ReferencePose ReferencePose;
+        public string SelectedRig;                    // optional host-adapter selection
+        public ReferencePose ReferencePose;           // optional host-adapter selection
         public ValidationReport Report = new ValidationReport();
     }
 
@@ -206,43 +217,89 @@ namespace UnityGLTF.KhrCharacter
     }
 
     [Serializable]
+    public class SerializableSkeletonMappingSet
+    {
+        public string Identifier;
+        public SerializableBoneEntry[] Associations;
+        public ValidationReport Report = new ValidationReport();
+    }
+
+    [Serializable]
     public class SerializableSkeletonMapping
     {
         public SerializableBoneEntry[] Bones;
         public string SelectedRig;
         public ReferencePose ReferencePose;   // already [Serializable]
+        public SerializableSkeletonMappingSet[] MappingSets;
+        public ReferencePose[] ReferencePoses;
         public ValidationReport Report = new ValidationReport();   // already [Serializable]
 
         public static SerializableSkeletonMapping FromResult(SkeletonMappingResult result)
         {
             if (result == null) return null;
-            var entries = new List<SerializableBoneEntry>();
-            if (result.Bones != null)
-                foreach (var kv in result.Bones)
-                    if (!string.IsNullOrEmpty(kv.Key))   // symmetric with ToResult's guard -> lossless round-trip
-                        entries.Add(new SerializableBoneEntry { JointName = kv.Key, Bone = kv.Value });
+            var entries = ToEntries(result.Bones);
+            var mappingSets = new List<SerializableSkeletonMappingSet>();
+            if (result.MappingSets != null)
+                foreach (var set in result.MappingSets)
+                    if (set != null)
+                        mappingSets.Add(new SerializableSkeletonMappingSet
+                        {
+                            Identifier = set.Identifier,
+                            Associations = ToEntries(set.Associations),
+                            Report = set.Report ?? new ValidationReport(),
+                        });
             return new SerializableSkeletonMapping
             {
-                Bones = entries.ToArray(),
+                Bones = entries,
                 SelectedRig = result.SelectedRig,
                 ReferencePose = result.ReferencePose,
+                MappingSets = mappingSets.ToArray(),
+                ReferencePoses = result.ReferencePoses,
                 Report = result.Report ?? new ValidationReport(),
             };
         }
 
         public SkeletonMappingResult ToResult()
         {
-            var bones = new Dictionary<string, Transform>();
-            if (Bones != null)
-                foreach (var entry in Bones)
-                    if (!string.IsNullOrEmpty(entry.JointName)) bones[entry.JointName] = entry.Bone;
+            var bones = FromEntries(Bones);
+            var mappingSets = new List<SkeletonMappingSetResult>();
+            if (MappingSets != null)
+                foreach (var set in MappingSets)
+                    if (set != null)
+                        mappingSets.Add(new SkeletonMappingSetResult
+                        {
+                            Identifier = set.Identifier,
+                            Associations = FromEntries(set.Associations),
+                            Report = set.Report ?? new ValidationReport(),
+                        });
             return new SkeletonMappingResult
             {
                 Bones = bones,
                 SelectedRig = SelectedRig,
                 ReferencePose = ReferencePose,
+                MappingSets = mappingSets.ToArray(),
+                ReferencePoses = ReferencePoses,
                 Report = Report ?? new ValidationReport(),
             };
+        }
+
+        private static SerializableBoneEntry[] ToEntries(Dictionary<string, Transform> associations)
+        {
+            var entries = new List<SerializableBoneEntry>();
+            if (associations != null)
+                foreach (var kv in associations)
+                    if (!string.IsNullOrEmpty(kv.Key))
+                        entries.Add(new SerializableBoneEntry { JointName = kv.Key, Bone = kv.Value });
+            return entries.ToArray();
+        }
+
+        private static Dictionary<string, Transform> FromEntries(SerializableBoneEntry[] entries)
+        {
+            var associations = new Dictionary<string, Transform>();
+            if (entries != null)
+                foreach (var entry in entries)
+                    if (!string.IsNullOrEmpty(entry.JointName)) associations[entry.JointName] = entry.Bone;
+            return associations;
         }
     }
 

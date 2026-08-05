@@ -414,12 +414,16 @@ namespace UnityGLTF.KhrCharacter
             var ext = GetSkeletonMappingExtension(root);
             if (ext != null) result = KhrCharacterSkeletonBaker.BakeSkeleton(root, _nodeIndexToGo, ext);
 
-            var referencePose = importer != null ? KhrCharacterSkeletonBaker.BakeReferencePose(root, importer, _nodeIndexToGo) : null;
-            if (result == null && referencePose == null) return;
+            var referencePoses = importer != null
+                ? KhrCharacterSkeletonBaker.BakeReferencePoses(root, importer, _nodeIndexToGo)
+                : System.Array.Empty<ReferencePose>();
+            if (result == null && referencePoses.Length == 0) return;
 
-            // A reference pose with no skeleton mapping still gets a holder so it can be applied later.
+            // Reference poses and generic mapping sets remain independently discoverable. The singular fields
+            // are optional selections used only by the Unity humanoid adapter.
             result = result ?? new SkeletonMappingResult { Bones = new Dictionary<string, Transform>() };
-            result.ReferencePose = referencePose;
+            result.ReferencePoses = referencePoses;
+            result.ReferencePose = referencePoses.Length > 0 ? referencePoses[0] : null;
 
             var skeleton = sceneObject.GetComponent<SkeletonMap>() ?? sceneObject.AddComponent<SkeletonMap>();
             skeleton.Bind(result);

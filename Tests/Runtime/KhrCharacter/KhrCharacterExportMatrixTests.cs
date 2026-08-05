@@ -21,6 +21,7 @@ namespace UnityGLTF.KhrCharacter.Tests
     /// </summary>
     public class KhrCharacterExportMatrixTests
     {
+        private const string SkeletonVocab = "https://example.com/skeleton/unity-humanoid/v1";
         private readonly List<Object> _created = new List<Object>();
 
         [TearDown]
@@ -253,7 +254,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             skel.Bind(new SkeletonMappingResult
             {
                 Bones = new Dictionary<string, Transform> { { "hips", hips }, { "head", head } },
-                SelectedRig = "unityHumanoid",
+                SelectedRig = SkeletonVocab,
             });
             // Deliberately NO ExpressionController.
 
@@ -364,14 +365,14 @@ namespace UnityGLTF.KhrCharacter.Tests
             skel.Bind(new SkeletonMappingResult
             {
                 Bones = new Dictionary<string, Transform> { { "hips", b1 }, { "head", b2 }, { "spine", spine } },
-                SelectedRig = "unityHumanoid",
+                SelectedRig = SkeletonVocab,
             });
 
             var gltf = ExportToGltfRoot(root);
 
             var ext = gltf.Extensions[KHR_character_skeleton_mapping.EXTENSION_NAME] as KHR_character_skeleton_mapping;
             Assert.IsNotNull(ext);
-            var rig = ext.SkeletalRigMappings["unityHumanoid"];
+            var rig = ext.SkeletalRigMappings[SkeletonVocab];
             Assert.AreEqual(3, rig.Count);
 
             // Every value is a valid, non-negative index into nodes[].
@@ -484,7 +485,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             var bakedSkeleton = new SkeletonMappingResult
             {
                 Bones = new Dictionary<string, Transform> { { "hips", hips } },
-                SelectedRig = "unityHumanoid",
+                SelectedRig = SkeletonVocab,
             };
             SetPrivateField(skeleton, "_serializedMapping", SerializableSkeletonMapping.FromResult(bakedSkeleton));
             Assert.IsNull(skeleton.Result, "precondition: runtime Result is null (Awake did not Bind)");
@@ -499,7 +500,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             // Skeleton came from EditorBakedResult.
             var skelExt = gltf.Extensions[KHR_character_skeleton_mapping.EXTENSION_NAME] as KHR_character_skeleton_mapping;
             Assert.IsNotNull(skelExt, "skeleton mapping must be emitted from the editor-baked result fallback");
-            Assert.IsTrue(skelExt.SkeletalRigMappings.ContainsKey("unityHumanoid"));
+            Assert.IsTrue(skelExt.SkeletalRigMappings.ContainsKey(SkeletonVocab));
         }
 
         // ── N3: with AnimationPointer export disabled, joints/pose stay native and morph stays self-contained ──
@@ -545,7 +546,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             skel.Bind(new SkeletonMappingResult
             {
                 Bones = new Dictionary<string, Transform> { { "hips", bone } },
-                SelectedRig = "unityHumanoid",
+                SelectedRig = SkeletonVocab,
                 ReferencePose = new ReferencePose
                 {
                     PoseType = "TPose",
@@ -692,7 +693,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             skel.Bind(new SkeletonMappingResult
             {
                 Bones = new Dictionary<string, Transform> { { "hips", bone } },
-                SelectedRig = "unityHumanoid",
+                SelectedRig = SkeletonVocab,
                 ReferencePose = new ReferencePose
                 {
                     PoseType = "TPose", Bones = new[] { bone },

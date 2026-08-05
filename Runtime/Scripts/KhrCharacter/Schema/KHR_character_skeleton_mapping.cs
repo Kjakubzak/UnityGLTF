@@ -4,9 +4,9 @@ using Newtonsoft.Json.Linq;
 namespace GLTF.Schema
 {
     /// <summary>
-    /// glTF root extension <c>KHR_character_skeleton_mapping</c>: maps an arbitrary rig to one or more target
-    /// vocabularies. Per the spec: rigName -> { targetJointName -> { node, name? } }, where <c>node</c> is a
-    /// glTFid (a 0-based index into the document's <c>nodes</c> array).
+    /// glTF root extension <c>KHR_character_skeleton_mapping</c>: associates roles from one or more externally
+    /// defined skeletal vocabularies with glTF nodes. Per the spec: absolute vocabulary URI -&gt;
+    /// { role identifier -&gt; { node, name? } }.
     /// </summary>
     public class KHR_character_skeleton_mapping : IExtension
     {
@@ -18,7 +18,7 @@ namespace GLTF.Schema
             public string Name;
         }
 
-        // rigName -> (vocabularyJoint -> source node association), kept verbatim.
+        // Absolute vocabulary URI -> (role identifier -> node association), kept verbatim.
         public Dictionary<string, Dictionary<string, JointAssociation>> SkeletalRigMappings
             = new Dictionary<string, Dictionary<string, JointAssociation>>();
 

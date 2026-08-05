@@ -18,6 +18,9 @@ namespace UnityGLTF.KhrCharacter.Tests
     /// </summary>
     public class SerializationRoundTripTests
     {
+        private const string Vocab = "https://example.com/skeleton/v1";
+        private const string AlternateVocab = "https://example.com/skeleton/alternate/v1";
+
         private readonly List<Object> _created = new List<Object>();
 
         [TearDown]
@@ -87,6 +90,47 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsNull(SerializableSkeletonMapping.FromResult(null));
         }
 
+        [Test]
+        public void SerializableSkeletonMapping_RoundTrip_PreservesEveryMappingSetAndReferencePose()
+        {
+            var hips = NewGo("Hips").transform;
+            var head = NewGo("Head").transform;
+            var source = new SkeletonMappingResult
+            {
+                MappingSets = new[]
+                {
+                    new SkeletonMappingSetResult
+                    {
+                        Identifier = Vocab,
+                        Associations = new Dictionary<string, Transform> { { "hips", hips } },
+                    },
+                    new SkeletonMappingSetResult
+                    {
+                        Identifier = AlternateVocab,
+                        Associations = new Dictionary<string, Transform> { { "head", head } },
+                    },
+                },
+                ReferencePoses = new[]
+                {
+                    new ReferencePose { AnimationIndex = 2, PoseType = "TPose", Bones = new[] { hips } },
+                    new ReferencePose { AnimationIndex = 5, PoseType = "TPose", Bones = new[] { head } },
+                },
+                Bones = new Dictionary<string, Transform> { { "hips", hips } },
+                SelectedRig = Vocab,
+            };
+
+            var restored = SerializableSkeletonMapping.FromResult(source).ToResult();
+
+            Assert.AreEqual(2, restored.MappingSets.Length);
+            Assert.AreEqual(Vocab, restored.MappingSets[0].Identifier);
+            Assert.AreSame(hips, restored.MappingSets[0].Associations["hips"]);
+            Assert.AreEqual(AlternateVocab, restored.MappingSets[1].Identifier);
+            Assert.AreSame(head, restored.MappingSets[1].Associations["head"]);
+            Assert.AreEqual(2, restored.ReferencePoses.Length);
+            Assert.AreEqual(2, restored.ReferencePoses[0].AnimationIndex);
+            Assert.AreEqual(5, restored.ReferencePoses[1].AnimationIndex);
+        }
+
         // ── KHR_character_skeleton_mapping JSON wire ───────────────────────────────
 
         [Test]
@@ -98,7 +142,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             {
                 SkeletalRigMappings = new Dictionary<string, Dictionary<string, GLTF.Schema.KHR_character_skeleton_mapping.JointAssociation>>
                 {
-                    { "unityHumanoid", new Dictionary<string, GLTF.Schema.KHR_character_skeleton_mapping.JointAssociation> { { "hips", hips }, { "head", head } } },
+                    { Vocab, new Dictionary<string, GLTF.Schema.KHR_character_skeleton_mapping.JointAssociation> { { "hips", hips }, { "head", head } } },
                 },
             };
 
@@ -108,7 +152,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                 .Deserialize(new GLTF.Schema.GLTFRoot(), token) as GLTF.Schema.KHR_character_skeleton_mapping;
 
             Assert.IsNotNull(restored);
-            var rig = restored.SkeletalRigMappings["unityHumanoid"];
+            var rig = restored.SkeletalRigMappings[Vocab];
             Assert.AreEqual(1, rig["hips"].Node);
             Assert.AreEqual("Hips", rig["hips"].Name);
             Assert.AreEqual(5, rig["head"].Node);

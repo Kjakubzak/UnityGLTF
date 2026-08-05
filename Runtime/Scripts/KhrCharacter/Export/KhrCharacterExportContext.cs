@@ -47,8 +47,8 @@ namespace UnityGLTF.KhrCharacter
                 var skeletonResult = skeleton?.Result ?? skeleton?.EditorBakedResult;
 
                 bool hasExpressions = expressionSet?.Expressions != null && expressionSet.Expressions.Length > 0;
-                bool hasSkeleton = skeletonResult?.Bones != null && skeletonResult.Bones.Count > 0;
-                bool hasReferencePose = skeletonResult?.ReferencePose?.Bones != null;
+                bool hasSkeleton = HasSkeletonMappings(skeletonResult);
+                bool hasReferencePose = HasReferencePoses(skeletonResult);
                 // F6: a character may carry node-level features (camera hints / look-at targets) even without
                 // expressions/skeleton — include them in the gate so the root KHR_character + node extensions still emit.
                 bool hasNodeFeatures = (cameraHints?.Hints != null && cameraHints.Hints.Count > 0)
@@ -79,7 +79,15 @@ namespace UnityGLTF.KhrCharacter
                 // Phase 4: Export reference pose
                 if (hasReferencePose)
                 {
-                    ExportReferencePose(exporter, gltfRoot, skeletonResult.ReferencePose);
+                    if (skeletonResult.ReferencePoses != null && skeletonResult.ReferencePoses.Length > 0)
+                    {
+                        foreach (var pose in skeletonResult.ReferencePoses)
+                            ExportReferencePose(exporter, gltfRoot, pose);
+                    }
+                    else
+                    {
+                        ExportReferencePose(exporter, gltfRoot, skeletonResult.ReferencePose);
+                    }
                 }
 
                 // F6: Export node-level features (camera hints / look-at targets) from the runtime components.
@@ -90,6 +98,24 @@ namespace UnityGLTF.KhrCharacter
                 Debug.LogError($"[KHR_character] Export failed: {ex.Message}\n{ex.StackTrace}");
                 // Don't throw - allow export to continue without KHR_character data
             }
+        }
+
+        private static bool HasSkeletonMappings(SkeletonMappingResult result)
+        {
+            if (result?.MappingSets != null)
+                foreach (var set in result.MappingSets)
+                    if (set?.Associations != null && set.Associations.Count > 0)
+                        return true;
+            return result?.Bones != null && result.Bones.Count > 0;
+        }
+
+        private static bool HasReferencePoses(SkeletonMappingResult result)
+        {
+            if (result?.ReferencePoses != null)
+                foreach (var pose in result.ReferencePoses)
+                    if (pose?.Bones != null && pose.Bones.Length > 0)
+                        return true;
+            return result?.ReferencePose?.Bones != null && result.ReferencePose.Bones.Length > 0;
         }
 
         // Discovery is scoped to the transforms the user actually asked to export (exporter.RootTransforms),
@@ -746,30 +772,63 @@ namespace UnityGLTF.KhrCharacter
 
         private void ExportSkeletonMapping(GLTFSceneExporter exporter, GLTFRoot gltfRoot, SkeletonMappingResult result)
         {
-            var rigDict = new Dictionary<string, KHR_character_skeleton_mapping.JointAssociation>();
-            foreach (var kv in result.Bones)
+            var mappings = new Dictionary<string, Dictionary<string, KHR_character_skeleton_mapping.JointAssociation>>();
+            if (result.MappingSets != null && result.MappingSets.Length > 0)
             {
-                if (kv.Value == null) continue;
-                int nodeIdx = exporter.GetTransformIndex(kv.Value);
-                if (nodeIdx < 0) continue;
-                rigDict[kv.Key] = new KHR_character_skeleton_mapping.JointAssociation
+                foreach (var set in result.MappingSets)
                 {
-                    Node = nodeIdx,
-                    Name = kv.Value.name
-                };
+                    if (set == null || string.IsNullOrEmpty(set.Identifier)) continue;
+                    if (!Uri.TryCreate(set.Identifier, UriKind.Absolute, out _))
+                    {
+                        Debug.LogWarning($"[KHR_character] Skeleton mapping-set identifier '{set.Identifier}' is not an absolute URI; skipping it.");
+                        continue;
+                    }
+                    var associations = ExportAssociations(exporter, set.Associations);
+                    if (associations.Count > 0) mappings[set.Identifier] = associations;
+                }
+            }
+            else if (result.Bones != null && result.Bones.Count > 0)
+            {
+                var identifier = result.SelectedRig;
+                if (!string.IsNullOrEmpty(identifier))
+                {
+                    if (!Uri.TryCreate(identifier, UriKind.Absolute, out _))
+                    {
+                        Debug.LogWarning($"[KHR_character] Skeleton mapping-set identifier '{identifier}' is not an absolute URI; skipping it.");
+                        return;
+                    }
+                    var associations = ExportAssociations(exporter, result.Bones);
+                    if (associations.Count > 0) mappings[identifier] = associations;
+                }
             }
 
-            if (rigDict.Count == 0) return;
+            if (mappings.Count == 0) return;
 
             var mapping = new KHR_character_skeleton_mapping
             {
-                SkeletalRigMappings = new Dictionary<string, Dictionary<string, KHR_character_skeleton_mapping.JointAssociation>>
-                {
-                    [result.SelectedRig ?? "default"] = rigDict
-                }
+                SkeletalRigMappings = mappings
             };
             gltfRoot.AddExtension(KHR_character_skeleton_mapping.EXTENSION_NAME, mapping);
             exporter.DeclareExtensionUsage(KHR_character_skeleton_mapping.EXTENSION_NAME);
+        }
+
+        private static Dictionary<string, KHR_character_skeleton_mapping.JointAssociation> ExportAssociations(
+            GLTFSceneExporter exporter, Dictionary<string, Transform> associations)
+        {
+            var exported = new Dictionary<string, KHR_character_skeleton_mapping.JointAssociation>();
+            if (associations == null) return exported;
+            foreach (var association in associations)
+            {
+                if (string.IsNullOrEmpty(association.Key) || association.Value == null) continue;
+                int nodeIndex = exporter.GetTransformIndex(association.Value);
+                if (nodeIndex < 0) continue;
+                exported[association.Key] = new KHR_character_skeleton_mapping.JointAssociation
+                {
+                    Node = nodeIndex,
+                    Name = association.Value.name,
+                };
+            }
+            return exported;
         }
 
         // F7: the reference pose is written as MANUAL native glTF TRS channels (single STEP key at t=0), NOT via
@@ -778,6 +837,7 @@ namespace UnityGLTF.KhrCharacter
         // only) silently drops. Native channels survive re-import in both export modes.
         private void ExportReferencePose(GLTFSceneExporter exporter, GLTFRoot gltfRoot, ReferencePose pose)
         {
+            if (pose == null) return;
             var anim = new GLTFAnimation { Name = $"ReferencePose_{pose.PoseType}" };
             if (pose.Bones == null) return;
 

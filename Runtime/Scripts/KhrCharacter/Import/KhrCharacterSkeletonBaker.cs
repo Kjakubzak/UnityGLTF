@@ -8,11 +8,10 @@ using UnityGLTF.Extensions;
 namespace UnityGLTF.KhrCharacter
 {
     /// <summary>
-    /// Resolves <c>KHR_character_skeleton_mapping</c> to concrete bone transforms and bakes the
-    /// <c>KHR_character_reference_pose</c> animation into a retarget pose. The mapping JSON is
-    /// <c>rigName -&gt; { vocabularyJoint -&gt; { node, name? } }</c>: the key is a known vocabulary joint
-    /// (hips/head/leftUpperArm/...) and <c>node</c> is a glTF node index, resolved directly via the importer's
-    /// node-index -&gt; GameObject map. Also maps vocabulary joints to Unity humanoid bone names.
+    /// Resolves <c>KHR_character_skeleton_mapping</c> associations to concrete transforms and bakes every
+    /// <c>KHR_character_reference_pose</c> animation into a static local-space pose. Mapping-set identifiers and
+    /// role identifiers remain generic; recognized role names are interpreted only by the optional Unity Humanoid
+    /// adapter.
     /// </summary>
     internal static class KhrCharacterSkeletonBaker
     {
@@ -51,73 +50,104 @@ namespace UnityGLTF.KhrCharacter
         {
             if (root == null || nodeIndexToGo == null || ext?.SkeletalRigMappings == null || ext.SkeletalRigMappings.Count == 0) return null;
 
-            // Choose the rig that resolves the most bones.
-            SkeletonMappingResult best = null;
-            foreach (var rig in ext.SkeletalRigMappings)
+            var mappingSets = new List<SkeletonMappingSetResult>();
+            SkeletonMappingSetResult adapterSelection = null;
+            foreach (var mapping in ext.SkeletalRigMappings)
             {
-                var result = ResolveRig(rig.Key, rig.Value, nodeIndexToGo);
-                if (result != null && (best == null || result.Bones.Count > best.Bones.Count))
-                    best = result;
+                var result = ResolveMappingSet(mapping.Key, mapping.Value, nodeIndexToGo);
+                if (result == null) continue;
+                mappingSets.Add(result);
+                if (adapterSelection == null
+                    || result.Associations.Count > adapterSelection.Associations.Count)
+                    adapterSelection = result;
             }
-            return best;
+            if (mappingSets.Count == 0) return null;
+            return new SkeletonMappingResult
+            {
+                MappingSets = mappingSets.ToArray(),
+                Bones = adapterSelection?.Associations ?? new Dictionary<string, Transform>(),
+                SelectedRig = adapterSelection?.Identifier,
+                Report = adapterSelection?.Report ?? new ValidationReport(),
+            };
         }
 
         /// <summary>
-        /// Samples frame 0 of the animation tagged with <c>KHR_character_reference_pose</c> into a
+        /// Reads the single sample of the first animation tagged with <c>KHR_character_reference_pose</c> into a
         /// <see cref="ReferencePose"/> (Unity-space local TRS per targeted node). Returns null when absent.
         /// </summary>
         public static ReferencePose BakeReferencePose(GLTFRoot root, GLTFSceneImporter importer, IReadOnlyDictionary<int, GameObject> nodeIndexToGo)
         {
-            if (root?.Animations == null || importer == null || nodeIndexToGo == null) return null;
+            var poses = BakeReferencePoses(root, importer, nodeIndexToGo);
+            return poses.Length > 0 ? poses[0] : null;
+        }
 
-            GLTFAnimation refAnim = null;
-            string poseType = "TPose";
-            foreach (var anim in root.Animations)
+        public static ReferencePose[] BakeReferencePoses(
+            GLTFRoot root, GLTFSceneImporter importer, IReadOnlyDictionary<int, GameObject> nodeIndexToGo)
+        {
+            var poses = new List<ReferencePose>();
+            if (root?.Animations == null || importer == null || nodeIndexToGo == null) return poses.ToArray();
+            for (int animationIndex = 0; animationIndex < root.Animations.Count; animationIndex++)
             {
-                if (anim?.Extensions == null || !anim.Extensions.TryGetValue(KHR_character_reference_pose.EXTENSION_NAME, out var ext)) continue;
-                refAnim = anim;
-                poseType = ExtractPoseType(root, ext) ?? "TPose";
-                break;
+                var animation = root.Animations[animationIndex];
+                if (animation?.Extensions == null
+                    || !animation.Extensions.TryGetValue(KHR_character_reference_pose.EXTENSION_NAME, out var extension))
+                    continue;
+                var pose = BakeReferencePoseAnimation(
+                    root, importer, nodeIndexToGo, animation, animationIndex, ExtractPoseType(root, extension) ?? "TPose");
+                if (pose != null) poses.Add(pose);
             }
-            if (refAnim?.Channels == null) return null;
+            return poses.ToArray();
+        }
+
+        private static ReferencePose BakeReferencePoseAnimation(
+            GLTFRoot root,
+            GLTFSceneImporter importer,
+            IReadOnlyDictionary<int, GameObject> nodeIndexToGo,
+            GLTFAnimation refAnim,
+            int animationIndex,
+            string poseType)
+        {
+            if (refAnim?.Channels == null || refAnim.Channels.Count == 0) return null;
 
             var perNode = new Dictionary<int, NodePose>();
             foreach (var channel in refAnim.Channels)
             {
                 try
                 {
-                    if (channel?.Target?.Node == null) continue;
+                    if (channel?.Target?.Node == null) return null;
                     var path = channel.Target.Path;
-                    if (path != "translation" && path != "rotation" && path != "scale") continue;
+                    if (path != "translation" && path != "rotation" && path != "scale") return null;
 
                     int samplerIndex = channel.Sampler?.Id ?? -1;
-                    if (samplerIndex < 0 || samplerIndex >= refAnim.Samplers.Count) continue;
+                    if (samplerIndex < 0 || samplerIndex >= refAnim.Samplers.Count) return null;
                     var sampler = refAnim.Samplers[samplerIndex];
-                    int valueIndex = sampler.Interpolation == InterpolationType.CUBICSPLINE ? 1 : 0; // [inTangent, value, outTangent]
+                    var input = GetAccessor(root, sampler.Input);
+                    if (input == null || input.Count != 1 || sampler.Interpolation == InterpolationType.CUBICSPLINE)
+                        return null;
                     var output = GetAccessor(root, sampler.Output);
-                    if (output == null) continue;
+                    if (output == null || output.Count != 1) return null;
 
                     int nodeIndex = channel.Target.Node.Id;
                     perNode.TryGetValue(nodeIndex, out var pose);
                     if (path == "rotation")
                     {
-                        var q = DecodeVec4(importer, output, valueIndex);
-                        if (q.HasValue) pose.Rotation = q.Value.ToUnityQuaternionConvert();
+                        var q = DecodeVec4(importer, output, 0);
+                        if (!q.HasValue) return null;
+                        pose.Rotation = q.Value.ToUnityQuaternionConvert();
                     }
                     else
                     {
-                        var v = DecodeVec3(importer, output, valueIndex);
-                        if (v.HasValue)
-                        {
-                            if (path == "translation") pose.Translation = v.Value.ToUnityVector3Convert();
-                            else pose.Scale = v.Value.ToUnityVector3Raw();
-                        }
+                        var v = DecodeVec3(importer, output, 0);
+                        if (!v.HasValue) return null;
+                        if (path == "translation") pose.Translation = v.Value.ToUnityVector3Convert();
+                        else pose.Scale = v.Value.ToUnityVector3Raw();
                     }
                     perNode[nodeIndex] = pose;
                 }
                 catch (Exception e)
                 {
-                    Debug.LogWarning($"[KHR_character] Skipping a reference-pose channel: {e.Message}");
+                    Debug.LogWarning($"[KHR_character] Invalid reference-pose animation {animationIndex}: {e.Message}");
+                    return null;
                 }
             }
 
@@ -140,6 +170,7 @@ namespace UnityGLTF.KhrCharacter
 
             return new ReferencePose
             {
+                AnimationIndex = animationIndex,
                 PoseType = poseType,
                 Bones = bones.ToArray(),
                 LocalPositions = positions.ToArray(),
@@ -155,11 +186,14 @@ namespace UnityGLTF.KhrCharacter
             public Vector3? Scale;
         }
 
-        // The mapping is rigName -> { vocabularyJoint -> nodeIndex }. Each entry is unambiguous: the key is a
-        // target vocabulary joint and the value is a glTF node index into the document's global nodes[] array.
+        // The mapping is absolute vocabulary URI -> { role identifier -> association }. Each association is
+        // unambiguous: its node is a glTF index into the document's global nodes[] array.
         // Resolve each via a direct node-index -> GameObject lookup (the map the importer builds in
         // OnAfterImportNode), so there is no name coupling and no direction to detect.
-        private static SkeletonMappingResult ResolveRig(string rigName, Dictionary<string, KHR_character_skeleton_mapping.JointAssociation> mapping, IReadOnlyDictionary<int, GameObject> nodeIndexToGo)
+        private static SkeletonMappingSetResult ResolveMappingSet(
+            string identifier,
+            Dictionary<string, KHR_character_skeleton_mapping.JointAssociation> mapping,
+            IReadOnlyDictionary<int, GameObject> nodeIndexToGo)
         {
             if (mapping == null || mapping.Count == 0) return null;
 
@@ -182,31 +216,17 @@ namespace UnityGLTF.KhrCharacter
                 else
                 {
                     report.Warnings.Add($"[KHR_character] skeleton joint '{vocab}' -> node index {nodeIndex} was not found.");
-                    // Distinguish a broken *required* humanoid coupling from a merely-absent optional joint
-                    // (jaw/eyes/toes/...). Only the former should mark the rig degraded/invalid downstream.
-                    if (IsRequiredHumanoidJoint(vocab))
-                        report.MissingRequiredBones.Add(vocab);
+                    report.IsValid = false;
                 }
             }
 
-            if (bones.Count == 0) return null;
-            // Valid when at least one bone resolved and no *required* humanoid joint was left unbound.
-            report.IsValid = report.MissingRequiredBones.Count == 0;
-            return new SkeletonMappingResult
+            return new SkeletonMappingSetResult
             {
-                Bones = bones,
-                SelectedRig = rigName,
+                Associations = bones,
+                Identifier = identifier,
                 Report = report,
             };
         }
-
-        // A vocabulary joint is "required" when it maps to a Unity humanoid bone that Mecanim marks required
-        // (hips/spine/head and the four limbs). Optional joints (jaw/eyes/toes/shoulders/chest/upperChest/neck)
-        // are not, so their absence must not flag the mapping as degraded.
-        private static bool IsRequiredHumanoidJoint(string vocab)
-            => vocab != null
-               && VocabToHumanBone.TryGetValue(vocab, out var bone)
-               && HumanTrait.RequiredBone((int)bone);
 
         private static string ExtractPoseType(GLTFRoot root, IExtension ext)
         {
