@@ -76,8 +76,10 @@ namespace UnityGLTF.KhrCharacter
         private readonly List<MorphTarget> _morphTargets = new List<MorphTarget>();
         private readonly List<JointTarget> _jointTargets = new List<JointTarget>();
         private readonly List<TextureRenderTarget> _textureTargets = new List<TextureRenderTarget>();
-        private readonly Dictionary<string, ExpressionMappingSet> _mappingSets = new Dictionary<string, ExpressionMappingSet>();
+        private readonly Dictionary<string, ExpressionMappingSet> _outputMappingSets = new Dictionary<string, ExpressionMappingSet>();
+        private readonly Dictionary<string, ExpressionInputMappingSet> _inputMappingSets = new Dictionary<string, ExpressionInputMappingSet>();
         private readonly Dictionary<(string, string), float> _vocabWeights = new Dictionary<(string, string), float>();
+        private string _selectedInputMappingSet;
 
         public IReadOnlyList<ExpressionHandle> Expressions => _handles;
         public CharacterExpressionSet Set => _set;
@@ -88,6 +90,9 @@ namespace UnityGLTF.KhrCharacter
 
         public int Count => _handles.Length;
         public IReadOnlyList<string> VocabularySets { get; private set; } = new List<string>();
+        public IReadOnlyList<string> InputVocabularySets { get; private set; } = new List<string>();
+        public IReadOnlyList<string> OutputVocabularySets { get; private set; } = new List<string>();
+        public string SelectedInputMappingSet => _selectedInputMappingSet;
 
         // Rehydrate an editor-imported prefab. A live import adds this component fresh (no serialized set) and
         // calls Initialize itself, so this is a no-op in that path; it only fires for a deserialized prefab.
@@ -116,14 +121,25 @@ namespace UnityGLTF.KhrCharacter
             _morphTargets.Clear();
             _jointTargets.Clear();
             _textureTargets.Clear();
-            _mappingSets.Clear();
+            _outputMappingSets.Clear();
+            _inputMappingSets.Clear();
             _vocabWeights.Clear();
+            _selectedInputMappingSet = null;
 
-            var setNames = new List<string>();
+            var outputSetNames = new List<string>();
             if (_set?.MappingSets != null)
                 foreach (var ms in _set.MappingSets)
-                    if (ms?.SetName != null) { _mappingSets[ms.SetName] = ms; setNames.Add(ms.SetName); }
-            VocabularySets = setNames;
+                    if (ms?.SetName != null) { _outputMappingSets[ms.SetName] = ms; outputSetNames.Add(ms.SetName); }
+            var inputSetNames = new List<string>();
+            if (_set?.InputMappingSets != null)
+                foreach (var ms in _set.InputMappingSets)
+                    if (ms?.SetName != null) { _inputMappingSets[ms.SetName] = ms; inputSetNames.Add(ms.SetName); }
+            OutputVocabularySets = outputSetNames;
+            InputVocabularySets = inputSetNames;
+            var allSetNames = new List<string>(outputSetNames);
+            foreach (var setName in inputSetNames)
+                if (!allSetNames.Contains(setName)) allSetNames.Add(setName);
+            VocabularySets = allSetNames;
 
             int n = _set?.Expressions?.Length ?? 0;
             _weights = new float[n];
@@ -228,11 +244,19 @@ namespace UnityGLTF.KhrCharacter
         public void SetWeight(string name, float driver)
         {
             if (!TryIndex(name, out int i)) return;
-            _weights[i] = driver;
-            var h = _handles[i]; h.Value = driver; _handles[i] = h;
+            SetWeight(i, driver);
+        }
+
+        public void SetWeight(int index, float driver)
+        {
+            if (_weights == null || index < 0 || index >= _weights.Length) return;
+            float normalized = _semantics.Clamp01(driver);
+            _weights[index] = normalized;
+            var h = _handles[index]; h.Value = normalized; _handles[index] = h;
         }
 
         public float GetWeight(string name) => TryIndex(name, out int i) ? _weights[i] : 0f;
+        public float GetWeight(int index) => _weights != null && index >= 0 && index < _weights.Length ? _weights[index] : 0f;
 
         public void ResetAll()
         {
@@ -247,15 +271,35 @@ namespace UnityGLTF.KhrCharacter
         public void SetWeightByVocabulary(string setName, string targetExpression, float driver)
         {
             if (setName == null || targetExpression == null) return;
-            _vocabWeights[(setName, targetExpression)] = driver;
+            if (!_inputMappingSets.ContainsKey(setName)) return;
+            _vocabWeights[(setName, targetExpression)] = ValidateUnit(driver);
+        }
+
+        public bool SelectVocabularyInputSet(string setName)
+        {
+            if (setName == null || !_inputMappingSets.ContainsKey(setName)) return false;
+            _selectedInputMappingSet = setName;
+            return true;
+        }
+
+        public void UseDirectNativeInputs() => _selectedInputMappingSet = null;
+
+        public IReadOnlyDictionary<string, float> EvaluateVocabularyOutputs(string setName)
+        {
+            if (setName == null || !_outputMappingSets.TryGetValue(setName, out var mapping))
+                return new Dictionary<string, float>();
+            return _semantics.EvaluateForwardMapping(mapping, _weights);
         }
 
         public IReadOnlyList<string> VocabularyExpressions(string setName)
         {
             var list = new List<string>();
-            if (setName != null && _mappingSets.TryGetValue(setName, out var ms) && ms.Targets != null)
-                foreach (var t in ms.Targets)
-                    if (t?.TargetName != null) list.Add(t.TargetName);
+            if (setName != null && _inputMappingSets.TryGetValue(setName, out var input) && input.Commands != null)
+                foreach (var command in input.Commands)
+                    if (command?.CommandName != null) list.Add(command.CommandName);
+            else if (setName != null && _outputMappingSets.TryGetValue(setName, out var output) && output.Targets != null)
+                foreach (var endpoint in output.Targets)
+                    if (endpoint?.TargetName != null) list.Add(endpoint.TargetName);
             return list;
         }
 
@@ -266,17 +310,17 @@ namespace UnityGLTF.KhrCharacter
 
             int n = _set.Expressions.Length;
 
-            // MAP: direct weights, then distribute any vocabulary-driven weights onto their source inputs.
-            for (int i = 0; i < n; i++) _rawInputs[i] = _weights[i];
-            if (_mappingSets.Count > 0 && _vocabWeights.Count > 0)
+            // Direct-native and endpoint-command inputs are separate surfaces. The host explicitly selects one.
+            if (_selectedInputMappingSet != null
+                && _inputMappingSets.TryGetValue(_selectedInputMappingSet, out var inputMapping))
             {
+                var commands = new Dictionary<string, float>();
                 foreach (var kv in _vocabWeights)
-                {
-                    if (kv.Value <= 0f) continue;
-                    if (_mappingSets.TryGetValue(kv.Key.Item1, out var ms))
-                        _semantics.DistributeMapping(ms, kv.Key.Item2, kv.Value, _rawInputs, _set.NameToIndex);
-                }
+                    if (kv.Key.Item1 == _selectedInputMappingSet) commands[kv.Key.Item2] = kv.Value;
+                _semantics.ApplyInputMapping(inputMapping, commands, _rawInputs);
             }
+            else
+                for (int i = 0; i < n; i++) _rawInputs[i] = _weights[i];
 
             // MASK + CLAMP.
             for (int i = 0; i < n; i++)
@@ -442,6 +486,13 @@ namespace UnityGLTF.KhrCharacter
             if (mesh == null || blendShapeIndex < 0 || blendShapeIndex >= mesh.blendShapeCount) return 1f;
             // The importer adds one blendshape frame per target with weight = BlendShapeFrameWeight.
             return mesh.GetBlendShapeFrameWeight(blendShapeIndex, 0);
+        }
+
+        private static float ValidateUnit(float value)
+        {
+            if (float.IsNaN(value) || float.IsInfinity(value) || value < 0f || value > 1f)
+                throw new System.ArgumentOutOfRangeException(nameof(value), "Mapping commands must be finite values in [0, 1].");
+            return value;
         }
 
     }

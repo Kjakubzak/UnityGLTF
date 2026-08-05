@@ -104,7 +104,10 @@ namespace UnityGLTF.KhrCharacter
 
             var mappingExt = GetMappingExtension(root);
             if (mappingExt != null)
+            {
                 set.MappingSets = BuildMappingSets(mappingExt, wireToTrackIndex, expressionExt.Expressions);
+                set.InputMappingSets = BuildInputMappingSets(mappingExt, wireToTrackIndex, expressionExt.Expressions);
+            }
 
             return set;
         }
@@ -675,15 +678,17 @@ namespace UnityGLTF.KhrCharacter
                             || m.Name != wireExpressions[m.Target]?.Expression))
                         Debug.LogWarning($"[KHR_character] Mask name '{m.Name}' does not match expression index {m.Target}.");
                     string maskType = m.Type?.Trim();
-                    bool isBlock = string.Equals(maskType, "block", StringComparison.OrdinalIgnoreCase);
+                    bool isBlock = string.Equals(maskType, "block", StringComparison.Ordinal);
                     bool isBlend = string.IsNullOrEmpty(maskType) ||
-                        string.Equals(maskType, "blend", StringComparison.OrdinalIgnoreCase);
+                        string.Equals(maskType, "blend", StringComparison.Ordinal);
                     list.Add(new MaskEntry
                     {
                         TargetIndex = targetIndex,
                         SourceIndex = sourceIndex,
-                        Type = isBlock ? MaskType.Block : MaskType.Blend,
+                        Type = isBlock ? MaskType.Block : isBlend ? MaskType.Blend : MaskType.Identity,
                         CustomType = isBlend || isBlock ? null : maskType,
+                        RawExtensionsJson = m.Extensions?.ToString(Newtonsoft.Json.Formatting.None),
+                        RawExtrasJson = m.Extras?.ToString(Newtonsoft.Json.Formatting.None),
                         Amount = m.Amount,
                         Threshold = m.Threshold,
                     });
@@ -731,6 +736,53 @@ namespace UnityGLTF.KhrCharacter
                 }
                 if (targets.Count > 0)
                     sets.Add(new ExpressionMappingSet { SetName = setKv.Key, Targets = targets.ToArray() });
+            }
+            return sets.Count > 0 ? sets.ToArray() : null;
+        }
+
+        internal static ExpressionInputMappingSet[] BuildInputMappingSets(
+            KHR_character_expression_mapping mappingExt,
+            IReadOnlyDictionary<int, int> wireToTrackIndex,
+            IReadOnlyList<KHR_character_expression.ExpressionItem> wireExpressions = null)
+        {
+            if (mappingExt?.ExpressionSetInputMappings == null) return null;
+            var sets = new List<ExpressionInputMappingSet>();
+            foreach (var setKv in mappingExt.ExpressionSetInputMappings)
+            {
+                var commands = new List<InputMappingCommand>();
+                if (setKv.Value != null)
+                    foreach (var commandKv in setKv.Value)
+                    {
+                        var contributions = new List<InputMappingContribution>();
+                        if (commandKv.Value != null)
+                            foreach (var target in commandKv.Value)
+                            {
+                                if (!wireToTrackIndex.TryGetValue(target.Target, out int targetIndex))
+                                {
+                                    Debug.LogWarning($"[KHR_character] Input mapping references invalid expression index {target.Target}; dropping.");
+                                    continue;
+                                }
+                                if (target.Name != null
+                                    && (wireExpressions == null
+                                        || target.Target < 0
+                                        || target.Target >= wireExpressions.Count
+                                        || target.Name != wireExpressions[target.Target]?.Expression))
+                                    Debug.LogWarning($"[KHR_character] Input mapping name '{target.Name}' does not match expression index {target.Target}.");
+                                contributions.Add(new InputMappingContribution
+                                {
+                                    TargetIndex = targetIndex,
+                                    Weight = target.Weight,
+                                });
+                            }
+                        if (contributions.Count > 0)
+                            commands.Add(new InputMappingCommand
+                            {
+                                CommandName = commandKv.Key,
+                                Contributions = contributions.ToArray(),
+                            });
+                    }
+                if (commands.Count > 0)
+                    sets.Add(new ExpressionInputMappingSet { SetName = setKv.Key, Commands = commands.ToArray() });
             }
             return sets.Count > 0 ? sets.ToArray() : null;
         }

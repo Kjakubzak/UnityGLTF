@@ -87,17 +87,17 @@ namespace UnityGLTF.KhrCharacter.Tests
                 {
                     new ExpressionTrack { Name = "smileLeft", Domains = ExpressionDomain.Morph, MorphDrivers = new[] { LinearMorph(smr) } },
                 },
-                MappingSets = new[]
+                InputMappingSets = new[]
                 {
-                    new ExpressionMappingSet
+                    new ExpressionInputMappingSet
                     {
                         SetName = "vrm",
-                        Targets = new[]
+                        Commands = new[]
                         {
-                            new MappingTarget
+                            new InputMappingCommand
                             {
-                                TargetName = "happy",
-                                Contributions = new[] { new MappingContribution { SourceIndex = 0, Weight = 1f } },
+                                CommandName = "happy",
+                                Contributions = new[] { new InputMappingContribution { TargetIndex = 0, Weight = 1f } },
                             }
                         }
                     }
@@ -109,6 +109,7 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             CollectionAssert.Contains(new List<string>(ec.VocabularySets), "vrm");
 
+            Assert.IsTrue(ec.SelectVocabularyInputSet("vrm"));
             ec.SetWeightByVocabulary("vrm", "happy", 1f);
             yield return null;
             Assert.AreEqual(1f, smr.GetBlendShapeWeight(0), 1e-3f);
@@ -149,7 +150,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [UnityTest]
-        public IEnumerator Mapping_ComposesWithDirectWeight()
+        public IEnumerator Mapping_DoesNotImplicitlyComposeWithDirectWeight()
         {
             var smr = MakeSmr(out var go);
             var set = new CharacterExpressionSet
@@ -158,12 +159,12 @@ namespace UnityGLTF.KhrCharacter.Tests
                 {
                     new ExpressionTrack { Name = "smileLeft", Domains = ExpressionDomain.Morph, MorphDrivers = new[] { LinearMorph(smr) } },
                 },
-                MappingSets = new[]
+                InputMappingSets = new[]
                 {
-                    new ExpressionMappingSet
+                    new ExpressionInputMappingSet
                     {
                         SetName = "vrm",
-                        Targets = new[] { new MappingTarget { TargetName = "happy", Contributions = new[] { new MappingContribution { SourceIndex = 0, Weight = 0.5f } } } },
+                        Commands = new[] { new InputMappingCommand { CommandName = "happy", Contributions = new[] { new InputMappingContribution { TargetIndex = 0, Weight = 0.5f } } } },
                     }
                 }
             };
@@ -172,13 +173,19 @@ namespace UnityGLTF.KhrCharacter.Tests
             ec.Initialize(set);
 
             ec.SetWeight("smileLeft", 0.3f);
-            ec.SetWeightByVocabulary("vrm", "happy", 1f); // + 1 * 0.5
+            ec.SetWeightByVocabulary("vrm", "happy", 1f);
             yield return null;
-            Assert.AreEqual(0.8f, smr.GetBlendShapeWeight(0), 1e-3f); // 0.3 + 0.5
+            Assert.AreEqual(0.3f, smr.GetBlendShapeWeight(0), 1e-3f,
+                "endpoint commands do not alter the direct-native surface until the host selects it");
+
+            Assert.IsTrue(ec.SelectVocabularyInputSet("vrm"));
+            yield return null;
+            Assert.AreEqual(0.5f, smr.GetBlendShapeWeight(0), 1e-3f,
+                "the selected mapped surface replaces rather than adds to direct-native input");
         }
 
-        [UnityTest]
-        public IEnumerator Mapping_VocabularyOverdrive_Clamps()
+        [Test]
+        public void Mapping_VocabularyOverdrive_IsRejected()
         {
             var smr = MakeSmr(out var go);
             var set = new CharacterExpressionSet
@@ -187,12 +194,12 @@ namespace UnityGLTF.KhrCharacter.Tests
                 {
                     new ExpressionTrack { Name = "smileLeft", Domains = ExpressionDomain.Morph, MorphDrivers = new[] { LinearMorph(smr) } },
                 },
-                MappingSets = new[]
+                InputMappingSets = new[]
                 {
-                    new ExpressionMappingSet
+                    new ExpressionInputMappingSet
                     {
                         SetName = "vrm",
-                        Targets = new[] { new MappingTarget { TargetName = "happy", Contributions = new[] { new MappingContribution { SourceIndex = 0, Weight = 1f } } } },
+                        Commands = new[] { new InputMappingCommand { CommandName = "happy", Contributions = new[] { new InputMappingContribution { TargetIndex = 0, Weight = 1f } } } },
                     }
                 }
             };
@@ -200,9 +207,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             var ec = go.AddComponent<ExpressionController>();
             ec.Initialize(set);
 
-            ec.SetWeightByVocabulary("vrm", "happy", 1.5f); // overdrive -> clamp to 1
-            yield return null;
-            Assert.AreEqual(1f, smr.GetBlendShapeWeight(0), 1e-3f);
+            Assert.Throws<System.ArgumentOutOfRangeException>(() =>
+                ec.SetWeightByVocabulary("vrm", "happy", 1.5f));
         }
     }
 }

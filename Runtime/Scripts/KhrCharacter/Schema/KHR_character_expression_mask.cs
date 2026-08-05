@@ -18,9 +18,11 @@ namespace GLTF.Schema
         {
             public int Target = -1;          // required expression index
             public string Name;              // optional exact label of the target expression
-            public string Type = "blend";    // "blend" | "block" | (any string -> treat as blend)
+            public string Type = "blend";    // "blend" | "block" | vendor-qualified custom token
             public float Amount = 1.0f;       // [0..1]
             public float Threshold = 0.0f;    // [0..1], block only
+            public JObject Extensions;        // preserved companion and unrelated extension payloads
+            public JToken Extras;
         }
 
         public static KHR_character_expression_mask FromJson(JObject obj)
@@ -38,6 +40,8 @@ namespace GLTF.Schema
                         Type = m["type"]?.Value<string>() ?? "blend",
                         Amount = m["amount"]?.Value<float>() ?? 1.0f,
                         Threshold = m["threshold"]?.Value<float>() ?? 0.0f,
+                        Extensions = m["extensions"] as JObject,
+                        Extras = m["extras"],
                     });
                 }
             }
@@ -60,6 +64,8 @@ namespace GLTF.Schema
                     if (m.Type != null) mo.Add("type", m.Type);
                     mo.Add("amount", m.Amount);
                     mo.Add("threshold", m.Threshold);
+                    if (m.Extensions != null) mo.Add("extensions", m.Extensions.DeepClone());
+                    if (m.Extras != null) mo.Add("extras", m.Extras.DeepClone());
                     arr.Add(mo);
                 }
             }

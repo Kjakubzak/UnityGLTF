@@ -8,8 +8,8 @@
 // The runtime contracts stay unchanged — they remain the import↔runtime boundary with live refs. Conversion
 // between the two lives in CharacterExpressionSetAsset.Extract/Resolve.
 //
-// Reused portable contract types (already [Serializable]): Sampler, MaskEntry, ExpressionMappingSet, TrsChannel,
-// ExpressionDomain and ExpressionBlendMode.
+// Reused portable contract types (already [Serializable]): Sampler, MaskEntry, ExpressionMappingSet,
+// ExpressionInputMappingSet, TrsChannel, ExpressionDomain and ExpressionBlendMode.
 
 using System;
 using UnityEngine;
@@ -22,6 +22,7 @@ namespace UnityGLTF.KhrCharacter
     {
         public ExpressionBinding[] Expressions;
         public ExpressionMappingSet[] MappingSets;
+        public ExpressionInputMappingSet[] InputMappingSets;
     }
 
     // Path-based mirror of ExpressionTrack. Metadata (Name/Domains/BlendMode/IsBinary/Masks) is carried verbatim;

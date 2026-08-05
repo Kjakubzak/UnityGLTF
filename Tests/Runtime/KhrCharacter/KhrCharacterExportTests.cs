@@ -443,7 +443,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                     new ExpressionTrack // index 3: application-defined mask type, with blend fallback at runtime
                     {
                         Name = "soft", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
-                        Masks = new[] { new MaskEntry { TargetIndex = 0, Type = MaskType.Blend, CustomType = "soft_block", Amount = 0.25f } },
+                        Masks = new[] { new MaskEntry { TargetIndex = 0, Type = MaskType.Identity, CustomType = "ACME_soft_block", Amount = 0.25f } },
                     },
                 },
             };
@@ -498,11 +498,11 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             var soft = ext.Expressions.Find(e => e.Expression == "soft");
             Assert.IsNotNull(soft?.Mask);
-            Assert.AreEqual("soft_block", soft.Mask.Masks[0].Type,
+            Assert.AreEqual("ACME_soft_block", soft.Mask.Masks[0].Type,
                 "application-defined mask type must be preserved on export");
             var softEntries = KhrCharacterBaker.BuildMaskEntries(soft.Mask, nameToIndex["soft"], wireToTrackIndex);
-            Assert.AreEqual(MaskType.Blend, softEntries[0].Type);
-            Assert.AreEqual("soft_block", softEntries[0].CustomType);
+            Assert.AreEqual(MaskType.Identity, softEntries[0].Type);
+            Assert.AreEqual("ACME_soft_block", softEntries[0].CustomType);
         }
 
         [Test]

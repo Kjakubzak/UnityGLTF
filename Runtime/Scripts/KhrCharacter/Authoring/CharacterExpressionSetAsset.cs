@@ -37,7 +37,11 @@ namespace UnityGLTF.KhrCharacter
         /// </summary>
         public static ExpressionBindingSet Extract(CharacterExpressionSet baked, Transform root)
         {
-            var result = new ExpressionBindingSet { MappingSets = baked?.MappingSets };
+            var result = new ExpressionBindingSet
+            {
+                MappingSets = baked?.MappingSets,
+                InputMappingSets = baked?.InputMappingSets,
+            };
             if (baked?.Expressions == null) return result;
 
             var expressions = new List<ExpressionBinding>(baked.Expressions.Length);
@@ -170,7 +174,11 @@ namespace UnityGLTF.KhrCharacter
         /// </summary>
         public static CharacterExpressionSet Resolve(ExpressionBindingSet bindings, Transform root)
         {
-            var result = new CharacterExpressionSet { MappingSets = bindings?.MappingSets };
+            var result = new CharacterExpressionSet
+            {
+                MappingSets = bindings?.MappingSets,
+                InputMappingSets = bindings?.InputMappingSets,
+            };
             if (bindings?.Expressions == null) return result;
 
             var expressions = new List<ExpressionTrack>(bindings.Expressions.Length);

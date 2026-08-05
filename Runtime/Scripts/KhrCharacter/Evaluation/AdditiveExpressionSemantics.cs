@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -12,7 +13,12 @@ namespace UnityGLTF.KhrCharacter
     {
         public static readonly AdditiveExpressionSemantics Default = new AdditiveExpressionSemantics();
 
-        public float Clamp01(float v) => v < 0f ? 0f : (v > 1f ? 1f : v);
+        public float Clamp01(float v)
+        {
+            if (float.IsNaN(v) || float.IsInfinity(v))
+                throw new ArgumentOutOfRangeException(nameof(v), "Expression drivers must be finite.");
+            return v < 0f ? 0f : (v > 1f ? 1f : v);
+        }
 
         public float SampleScalarDelta(Sampler s, float[] deltaValues, float baseValue, float d)
         {
@@ -76,30 +82,75 @@ namespace UnityGLTF.KhrCharacter
                     if (mask == null || mask.TargetIndex != trackIndex) continue;
                     int src = mask.SourceIndex;
                     float sv = (src >= 0 && src < rawInputs.Count) ? rawInputs[src] : 0f;
-                    float f = (mask.Type == MaskType.Block)
-                        ? (sv > mask.Threshold ? Clamp01(1f - mask.Amount) : 1f)
-                        : 1f - Clamp01(mask.Amount * sv);
+                    float f;
+                    if (mask.Type == MaskType.Block)
+                        f = sv > mask.Threshold ? 1f - mask.Amount : 1f;
+                    else if (mask.Type == MaskType.Blend)
+                        f = 1f - mask.Amount * sv;
+                    else
+                        f = 1f;
                     result *= f;
                 }
             }
             return result;
         }
 
-        public void DistributeMapping(ExpressionMappingSet set, string targetName, float value,
-                                      float[] sourceInputs, IReadOnlyDictionary<string, int> nameToIndex)
+        public void ApplyInputMapping(ExpressionInputMappingSet set,
+                                      IReadOnlyDictionary<string, float> commandInputs,
+                                      float[] nativeOutputs)
         {
-            if (set?.Targets == null || sourceInputs == null) return;
-            for (int t = 0; t < set.Targets.Length; t++)
+            if (nativeOutputs == null) return;
+            for (int i = 0; i < nativeOutputs.Length; i++) nativeOutputs[i] = 0f;
+            if (set?.Commands == null || commandInputs == null) return;
+
+            var sums = new double[nativeOutputs.Length];
+            for (int c = 0; c < set.Commands.Length; c++)
             {
-                var target = set.Targets[t];
-                if (target == null || target.TargetName != targetName || target.Contributions == null) continue;
-                for (int c = 0; c < target.Contributions.Length; c++)
+                var command = set.Commands[c];
+                if (command?.CommandName == null || command.Contributions == null) continue;
+                if (!commandInputs.TryGetValue(command.CommandName, out float value)) continue;
+                ValidateUnit(value, nameof(commandInputs));
+                for (int i = 0; i < command.Contributions.Length; i++)
                 {
-                    var contrib = target.Contributions[c];
-                    if (contrib.SourceIndex >= 0 && contrib.SourceIndex < sourceInputs.Length)
-                        sourceInputs[contrib.SourceIndex] += value * contrib.Weight;
+                    var contribution = command.Contributions[i];
+                    if (contribution.TargetIndex < 0 || contribution.TargetIndex >= sums.Length) continue;
+                    ValidateUnit(contribution.Weight, nameof(contribution.Weight));
+                    sums[contribution.TargetIndex] += value * contribution.Weight;
                 }
             }
+
+            for (int i = 0; i < nativeOutputs.Length; i++)
+                nativeOutputs[i] = (float)System.Math.Min(1d, sums[i]);
+        }
+
+        public IReadOnlyDictionary<string, float> EvaluateForwardMapping(
+            ExpressionMappingSet set, IReadOnlyList<float> nativeInputs)
+        {
+            var outputs = new Dictionary<string, float>();
+            if (set?.Targets == null || nativeInputs == null) return outputs;
+            for (int t = 0; t < set.Targets.Length; t++)
+            {
+                var endpoint = set.Targets[t];
+                if (endpoint?.TargetName == null || endpoint.Contributions == null) continue;
+                double sum = 0d;
+                for (int c = 0; c < endpoint.Contributions.Length; c++)
+                {
+                    var contribution = endpoint.Contributions[c];
+                    if (contribution.SourceIndex < 0 || contribution.SourceIndex >= nativeInputs.Count) continue;
+                    float value = nativeInputs[contribution.SourceIndex];
+                    ValidateUnit(value, nameof(nativeInputs));
+                    ValidateUnit(contribution.Weight, nameof(contribution.Weight));
+                    sum += value * contribution.Weight;
+                }
+                outputs[endpoint.TargetName] = (float)System.Math.Min(1d, sum);
+            }
+            return outputs;
+        }
+
+        private static void ValidateUnit(float value, string parameter)
+        {
+            if (float.IsNaN(value) || float.IsInfinity(value) || value < 0f || value > 1f)
+                throw new ArgumentOutOfRangeException(parameter, "Mapping inputs and weights must be finite values in [0, 1].");
         }
 
         public Quaternion AccumulateRotation(Quaternion accumulatedDelta, Quaternion deltaToAdd, float weight)

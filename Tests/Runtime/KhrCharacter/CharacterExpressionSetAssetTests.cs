@@ -236,5 +236,24 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(1, resolved.Expressions.Length);
             Assert.IsTrue(resolved.Expressions[0].JointDrivers == null || resolved.Expressions[0].JointDrivers.Length == 0);
         }
+
+        [Test]
+        public void DuplicateLabels_RemainAddressableOnlyByArrayIndex()
+        {
+            var set = new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack { Name = "smile" },
+                    new ExpressionTrack { Name = "smile" },
+                },
+            };
+
+            set.RebuildIndex();
+
+            Assert.IsFalse(set.NameToIndex.ContainsKey("smile"));
+            Assert.AreEqual("smile", set.Expressions[0].Name);
+            Assert.AreEqual("smile", set.Expressions[1].Name);
+        }
     }
 }

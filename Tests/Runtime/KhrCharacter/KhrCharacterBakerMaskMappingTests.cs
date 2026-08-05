@@ -34,7 +34,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void BuildMaskEntries_PreservesCustomTypeWithBlendFallback()
+        public void BuildMaskEntries_PreservesCustomTypeWithIdentityFallback()
         {
             var mask = new KHR_character_expression_mask
             {
@@ -42,7 +42,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                 {
                     new KHR_character_expression_mask.Mask
                     {
-                        Target = 1, Type = "soft_block", Amount = 0.5f
+                        Target = 1, Type = "ACME_soft_block", Amount = 0.5f
                     },
                 }
             };
@@ -50,9 +50,9 @@ namespace UnityGLTF.KhrCharacter.Tests
             var entries = KhrCharacterBaker.BuildMaskEntries(mask, sourceIndex: 0, WireToTrackIndex);
 
             Assert.AreEqual(1, entries.Length);
-            Assert.AreEqual(MaskType.Blend, entries[0].Type,
-                "application-defined mask types use blend as the runtime fallback");
-            Assert.AreEqual("soft_block", entries[0].CustomType,
+            Assert.AreEqual(MaskType.Identity, entries[0].Type,
+                "unsupported application-defined mask types use the normative identity fallback");
+            Assert.AreEqual("ACME_soft_block", entries[0].CustomType,
                 "the application-defined vocabulary value must survive import and re-export");
         }
 
@@ -85,6 +85,31 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(0.7f, contribs[0].Weight, 1e-5f);
             Assert.AreEqual(1, contribs[1].SourceIndex);
             Assert.AreEqual(0.3f, contribs[1].Weight, 1e-5f);
+        }
+
+        [Test]
+        public void BuildInputMappingSets_ResolvesTargetIndicesSeparately()
+        {
+            var mapping = new KHR_character_expression_mapping();
+            mapping.ExpressionSetInputMappings["https://example.com/vocab/v1"] =
+                new Dictionary<string, List<KHR_character_expression_mapping.TargetWeight>>
+                {
+                    {
+                        "happy", new List<KHR_character_expression_mapping.TargetWeight>
+                        {
+                            new KHR_character_expression_mapping.TargetWeight { Target = 1, Weight = 0.75f },
+                            new KHR_character_expression_mapping.TargetWeight { Target = 99, Weight = 1f },
+                        }
+                    },
+                };
+
+            var sets = KhrCharacterBaker.BuildInputMappingSets(mapping, WireToTrackIndex);
+
+            Assert.AreEqual(1, sets.Length);
+            Assert.AreEqual("https://example.com/vocab/v1", sets[0].SetName);
+            Assert.AreEqual("happy", sets[0].Commands[0].CommandName);
+            Assert.AreEqual(1, sets[0].Commands[0].Contributions.Length);
+            Assert.AreEqual(1, sets[0].Commands[0].Contributions[0].TargetIndex);
         }
 
         [Test]

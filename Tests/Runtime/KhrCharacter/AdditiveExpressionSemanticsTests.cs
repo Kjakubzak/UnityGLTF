@@ -1,10 +1,12 @@
+using System;
+using System.Collections.Generic;
 using NUnit.Framework;
 
 namespace UnityGLTF.KhrCharacter.Tests
 {
     /// <summary>
     /// Golden-value tests for the additive evaluation policy: input-time phase sampling (STEP/LINEAR),
-    /// single-key rest->target, blend/block masks, mapping distribution, and clamping.
+    /// single-key legacy sampling, deterministic masks, explicitly directed mappings, and driver clamping.
     /// </summary>
     public class AdditiveExpressionSemanticsTests
     {
@@ -63,6 +65,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(0f, _s.Clamp01(-0.5f));
             Assert.AreEqual(1f, _s.Clamp01(1.5f));
             Assert.AreEqual(0.3f, _s.Clamp01(0.3f), 1e-6f);
+            Assert.Throws<ArgumentOutOfRangeException>(() => _s.Clamp01(float.NaN));
+            Assert.Throws<ArgumentOutOfRangeException>(() => _s.Clamp01(float.PositiveInfinity));
         }
 
         [Test]
@@ -90,7 +94,18 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void Mapping_DistributesWeighted()
+        public void Mask_UnsupportedCustomType_UsesIdentity()
+        {
+            var tracks = new[]
+            {
+                new ExpressionTrack { Masks = new[] { new MaskEntry { TargetIndex = 1, SourceIndex = 0, Type = MaskType.Identity, CustomType = "ACME_curve", Amount = 1f } } },
+                new ExpressionTrack(),
+            };
+            Assert.AreEqual(0.8f, _s.ResolveMaskedInput(1, new[] { 1f, 0.8f }, tracks), 1e-5f);
+        }
+
+        [Test]
+        public void ForwardMapping_ProducesEndpointOutputsWithoutInversion()
         {
             var set = new ExpressionMappingSet
             {
@@ -108,10 +123,34 @@ namespace UnityGLTF.KhrCharacter.Tests
                     }
                 }
             };
-            var sources = new float[2];
-            _s.DistributeMapping(set, "happy", 1f, sources, null);
-            Assert.AreEqual(0.7f, sources[0], 1e-5f);
-            Assert.AreEqual(0.3f, sources[1], 1e-5f);
+            var outputs = _s.EvaluateForwardMapping(set, new[] { 0.5f, 1f });
+            Assert.AreEqual(0.65f, outputs["happy"], 1e-5f);
+        }
+
+        [Test]
+        public void InputMapping_AccumulatesThenClampsNativeDrivers()
+        {
+            var set = new ExpressionInputMappingSet
+            {
+                SetName = "https://example.com/vocab/v1",
+                Commands = new[]
+                {
+                    new InputMappingCommand
+                    {
+                        CommandName = "happy",
+                        Contributions = new[]
+                        {
+                            new InputMappingContribution { TargetIndex = 0, Weight = 0.7f },
+                            new InputMappingContribution { TargetIndex = 1, Weight = 0.3f },
+                            new InputMappingContribution { TargetIndex = 1, Weight = 0.8f },
+                        },
+                    },
+                },
+            };
+            var native = new float[2];
+            _s.ApplyInputMapping(set, new Dictionary<string, float> { { "happy", 1f } }, native);
+            Assert.AreEqual(0.7f, native[0], 1e-5f);
+            Assert.AreEqual(1f, native[1], 1e-5f);
         }
     }
 }

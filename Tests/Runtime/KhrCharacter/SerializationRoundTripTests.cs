@@ -139,6 +139,57 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsFalse(rig.ContainsKey("head"), "legacy string values are dropped, not throwing");
         }
 
+        [Test]
+        public void ExpressionMappingSchema_RoundTrip_PreservesIndependentDirections()
+        {
+            var ext = new GLTF.Schema.KHR_character_expression_mapping();
+            ext.ExpressionSetMappings["https://example.com/vocab/v1"] =
+                new Dictionary<string, List<GLTF.Schema.KHR_character_expression_mapping.SourceWeight>>
+                {
+                    { "Smile", new List<GLTF.Schema.KHR_character_expression_mapping.SourceWeight>
+                        { new GLTF.Schema.KHR_character_expression_mapping.SourceWeight { Source = 0, Weight = 0.8f } } },
+                };
+            ext.ExpressionSetInputMappings["https://example.com/vocab/v1"] =
+                new Dictionary<string, List<GLTF.Schema.KHR_character_expression_mapping.TargetWeight>>
+                {
+                    { "Smile", new List<GLTF.Schema.KHR_character_expression_mapping.TargetWeight>
+                        { new GLTF.Schema.KHR_character_expression_mapping.TargetWeight { Target = 1, Weight = 0.5f } } },
+                };
+
+            var restored = new GLTF.Schema.KHR_character_expression_mapping_Factory()
+                .Deserialize(new GLTF.Schema.GLTFRoot(), ext.Serialize()) as GLTF.Schema.KHR_character_expression_mapping;
+
+            Assert.AreEqual(0, restored.ExpressionSetMappings["https://example.com/vocab/v1"]["Smile"][0].Source);
+            Assert.AreEqual(1, restored.ExpressionSetInputMappings["https://example.com/vocab/v1"]["Smile"][0].Target);
+        }
+
+        [Test]
+        public void ExpressionMaskSchema_RoundTrip_PreservesCustomCompanionPayload()
+        {
+            var ext = new GLTF.Schema.KHR_character_expression_mask
+            {
+                Masks = new List<GLTF.Schema.KHR_character_expression_mask.Mask>
+                {
+                    new GLTF.Schema.KHR_character_expression_mask.Mask
+                    {
+                        Target = 0,
+                        Type = "ACME_curve",
+                        Extensions = new JObject
+                        {
+                            { "ACME_curve", new JObject { { "controlPoints", new JArray(0f, 1f) } } },
+                        },
+                        Extras = new JObject { { "author", "test" } },
+                    },
+                },
+            };
+
+            var restored = GLTF.Schema.KHR_character_expression_mask.FromJson(ext.Serialize().Value as JObject);
+
+            Assert.AreEqual("ACME_curve", restored.Masks[0].Type);
+            Assert.AreEqual(2, ((JArray)restored.Masks[0].Extensions["ACME_curve"]["controlPoints"]).Count);
+            Assert.AreEqual("test", restored.Masks[0].Extras["author"].Value<string>());
+        }
+
         // ── ExpressionController rehydration on Awake ───────────────────────────────
 
         [UnityTest]

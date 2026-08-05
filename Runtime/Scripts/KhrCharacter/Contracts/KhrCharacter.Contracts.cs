@@ -24,7 +24,7 @@ namespace UnityGLTF.KhrCharacter
 
     public enum TrsChannel { Translation, Rotation, Scale }
 
-    public enum MaskType { Blend, Block }
+    public enum MaskType { Blend, Block, Identity }
 
     public enum CharacterCapability
     {
@@ -95,8 +95,10 @@ namespace UnityGLTF.KhrCharacter
     public class MaskEntry
     {
         public int TargetIndex;          // expression index this mask attenuates
-        public MaskType Type;            // Runtime behavior; custom types fall back to Blend
+        public MaskType Type;            // Custom types without supported companion semantics use Identity
         public string CustomType;        // Preserved application-defined type; null for blend/block
+        public string RawExtensionsJson; // Preserved same-object companion/unrelated extension payloads
+        public string RawExtrasJson;     // Preserved mask extras payload
         public float Amount;             // [0..1], default 1
         public float Threshold;          // [0..1], Block only, default 0
         public int SourceIndex;          // owning expression by default; explicit if the schema allows it
@@ -126,10 +128,20 @@ namespace UnityGLTF.KhrCharacter
     public class ExpressionMappingSet { public string SetName; public MappingTarget[] Targets; }
 
     [Serializable]
+    public struct InputMappingContribution { public int TargetIndex; public float Weight; }
+
+    [Serializable]
+    public class InputMappingCommand { public string CommandName; public InputMappingContribution[] Contributions; }
+
+    [Serializable]
+    public class ExpressionInputMappingSet { public string SetName; public InputMappingCommand[] Commands; }
+
+    [Serializable]
     public class CharacterExpressionSet
     {
         public ExpressionTrack[] Expressions;
-        public ExpressionMappingSet[] MappingSets;
+        public ExpressionMappingSet[] MappingSets;           // native drivers -> endpoint outputs
+        public ExpressionInputMappingSet[] InputMappingSets; // endpoint commands -> native drivers
 
         // Rebuilt at runtime from Expressions (not serialized).
         [NonSerialized] public Dictionary<string, int> NameToIndex;
@@ -138,13 +150,20 @@ namespace UnityGLTF.KhrCharacter
         {
             NameToIndex = new Dictionary<string, int>();
             if (Expressions == null) return;
+            var duplicateNames = new HashSet<string>();
             for (int i = 0; i < Expressions.Length; i++)
             {
                 var track = Expressions[i];
                 if (track?.Name == null) continue;
+                if (duplicateNames.Contains(track.Name)) continue;
                 if (NameToIndex.ContainsKey(track.Name))
-                    Debug.LogWarning($"[KHR_character] Duplicate expression name '{track.Name}'; the earlier track becomes unreachable by name.");
-                NameToIndex[track.Name] = i;
+                {
+                    NameToIndex.Remove(track.Name);
+                    duplicateNames.Add(track.Name);
+                    Debug.LogWarning($"[KHR_character] Duplicate expression label '{track.Name}'; use its authoritative array index.");
+                    continue;
+                }
+                NameToIndex.Add(track.Name, i);
             }
         }
     }
@@ -255,9 +274,12 @@ namespace UnityGLTF.KhrCharacter
         // Mask: returns the masked input for a target track given raw inputs (blend/block, commutative).
         float ResolveMaskedInput(int trackIndex, IReadOnlyList<float> rawInputs, ExpressionTrack[] tracks);
 
-        // Mapping: distribute an endpoint target value onto model-source inputs.
-        void DistributeMapping(ExpressionMappingSet set, string targetName, float value,
-                               float[] sourceInputs, IReadOnlyDictionary<string, int> nameToIndex);
+        // Mapping operations are explicitly directed and never inferred from one another.
+        void ApplyInputMapping(ExpressionInputMappingSet set,
+                               IReadOnlyDictionary<string, float> commandInputs,
+                               float[] nativeOutputs);
+        IReadOnlyDictionary<string, float> EvaluateForwardMapping(ExpressionMappingSet set,
+                                                                  IReadOnlyList<float> nativeInputs);
 
         // Commutative rotation accumulation. Returns the new accumulated delta.
         Quaternion AccumulateRotation(Quaternion accumulatedDelta, Quaternion deltaToAdd, float weight);

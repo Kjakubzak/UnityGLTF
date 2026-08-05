@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using GLTF.Schema;
+using Newtonsoft.Json.Linq;
 using UnityEngine;
 using UnityGLTF.Extensions;
 using UnityGLTF.Plugins;
@@ -254,6 +255,7 @@ namespace UnityGLTF.KhrCharacter
         {
             var expressions = new List<KHR_character_expression.ExpressionItem>();
             var mappingDict = new Dictionary<string, Dictionary<string, List<KHR_character_expression_mapping.SourceWeight>>>();
+            var inputMappingDict = new Dictionary<string, Dictionary<string, List<KHR_character_expression_mapping.TargetWeight>>>();
             var runtimeToWireIndex = new Dictionary<int, int>();
             var pendingMasks = new Dictionary<KHR_character_expression.ExpressionItem, MaskEntry[]>();
 
@@ -368,7 +370,9 @@ namespace UnityGLTF.KhrCharacter
                             ? mask.CustomType
                             : mask.Type == MaskType.Block ? "block" : "blend",
                         Amount = mask.Amount,
-                        Threshold = mask.Threshold
+                        Threshold = mask.Threshold,
+                        Extensions = ParseObject(mask.RawExtensionsJson),
+                        Extras = ParseToken(mask.RawExtrasJson),
                     });
                 }
                 if (masks.Count > 0)
@@ -403,6 +407,32 @@ namespace UnityGLTF.KhrCharacter
                 }
             }
 
+            if (set.InputMappingSets != null)
+            {
+                foreach (var mappingSet in set.InputMappingSets)
+                {
+                    if (mappingSet?.Commands == null || string.IsNullOrEmpty(mappingSet.SetName)) continue;
+                    var setDict = new Dictionary<string, List<KHR_character_expression_mapping.TargetWeight>>();
+                    foreach (var command in mappingSet.Commands)
+                    {
+                        if (command?.Contributions == null || string.IsNullOrEmpty(command.CommandName)) continue;
+                        var contributions = new List<KHR_character_expression_mapping.TargetWeight>();
+                        foreach (var contribution in command.Contributions)
+                        {
+                            if (!runtimeToWireIndex.TryGetValue(contribution.TargetIndex, out int targetIndex)) continue;
+                            contributions.Add(new KHR_character_expression_mapping.TargetWeight
+                            {
+                                Target = targetIndex,
+                                Name = expressions[targetIndex].Expression,
+                                Weight = contribution.Weight,
+                            });
+                        }
+                        if (contributions.Count > 0) setDict[command.CommandName] = contributions;
+                    }
+                    if (setDict.Count > 0) inputMappingDict[mappingSet.SetName] = setDict;
+                }
+            }
+
             if (expressions.Count > 0)
             {
                 var rootExtension = new KHR_character_expression
@@ -421,15 +451,30 @@ namespace UnityGLTF.KhrCharacter
                 if (anyMask) exporter.DeclareExtensionUsage(KHR_character_expression_mask.EXTENSION_NAME);
             }
 
-            if (mappingDict.Count > 0)
+            if (mappingDict.Count > 0 || inputMappingDict.Count > 0)
             {
                 var mappingExtension = new KHR_character_expression_mapping
                 {
-                    ExpressionSetMappings = mappingDict
+                    ExpressionSetMappings = mappingDict,
+                    ExpressionSetInputMappings = inputMappingDict,
                 };
                 gltfRoot.AddExtension(KHR_character_expression_mapping.EXTENSION_NAME, mappingExtension);
                 exporter.DeclareExtensionUsage(KHR_character_expression_mapping.EXTENSION_NAME);
             }
+        }
+
+        private static JObject ParseObject(string json)
+        {
+            if (string.IsNullOrEmpty(json)) return null;
+            try { return JObject.Parse(json); }
+            catch { return null; }
+        }
+
+        private static JToken ParseToken(string json)
+        {
+            if (string.IsNullOrEmpty(json)) return null;
+            try { return JToken.Parse(json); }
+            catch { return null; }
         }
 
         private void WriteMorphDriver(GLTFSceneExporter exporter, GLTFRoot gltfRoot, GLTFAnimation anim, MorphDriver driver)

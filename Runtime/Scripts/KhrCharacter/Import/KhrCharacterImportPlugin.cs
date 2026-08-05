@@ -487,7 +487,9 @@ namespace UnityGLTF.KhrCharacter
                 AddIf(texture, CharacterCapability.Texture);
                 AddIf(mask, CharacterCapability.Mask);
             }
-            AddIf(set?.MappingSets != null && set.MappingSets.Length > 0, CharacterCapability.Mapping);
+            AddIf((set?.MappingSets != null && set.MappingSets.Length > 0)
+                  || (set?.InputMappingSets != null && set.InputMappingSets.Length > 0),
+                CharacterCapability.Mapping);
 
             return caps;
         }
