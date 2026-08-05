@@ -62,6 +62,7 @@ namespace UnityGLTF.KhrCharacter
                     adapterSelection = result;
             }
             if (mappingSets.Count == 0) return null;
+            AssessUnityHumanoidAdapterHealth(adapterSelection);
             return new SkeletonMappingResult
             {
                 MappingSets = mappingSets.ToArray(),
@@ -69,6 +70,33 @@ namespace UnityGLTF.KhrCharacter
                 SelectedRig = adapterSelection?.Identifier,
                 Report = adapterSelection?.Report ?? new ValidationReport(),
             };
+        }
+
+        // This is an optional host-adapter assessment, not KHR_character_skeleton_mapping validation. The
+        // extension deliberately does not define a required anatomy. Once Unity selects a mapping set for its
+        // Humanoid adapter, however, every role that this adapter recognizes as HumanTrait-required must resolve
+        // before that adapter can be considered healthy.
+        private static void AssessUnityHumanoidAdapterHealth(SkeletonMappingSetResult selection)
+        {
+            if (selection?.Associations == null || selection.Report == null) return;
+
+            var presentBones = new HashSet<HumanBodyBones>();
+            foreach (var role in selection.Associations.Keys)
+                if (VocabToHumanBone.TryGetValue(role ?? string.Empty, out var bone))
+                    presentBones.Add(bone);
+
+            foreach (var role in VocabToHumanBone)
+                if (HumanTrait.RequiredBone((int)role.Value) && !presentBones.Contains(role.Value))
+                    selection.Report.MissingRequiredBones.Add(role.Key);
+
+            if (selection.Report.MissingRequiredBones.Count > 0)
+            {
+                selection.Report.Warnings.Add(
+                    $"[KHR_character] Unity Humanoid adapter health: selected mapping set '{selection.Identifier}' " +
+                    $"has no resolved association for required recognized role(s): " +
+                    $"{string.Join(", ", selection.Report.MissingRequiredBones)}. " +
+                    "This host-adapter status does not make the skeleton mapping invalid.");
+            }
         }
 
         /// <summary>

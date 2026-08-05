@@ -14,6 +14,13 @@ namespace UnityGLTF.KhrCharacter.Tests
         private const string Vocab = "https://example.com/skeleton/v1";
         private const string SparseVocab = "https://example.com/skeleton/sparse/v1";
         private const string FullVocab = "https://example.com/skeleton/full/v1";
+        private static readonly string[] RecognizedUnityHumanoidRoles =
+        {
+            "hips", "spine", "chest", "upperChest", "neck", "head", "jaw", "leftEye", "rightEye",
+            "leftShoulder", "rightShoulder", "leftUpperArm", "leftLowerArm", "leftHand", "rightUpperArm",
+            "rightLowerArm", "rightHand", "leftUpperLeg", "leftLowerLeg", "leftFoot", "leftToes",
+            "rightUpperLeg", "rightLowerLeg", "rightFoot", "rightToes",
+        };
 
         private readonly List<UnityEngine.Object> _created = new List<UnityEngine.Object>();
 
@@ -41,6 +48,28 @@ namespace UnityGLTF.KhrCharacter.Tests
                 SkeletalRigMappings = new Dictionary<string, Dictionary<string, KHR_character_skeleton_mapping.JointAssociation>> { { Vocab, rig } }
             };
 
+        private SkeletonMappingResult BakeRecognizedRoles(string omittedRole = null, string unresolvedRole = null)
+        {
+            var nodeMap = new Dictionary<int, GameObject>();
+            var rig = new Dictionary<string, KHR_character_skeleton_mapping.JointAssociation>();
+            int nodeIndex = 0;
+            foreach (var role in RecognizedUnityHumanoidRoles)
+            {
+                if (role == omittedRole) continue;
+                if (role == unresolvedRole)
+                {
+                    rig[role] = Joint(9999);
+                    continue;
+                }
+
+                var bone = NewGo(role);
+                nodeMap[nodeIndex] = bone;
+                rig[role] = Joint(nodeIndex);
+                nodeIndex++;
+            }
+            return KhrCharacterSkeletonBaker.BakeSkeleton(new GLTFRoot(), nodeMap, Mapping(rig));
+        }
+
         [Test]
         public void BakeSkeleton_ResolvesByNodeIndex()
         {
@@ -58,8 +87,42 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsNotNull(result);
             Assert.AreSame(hips.transform, result.Bones["hips"]);
             Assert.AreSame(head.transform, result.Bones["head"]);
-            Assert.IsTrue(result.Report.IsValid);
+            Assert.IsTrue(result.Report.IsValid, "omitting roles is valid generic skeleton-mapping data");
+            Assert.Contains("leftFoot", result.Report.MissingRequiredBones,
+                "the separately assessed Unity Humanoid adapter is incomplete");
             Assert.AreEqual(Vocab, result.MappingSets[0].Identifier);
+        }
+
+        [Test]
+        public void BakeSkeleton_AllRecognizedRequiredRolesResolve_UnityAdapterIsHealthy()
+        {
+            var result = BakeRecognizedRoles();
+
+            Assert.IsNotNull(result);
+            Assert.IsTrue(result.Report.IsValid);
+            Assert.IsEmpty(result.Report.MissingRequiredBones);
+        }
+
+        [Test]
+        public void BakeSkeleton_OmittedRequiredRole_IsValidMappingButDegradedUnityAdapter()
+        {
+            var result = BakeRecognizedRoles(omittedRole: "leftFoot");
+
+            Assert.IsNotNull(result);
+            Assert.IsTrue(result.Report.IsValid,
+                "KHR_character_skeleton_mapping does not prescribe required anatomy");
+            CollectionAssert.AreEqual(new[] { "leftFoot" }, result.Report.MissingRequiredBones);
+            StringAssert.Contains("does not make the skeleton mapping invalid", result.Report.Warnings[0]);
+        }
+
+        [Test]
+        public void BakeSkeleton_OmittedOptionalRole_DoesNotDegradeUnityAdapter()
+        {
+            var result = BakeRecognizedRoles(omittedRole: "jaw");
+
+            Assert.IsNotNull(result);
+            Assert.IsTrue(result.Report.IsValid);
+            Assert.IsEmpty(result.Report.MissingRequiredBones, "jaw is optional to Unity Humanoid");
         }
 
         [Test]
@@ -86,10 +149,13 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(2, result.MappingSets[1].Associations.Count);
             Assert.AreEqual(FullVocab, result.SelectedRig, "largest-set selection is only the Unity adapter policy");
             Assert.AreEqual(2, result.Bones.Count);
+            Assert.IsEmpty(result.MappingSets[0].Report.MissingRequiredBones,
+                "adapter health is assessed only for the selected mapping set");
+            Assert.IsNotEmpty(result.MappingSets[1].Report.MissingRequiredBones);
         }
 
         [Test]
-        public void BakeSkeleton_UnresolvedAssociation_IsInvalidWithoutVocabularySpecificBoneClaims()
+        public void BakeSkeleton_UnresolvedRequiredRole_SeparatesValidityFromAdapterHealth()
         {
             var hips = NewGo("Hips_node");
             var nodeMap = new Dictionary<int, GameObject> { { 0, hips } };
@@ -104,32 +170,20 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsNotNull(result);
             Assert.AreSame(hips.transform, result.Bones["hips"]);
             Assert.IsFalse(result.Bones.ContainsKey("leftFoot"));
-            Assert.IsEmpty(result.Report.MissingRequiredBones,
-                "the generic extension does not define required roles for an external vocabulary");
             Assert.IsFalse(result.Report.IsValid, "an association whose node cannot resolve is invalid");
+            Assert.Contains("leftFoot", result.Report.MissingRequiredBones,
+                "the optional Unity adapter independently records its required recognized role");
         }
 
         [Test]
         public void BakeSkeleton_UnresolvedRole_DoesNotApplyUnityHumanoidOptionality()
         {
-            var hips = NewGo("Hips_node");
-            var head = NewGo("Head_node");
-            var nodeMap = new Dictionary<int, GameObject> { { 0, hips }, { 1, head } };
-            var ext = Mapping(new Dictionary<string, KHR_character_skeleton_mapping.JointAssociation>
-            {
-                { "hips", Joint(0) },
-                { "head", Joint(1) },
-                { "jaw", Joint(99) }, // no such node index
-            });
-
-            var result = KhrCharacterSkeletonBaker.BakeSkeleton(new GLTFRoot(), nodeMap, ext);
+            var result = BakeRecognizedRoles(unresolvedRole: "jaw");
 
             Assert.IsNotNull(result);
-            Assert.AreSame(hips.transform, result.Bones["hips"]);
-            Assert.AreSame(head.transform, result.Bones["head"]);
             Assert.AreEqual(0, result.Report.MissingRequiredBones.Count);
             Assert.IsFalse(result.Report.IsValid,
-                "generic node resolution cannot infer that a role is optional from Unity Humanoid conventions");
+                "a dangling association is invalid even when Unity Humanoid treats that role as optional");
             Assert.Greater(result.Report.Warnings.Count, 0);
         }
 
@@ -168,7 +222,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             var avatar = skel.BuildHumanoidAvatar();
             if (avatar != null) _created.Add(avatar);
 
-            Assert.IsNull(avatar);                 // 13 of 15 required bones missing
+            Assert.IsNull(avatar);
             Assert.IsFalse(skel.HumanoidAvailable);
         }
 

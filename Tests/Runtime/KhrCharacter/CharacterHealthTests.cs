@@ -62,7 +62,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             var hub = go.AddComponent<KhrCharacter>();
 
             var skel = go.AddComponent<SkeletonMap>();
-            // A fully-resolved mapping: the default ValidationReport (valid, no missing-required) -> Active.
+            // Health consumes the baker's adapter assessment: resolved bones plus a valid report with no missing
+            // adapter-required roles means Active.
             skel.Bind(new SkeletonMappingResult
             {
                 Bones = new System.Collections.Generic.Dictionary<string, Transform> { { "hips", go.transform } },
@@ -75,10 +76,10 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void GetHealth_ActiveWhenOnlyOptionalJointUnresolved()
+        public void GetHealth_ActiveForHealthyAdapterReport()
         {
-            // An unresolved OPTIONAL joint (jaw/eyes/toes/...) produces a warning but must NOT degrade a rig
-            // whose required bones resolved: Report.IsValid stays true and MissingRequiredBones stays empty.
+            // Optional-role omission is covered in SkeletonMappingTests. At this layer, a valid upstream report
+            // with resolved bones and no missing adapter-required roles must remain Active.
             var go = new GameObject("char");
             _created.Add(go);
             var hub = go.AddComponent<KhrCharacter>();
@@ -89,8 +90,6 @@ namespace UnityGLTF.KhrCharacter.Tests
                 Bones = new System.Collections.Generic.Dictionary<string, Transform> { { "hips", go.transform } },
                 SelectedRig = "rig",
             };
-            // Warning only, no missing-required (mirrors the baker for an absent optional joint).
-            result.Report.Warnings.Add("[KHR_character] skeleton joint 'jaw' -> node 'Jaw' was not found.");
             skel.Bind(result);
             hub.Skeleton = skel;
             hub.SetCapabilities(new[] { CharacterCapability.SkeletonMapping });
@@ -101,8 +100,8 @@ namespace UnityGLTF.KhrCharacter.Tests
         [Test]
         public void GetHealth_ReportsDegradedForMissingRequiredBone()
         {
-            // A declared joint mapping to a REQUIRED humanoid bone that didn't bind: the baker records it in
-            // MissingRequiredBones and clears IsValid -> the capability reads Degraded.
+            // A schema-valid mapping may still be incomplete for the optional Unity Humanoid adapter. The baker
+            // records that host-adapter condition separately in MissingRequiredBones, so health reads Degraded.
             var go = new GameObject("char");
             _created.Add(go);
             var hub = go.AddComponent<KhrCharacter>();
@@ -113,12 +112,12 @@ namespace UnityGLTF.KhrCharacter.Tests
                 Bones = new System.Collections.Generic.Dictionary<string, Transform> { { "hips", go.transform } },
                 SelectedRig = "rig",
             };
-            result.Report.IsValid = false;
             result.Report.MissingRequiredBones.Add("leftFoot");
             skel.Bind(result);
             hub.Skeleton = skel;
             hub.SetCapabilities(new[] { CharacterCapability.SkeletonMapping });
 
+            Assert.IsTrue(result.Report.IsValid, "host-adapter health does not invalidate the glTF mapping");
             Assert.AreEqual(CapabilityStatus.Degraded, StatusOf(hub.GetHealth(), CharacterCapability.SkeletonMapping));
         }
 
