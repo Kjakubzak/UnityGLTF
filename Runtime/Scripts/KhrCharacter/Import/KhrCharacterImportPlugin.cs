@@ -27,10 +27,10 @@ namespace UnityGLTF.KhrCharacter
                  "Vendor-neutral — operates over whatever rig vocabularies the model declares.")]
         public RigImportMode Rig = RigImportMode.Humanoid;
 
-        [Tooltip("Optional Unity host adapter. When enabled, imports the legacy additive/override " +
-                 "ExpressionController and lets it write scene targets. This is application policy, not " +
-                 "KHR_character_expression wire behavior. The passive ExpressionResponseSet, its suppressions " +
-                 "and its mapping sets are imported either way.")]
+        [Tooltip("Optional Unity host adapter. When enabled, adds an ExpressionController that drives the imported " +
+                 "ExpressionResponseSet and writes its composed output to the node transforms, blendshape weights " +
+                 "and material property blocks. How that output mixes with other writers is application policy. " +
+                 "The passive ExpressionResponseSet, its suppressions and its mapping sets are imported either way.")]
         public bool CreateExpressionController;
 
         [Tooltip("Optional Unity host policy. When enabled, prevents the animations that expression entries " +
@@ -236,10 +236,10 @@ namespace UnityGLTF.KhrCharacter
             // Unity controller below.
             var responses = TryBakeExpressionResponses(sceneObject, hub, expressionExt);
 
-            // The legacy scene-writing adapter may only consume data that passed the base wire evaluator's
-            // validation. Invalid optional expression data is ignored atomically rather than partially applied.
+            // The scene-writing adapter consumes only data that passed validation; invalid expression data binds no
+            // response set, so nothing is partially applied.
             var set = _createExpressionController && responses != null
-                ? TryBakeExpressions(sceneObject, hub, expressionExt)
+                ? TryBakeExpressions(sceneObject, hub, expressionExt, responses)
                 : null;
             WireSkeleton(sceneObject, hub);
             WireNodeFeatures(sceneObject, hub);
@@ -364,32 +364,37 @@ namespace UnityGLTF.KhrCharacter
             }
         }
 
-        private CharacterExpressionSet TryBakeExpressions(GameObject sceneObject, KhrCharacter hub, KHR_character_expression expressionExt)
+        // The controller evaluates the response set through bindings to the imported scene objects. The legacy bake is
+        // kept only as the controller's authoring set, for extraction and export.
+        private CharacterExpressionSet TryBakeExpressions(
+            GameObject sceneObject,
+            KhrCharacter hub,
+            KHR_character_expression expressionExt,
+            ExpressionResponseSet responses)
         {
             var root = _context?.Root;
             var importer = _context?.SceneImporter;
-            if (root == null || importer == null) return null;
-
-            if (expressionExt == null) return null;
+            if (root == null || importer == null || expressionExt == null || responses.Count == 0) return null;
 
             MaterialPropertiesRemapper remapper = null;
             if (_context.TryGetPlugin<AnimationPointerImportContext>(out var pointerCtx))
                 remapper = pointerCtx.materialPropertiesRemapper;
 
             var set = KhrCharacterBaker.Bake(root, importer, expressionExt, _nodeIndexToGo, remapper);
-            if (set?.Expressions == null || set.Expressions.Length == 0) return set;
+            var bindings = ExpressionTargetBindingBaker.Bake(
+                root, importer, responses, _nodeIndexToGo, remapper, TranslationScale);
 
             var controller = sceneObject.GetComponent<ExpressionController>();
             if (controller == null) controller = sceneObject.AddComponent<ExpressionController>();
-            controller.Initialize(set);
+            controller.Initialize(set, responses, bindings);
             hub.Expressions = controller;
             return set;
         }
 
-        // Stops the importer's auto-play host from auto-running the expression / reference-pose clips, which the
-        // ExpressionController drives explicitly (it decodes the glTF accessors itself and never plays these Unity
-        // clips). Import-only and plugin-local: it acts on the imported scene's clip objects + animation host,
-        // never on the neutral wire data, the exporter, or the core importer.
+        // Stops the importer's auto-play host from auto-running the expression / reference-pose clips, which
+        // expression evaluation samples itself (it decodes the glTF accessors and never plays these Unity clips).
+        // Import-only and plugin-local: it acts on the imported scene's clip objects + animation host, never on the
+        // neutral wire data, the exporter, or the core importer.
         private void SuppressNonInteractiveClipAutoPlay(GameObject sceneObject, KHR_character_expression expressionExt)
         {
             var root = _context?.Root;

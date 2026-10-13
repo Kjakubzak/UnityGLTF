@@ -124,8 +124,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             return _accessors.Count - 1;
         }
 
-        // Every bufferView starts on a four-byte boundary, so any component type is aligned.
-        private int AddBufferView(byte[] data)
+        /// <summary>Adds a bufferView holding <paramref name="data"/>, aligned to four bytes.</summary>
+        public int AddBufferView(byte[] data)
         {
             while (_binary.Count % 4 != 0) _binary.Add(0);
             _bufferViews.Add(new JObject
@@ -169,6 +169,13 @@ namespace UnityGLTF.KhrCharacter.Tests
         /// <summary>Imports the asset and passes the imported scene root to <paramref name="onLoaded"/>.</summary>
         public IEnumerator Import(Action<KhrCharacterImportPlugin> configure, Action<GameObject> onLoaded)
             => Import(ToGlb(), configure, onLoaded);
+
+        /// <summary>Imports a binary glTF, such as an exported asset.</summary>
+        public static IEnumerator ImportGlb(
+            byte[] glb,
+            Action<KhrCharacterImportPlugin> configure,
+            Action<GameObject> onLoaded)
+            => Import(glb, configure, onLoaded);
 
         /// <summary>Imports a complete glTF JSON document whose buffers are data URIs.</summary>
         public static IEnumerator ImportJson(

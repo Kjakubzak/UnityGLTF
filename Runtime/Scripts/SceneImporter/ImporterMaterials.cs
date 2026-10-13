@@ -16,7 +16,32 @@ namespace UnityGLTF
 	{
 		internal static List<Texture> _runtimeNormalTextures = new List<Texture>();
 		internal List<object> _warnOnce = new List<object>();
-		
+
+		/// <summary>
+		/// Converts a <c>KHR_texture_transform</c> offset and scale to the Unity texture scale and offset the importer
+		/// writes to a material's <c>_ST</c> property; a flipped texture (see <see cref="IsTextureFlipped"/>) mirrors V.
+		/// </summary>
+		internal static void ConvertTextureTransformScaleAndOffset(
+			bool textureFlipped,
+			Vector2 gltfOffset,
+			Vector2 gltfScale,
+			out Vector2 scale,
+			out Vector2 offset)
+		{
+			offset = gltfOffset;
+			scale = gltfScale;
+
+			if (textureFlipped)
+			{
+				offset.y =  scale.y + offset.y;
+				scale.y *= -1f;
+			}
+			else
+			{
+				offset.y = 1 - scale.y - offset.y;
+			}
+		}
+
 		protected virtual async Task ConstructMaterial(GLTFMaterial def, int materialIndex)
 		{
 			IUniformMap mapper;
@@ -86,18 +111,12 @@ namespace UnityGLTF
 
 			void CalculateYOffsetAndScale(TextureId textureId, ExtTextureTransformExtension ext, out Vector2 scale, out Vector2 offset)
 			{
-				offset = ext.Offset.ToUnityVector2Raw();
-				scale = ext.Scale.ToUnityVector2Raw();
-
-				if (IsTextureFlipped(textureId.Value))
-				{
-					offset.y =  scale.y + offset.y;
-					scale.y *= -1f;
-				}
-				else
-				{
-					offset.y = 1 - scale.y - offset.y;
-				}
+				ConvertTextureTransformScaleAndOffset(
+					IsTextureFlipped(textureId.Value),
+					ext.Offset.ToUnityVector2Raw(),
+					ext.Scale.ToUnityVector2Raw(),
+					out scale,
+					out offset);
 			}
 
 			mapper.Material.name = def.Name;

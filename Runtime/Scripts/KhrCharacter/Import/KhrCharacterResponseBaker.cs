@@ -838,12 +838,12 @@ namespace UnityGLTF.KhrCharacter
             double[] authored;
             if (Array.IndexOf(CoreTextureInfoPaths, textureInfoPath) >= 0)
             {
-                var transform = GetCoreTextureTransform(root, material, textureInfoPath, pointer, channelIndex);
+                var transform = GetCoreTextureTransform(root, material, textureInfoPath, pointer, channelIndex, out _);
                 authored = AuthoredTextureTransformValue(transform, property);
             }
             else if (segments[2] == "extensions" && count >= 8 && context.Remapper.HasImportMap(remapperProperty))
             {
-                var transform = GetExtensionTextureTransform(material, segments, pointer, channelIndex);
+                var transform = GetExtensionTextureTransform(material, segments, pointer, channelIndex, out _);
                 authored = AuthoredTextureTransformValue(transform, property);
             }
             else
@@ -879,12 +879,65 @@ namespace UnityGLTF.KhrCharacter
             return true;
         }
 
+        /// <summary>
+        /// Resolves the authored <c>KHR_texture_transform</c> object at <paramref name="transformPointer"/>
+        /// (<c>/materials/{m}/&lt;textureInfo&gt;/extensions/KHR_texture_transform</c>) on a core texture slot or a
+        /// material-extension texture: its offset, scale and rotation, each defaulted when omitted, and the textureInfo's
+        /// texture index, or -1 when it has none.
+        /// </summary>
+        internal static bool TryGetAuthoredTextureTransform(
+            GLTFRoot root,
+            string transformPointer,
+            out int materialIndex,
+            out string textureInfoPath,
+            out double[] offset,
+            out double[] scale,
+            out double rotation,
+            out int textureIndex)
+        {
+            materialIndex = -1;
+            textureInfoPath = null;
+            offset = null;
+            scale = null;
+            rotation = 0d;
+            textureIndex = -1;
+            string pointer = $"{transformPointer}/{ExtTextureTransformExtensionFactory.OFFSET}";
+            if (root?.Materials == null || !TryParsePointer(pointer, out string[] segments)) return false;
+            int count = segments.Length;
+            if (count < 6 || segments[0] != "materials" || segments[count - 3] != "extensions" ||
+                segments[count - 2] != ExtTextureTransformExtensionFactory.EXTENSION_NAME ||
+                !TryParseArrayIndex(segments[1], out materialIndex) || materialIndex >= root.Materials.Count ||
+                root.Materials[materialIndex] == null)
+                return false;
+            var material = root.Materials[materialIndex];
+            textureInfoPath = string.Join("/", segments, 2, count - 5);
+            JObject transform;
+            try
+            {
+                if (Array.IndexOf(CoreTextureInfoPaths, textureInfoPath) >= 0)
+                    transform = GetCoreTextureTransform(root, material, textureInfoPath, pointer, -1, out textureIndex);
+                else if (segments[2] == "extensions" && count >= 8)
+                    transform = GetExtensionTextureTransform(material, segments, pointer, -1, out textureIndex);
+                else
+                    return false;
+            }
+            catch (ExpressionResponseEvaluationException)
+            {
+                return false;
+            }
+            offset = AuthoredTextureTransformValue(transform, ExtTextureTransformExtensionFactory.OFFSET);
+            scale = AuthoredTextureTransformValue(transform, ExtTextureTransformExtensionFactory.SCALE);
+            rotation = AuthoredTextureTransformValue(transform, ExtTextureTransformExtensionFactory.ROTATION)[0];
+            return true;
+        }
+
         private static JObject GetCoreTextureTransform(
             GLTFRoot root,
             GLTFMaterial material,
             string textureInfoPath,
             string pointer,
-            int channelIndex)
+            int channelIndex,
+            out int textureIndex)
         {
             TextureInfo textureInfo;
             switch (textureInfoPath)
@@ -907,6 +960,7 @@ namespace UnityGLTF.KhrCharacter
             }
             if (textureInfo == null)
                 throw Invalid($"Channel {channelIndex} pointer '{pointer}' references a textureInfo that is not authored.");
+            textureIndex = textureInfo.Index?.Id ?? -1;
             if (textureInfo.Extensions == null ||
                 !textureInfo.Extensions.TryGetValue(ExtTextureTransformExtensionFactory.EXTENSION_NAME, out var extension) ||
                 extension == null)
@@ -920,7 +974,8 @@ namespace UnityGLTF.KhrCharacter
             GLTFMaterial material,
             string[] segments,
             string pointer,
-            int channelIndex)
+            int channelIndex,
+            out int textureIndex)
         {
             string extensionName = segments[3];
             if (material.Extensions == null || !material.Extensions.TryGetValue(extensionName, out var extension) ||
@@ -939,6 +994,7 @@ namespace UnityGLTF.KhrCharacter
                 throw Invalid(
                     $"Channel {channelIndex} pointer '{pointer}' references a textureInfo without an authored " +
                     "KHR_texture_transform.");
+            textureIndex = token["index"]?.Type == JTokenType.Integer ? token.Value<int>("index") : -1;
             return transform;
         }
 

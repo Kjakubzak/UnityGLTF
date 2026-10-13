@@ -10,11 +10,11 @@ using UnityGLTF.Plugins;
 namespace UnityGLTF.KhrCharacter
 {
     /// <summary>
-    /// Builds a <see cref="CharacterExpressionSet"/> from a parsed <c>KHR_character_expression</c> at import
-    /// time. Bakes morph-target (blendshape weight) and joint (node TRS) expressions; the texture domain is
-    /// added separately. Each curve is stored as deltas over the animation's frame-0 value. Morph weights are
-    /// raw glTF [0..1] (the frame-weight multiplier is applied at evaluation time); joint values are converted
-    /// to Unity space at bake.
+    /// Builds the authoring model (<see cref="CharacterExpressionSet"/>) of an imported character from a parsed
+    /// <c>KHR_character_expression</c>, for extraction and export only; <see cref="ExpressionController"/> evaluates the
+    /// imported <see cref="ExpressionResponseSet"/> instead. Bakes morph-target (blendshape weight), joint (node TRS)
+    /// and texture-transform expressions. Each curve is stored as deltas over the animation's frame-0 value. Morph
+    /// weights are raw glTF [0..1]; joint values are converted to Unity space at bake.
     /// </summary>
     internal static class KhrCharacterBaker
     {
@@ -44,15 +44,7 @@ namespace UnityGLTF.KhrCharacter
                 }
 
                 var animation = root.Animations[item.Animation];
-                // The glTF schema carries neither a per-expression blendMode nor a driver priority yet, so
-                // everything bakes as Additive with Priority = 0. Override is a runtime-selectable compositing
-                // policy (ExpressionController honors ExpressionTrack.BlendMode / driver Priority) pending a
-                // PR #2512 blendMode/priority discriminator; wire those through here once the schema lands.
-                var track = new ExpressionTrack
-                {
-                    Name = item.Name,
-                    BlendMode = ExpressionBlendMode.Additive,
-                };
+                var track = new ExpressionTrack { Name = item.Name };
 
                 var morphDrivers = new List<MorphDriver>();
                 if (item.Morphtarget?.Channels != null)
@@ -241,7 +233,6 @@ namespace UnityGLTF.KhrCharacter
                     Sampler = samplerData,
                     DeltaValues = deltas,
                     BaseValue = baseValues != null && i < baseValues.Count ? baseValues[i] : 0f,
-                    Priority = 0,
                 });
             }
         }
@@ -306,7 +297,6 @@ namespace UnityGLTF.KhrCharacter
                 Sampler = BuildSampler(times, MapInterp(interpolation)),
                 DeltaValues = deltas,
                 BaseValue = baseValue,
-                Priority = 0,
             });
         }
 
@@ -454,7 +444,6 @@ namespace UnityGLTF.KhrCharacter
                 Sampler = BuildSampler(times, MapInterp(interpolation)),
                 DeltaVec = deltas,
                 BaseVec = baseVec,
-                Priority = 0,
             });
         }
 
@@ -490,7 +479,6 @@ namespace UnityGLTF.KhrCharacter
                 Sampler = BuildSampler(times, MapInterp(interpolation)),
                 DeltaQuat = deltas,
                 BaseQuat = baseQuat,
-                Priority = 0,
             });
         }
 
@@ -610,7 +598,6 @@ namespace UnityGLTF.KhrCharacter
                 // anchors on BaseSt so the time-zero value matches the static Asset Object Model value.
                 Frame0St = stValues[0],
                 HasFrame0St = true,
-                Priority = 0,
             });
         }
 

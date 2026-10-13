@@ -373,7 +373,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             var tracks = new List<ExpressionTrack>();
             foreach (var item in ext.Expressions)
             {
-                var track = new ExpressionTrack { Name = item.Name, BlendMode = ExpressionBlendMode.Additive };
+                var track = new ExpressionTrack { Name = item.Name };
                 var anim = gltf.Animations[item.Animation];
 
                 if (item.Morphtarget?.Channels != null)

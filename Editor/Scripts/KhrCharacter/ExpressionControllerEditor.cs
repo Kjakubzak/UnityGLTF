@@ -8,7 +8,8 @@ namespace UnityGLTF.KhrCharacter.Editor
     /// Inspector for <see cref="ExpressionController"/>. At edit time it lists the baked expressions and
     /// vocabulary sets (read from the serialized set). In Play mode it shows a live control per expression entry —
     /// a slider, or a toggle for binary expressions — wired to GetWeight/SetWeight by entry index (expression
-    /// names are not unique), plus a Reset All button.
+    /// names are not unique), each entry's pre-suppression driver <c>u</c> and effective driver <c>v</c> from the last
+    /// update, the last composition's failures, and a Reset All button.
     /// </summary>
     [CustomEditor(typeof(ExpressionController))]
     public class ExpressionControllerEditor : UnityEditor.Editor
@@ -45,6 +46,7 @@ namespace UnityGLTF.KhrCharacter.Editor
             // Index-based loop, not foreach: SetWeight below reassigns an element of the controller's handle list,
             // which bumps the List version and would throw "Collection was modified" mid-enumeration.
             var handles = controller.Expressions;
+            var snapshot = controller.Snapshot;
             for (int i = 0; i < handles.Count; i++)
             {
                 var handle = handles[i];
@@ -55,6 +57,18 @@ namespace UnityGLTF.KhrCharacter.Editor
                 float next = handle.IsBinary ? Mathf.Round(raw) : raw;
                 if (!Mathf.Approximately(next, current))
                     controller.SetWeight(i, next);
+                if (snapshot != null && i < snapshot.U.Count)
+                    EditorGUILayout.LabelField(" ", $"u {snapshot.U[i]:0.###}   v {snapshot.V[i]:0.###}",
+                        EditorStyles.miniLabel);
+            }
+
+            var failures = controller.Composition?.Failures;
+            if (failures != null && failures.Count > 0)
+            {
+                EditorGUILayout.Space();
+                EditorGUILayout.LabelField($"Failures ({failures.Count})", EditorStyles.boldLabel);
+                foreach (var failure in failures)
+                    EditorGUILayout.HelpBox($"{failure.Property}: {failure.Message}", MessageType.Error);
             }
 
             Repaint();

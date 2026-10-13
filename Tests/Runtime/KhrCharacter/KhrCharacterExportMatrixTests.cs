@@ -72,9 +72,9 @@ namespace UnityGLTF.KhrCharacter.Tests
             => root.Accessors[anim.Samplers[channel.Sampler.Id].Input.Id];
 
         // A single-key joint rotation driver: enough to make an expression emit one native channel.
-        private static JointDriver RotationDriver(Transform target, int priority = 0) => new JointDriver
+        private static JointDriver RotationDriver(Transform target) => new JointDriver
         {
-            Target = target, Channel = TrsChannel.Rotation, Priority = priority,
+            Target = target, Channel = TrsChannel.Rotation,
             Sampler = new Sampler { Times = new[] { 0f }, Interp = Interp.Step, SingleKey = true },
             DeltaQuat = new[] { Quaternion.Euler(10f, 0f, 0f) }, BaseQuat = Quaternion.identity,
         };

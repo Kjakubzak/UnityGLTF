@@ -9,7 +9,7 @@
 // between the two lives in CharacterExpressionSetAsset.Extract/Resolve.
 //
 // Reused portable contract types (already [Serializable]): Sampler, SuppressionEntry, ExpressionMappingSet,
-// ExpressionInputMappingSet, TrsChannel, ExpressionDomain and ExpressionBlendMode.
+// ExpressionInputMappingSet, TrsChannel and ExpressionDomain.
 
 using System;
 using UnityEngine;
@@ -30,14 +30,13 @@ namespace UnityGLTF.KhrCharacter
         public string[] MappingRequiredCompanionExtensions;
     }
 
-    // Path-based mirror of ExpressionTrack. Metadata (Name/Domains/BlendMode/IsBinary/Suppressions) is carried
+    // Path-based mirror of ExpressionTrack. Metadata (Name/Domains/IsBinary/Suppressions) is carried
     // verbatim; the driver arrays become path-based bindings.
     [Serializable]
     public class ExpressionBinding
     {
         public string Name;
         public ExpressionDomain Domains;
-        public ExpressionBlendMode BlendMode = ExpressionBlendMode.Additive;
         public bool IsBinary;
         [FormerlySerializedAs("Masks")] public SuppressionEntry[] Suppressions;
         [FormerlySerializedAs("MaskExtensionsJson")] public string SuppressionExtensionsJson;
@@ -59,7 +58,6 @@ namespace UnityGLTF.KhrCharacter
         public Sampler Sampler;
         public float[] DeltaValues;      // frame-0-relative, raw glTF [0..1] space
         public float BaseValue;          // model default weight in raw [0..1]
-        public int Priority;
     }
 
     // Mirror of JointDriver: the live Transform target becomes TargetPath (relative to the character root). Curve
@@ -74,7 +72,6 @@ namespace UnityGLTF.KhrCharacter
         public Quaternion[] DeltaQuat;   // Rotation (frame-0-relative delta); null for T/S
         public Vector3 BaseVec;          // model default local position/scale
         public Quaternion BaseQuat;      // model default local rotation
-        public int Priority;
     }
 
     // Mirror of TextureDriver: the live Renderer becomes RendererPath. PropertyId (a stable
@@ -94,6 +91,5 @@ namespace UnityGLTF.KhrCharacter
         public Vector4 BaseSt;           // The material's base _ST
         public Vector4 Frame0St;         // Animation frame-0 absolute _ST; export anchor when HasFrame0St
         public bool HasFrame0St;         // true when the captured driver carried a frame-0 absolute; else export uses BaseSt
-        public int Priority;
     }
 }

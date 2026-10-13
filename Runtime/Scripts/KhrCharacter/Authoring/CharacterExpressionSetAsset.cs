@@ -57,7 +57,6 @@ namespace UnityGLTF.KhrCharacter
                 {
                     Name = src.Name,
                     Domains = src.Domains,
-                    BlendMode = src.BlendMode,
                     IsBinary = src.IsBinary,
                     Suppressions = CopySuppressions(src.Suppressions),
                     SuppressionExtensionsJson = src.SuppressionExtensionsJson,
@@ -95,7 +94,6 @@ namespace UnityGLTF.KhrCharacter
                             Sampler = d.Sampler,
                             DeltaValues = d.DeltaValues,
                             BaseValue = d.BaseValue,
-                            Priority = d.Priority,
                         });
                     }
                     binding.MorphBindings = morphs.ToArray();
@@ -127,7 +125,6 @@ namespace UnityGLTF.KhrCharacter
                             DeltaQuat = d.DeltaQuat,
                             BaseVec = d.BaseVec,
                             BaseQuat = d.BaseQuat,
-                            Priority = d.Priority,
                         });
                     }
                     binding.JointBindings = joints.ToArray();
@@ -163,7 +160,6 @@ namespace UnityGLTF.KhrCharacter
                             BaseSt = d.BaseSt,
                             Frame0St = d.Frame0St,
                             HasFrame0St = d.HasFrame0St,
-                            Priority = d.Priority,
                         });
                     }
                     binding.TextureBindings = textures.ToArray();
@@ -203,7 +199,6 @@ namespace UnityGLTF.KhrCharacter
                 {
                     Name = src.Name,
                     Domains = src.Domains,
-                    BlendMode = src.BlendMode,
                     IsBinary = src.IsBinary,
                     Suppressions = CopySuppressions(src.Suppressions),
                     SuppressionExtensionsJson = src.SuppressionExtensionsJson,
@@ -239,7 +234,6 @@ namespace UnityGLTF.KhrCharacter
                             Sampler = b.Sampler,
                             DeltaValues = b.DeltaValues,
                             BaseValue = b.BaseValue,
-                            Priority = b.Priority,
                         });
                     }
                     track.MorphDrivers = morphs.ToArray();
@@ -267,7 +261,6 @@ namespace UnityGLTF.KhrCharacter
                             DeltaQuat = b.DeltaQuat,
                             BaseVec = b.BaseVec,
                             BaseQuat = b.BaseQuat,
-                            Priority = b.Priority,
                         });
                     }
                     track.JointDrivers = joints.ToArray();
@@ -300,7 +293,6 @@ namespace UnityGLTF.KhrCharacter
                             BaseSt = b.BaseSt,
                             Frame0St = b.Frame0St,
                             HasFrame0St = b.HasFrame0St,
-                            Priority = b.Priority,
                         });
                     }
                     track.TextureDrivers = textures.ToArray();

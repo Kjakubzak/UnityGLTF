@@ -8,7 +8,8 @@ namespace UnityGLTF.KhrCharacter.Tests
 {
     /// <summary>
     /// End-to-end play-mode tests for the joint evaluation path: a hand-built joint expression is driven
-    /// through ExpressionController.LateUpdate and the target Transform's local TRS is asserted.
+    /// through ExpressionController.LateUpdate and the target Transform's local TRS is asserted. Translation composes
+    /// as b + sum(s - n) over the authored value; rotation and scale are the single absolute sample.
     /// </summary>
     public class ExpressionControllerJointTests
     {
@@ -91,10 +92,73 @@ namespace UnityGLTF.KhrCharacter.Tests
             ec.SetWeight("turn", 1f);
             yield return null;
 
-            // Documented limitation (M9b): the joint expression composes over the baked node neutral (identity),
-            // so the result is the absolute 90 degree pose and the live 45 degree pose is discarded, not stacked.
+            // Rotation is single-writer: the record is the absolute sample, so the live 45 degree pose is replaced,
+            // not stacked.
             Assert.Less(Quaternion.Angle(joint.localRotation, Quaternion.Euler(0f, 90f, 0f)), 0.1f);
             Assert.Greater(Quaternion.Angle(joint.localRotation, Quaternion.Euler(0f, 0f, 45f)), 1f);
+        }
+
+        [UnityTest]
+        public IEnumerator Translation_AddsEachSampleMinusItsNeutralToTheAuthoredValue()
+        {
+            var root = MakeRoot(out var joint);
+            var lift = new JointDriver
+            {
+                Target = joint,
+                Channel = TrsChannel.Translation,
+                Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Linear, SingleKey = false },
+                BaseVec = new Vector3(0f, 1f, 0f),
+                DeltaVec = new[] { Vector3.zero, new Vector3(0f, 1f, 0f) },
+            };
+            // The neutral key of this curve is 0.5 above the authored value, so its contribution is s - n, not s - b.
+            var raised = new JointDriver
+            {
+                Target = joint,
+                Channel = TrsChannel.Translation,
+                Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Linear, SingleKey = false },
+                BaseVec = new Vector3(0f, 1f, 0f),
+                DeltaVec = new[] { new Vector3(0f, 0.5f, 0f), new Vector3(0f, 2.5f, 0f) },
+            };
+            var set = new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack { Name = "lift", Domains = ExpressionDomain.Joint, JointDrivers = new[] { lift } },
+                    new ExpressionTrack { Name = "raised", Domains = ExpressionDomain.Joint, JointDrivers = new[] { raised } },
+                }
+            };
+            var ec = root.AddComponent<ExpressionController>();
+            ec.Initialize(set);
+
+            ec.SetWeight("lift", 1f);
+            ec.SetWeight("raised", 1f);
+            yield return null;
+            Assert.AreEqual(1f + 1f + 2f, joint.localPosition.y, 1e-5f, "b + (2 - 1) + (3.5 - 1.5)");
+        }
+
+        [UnityTest]
+        public IEnumerator Scale_IsTheAbsoluteSample()
+        {
+            var root = MakeRoot(out var joint);
+            // The neutral key differs from the authored value; a single-writer property ignores both.
+            var grow = new JointDriver
+            {
+                Target = joint,
+                Channel = TrsChannel.Scale,
+                Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Linear, SingleKey = false },
+                BaseVec = new Vector3(2f, 2f, 2f),
+                DeltaVec = new[] { new Vector3(0.5f, 0.5f, 0.5f), Vector3.one },
+            };
+            var ec = root.AddComponent<ExpressionController>();
+            ec.Initialize(WrapJoint("grow", grow));
+
+            ec.SetWeight("grow", 1f);
+            yield return null;
+            Assert.That(joint.localScale, Is.EqualTo(new Vector3(3f, 3f, 3f)), "the sample, not b + (s - n)");
+
+            ec.SetWeight("grow", 0f);
+            yield return null;
+            Assert.That(joint.localScale, Is.EqualTo(new Vector3(2f, 2f, 2f)), "Standalone restores the authored value");
         }
 
         private static CharacterExpressionSet JointRotationSet(string name, Transform target, Quaternion[] deltaQuat, Quaternion baseQuat)

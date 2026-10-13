@@ -1355,7 +1355,13 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.That(suppression.Type, Is.EqualTo(SuppressionType.Block));
             Assert.That(suppression.Amount, Is.EqualTo(0.1d));
             Assert.That(suppression.Threshold, Is.EqualTo(0.3d));
+            Assert.IsTrue(suppression.HasAmount);
+            Assert.IsTrue(suppression.HasThreshold);
             Assert.That(restored.Entries[1].Suppressions, Is.Empty);
+            var snapshot = restored.BuildSnapshot(new double?[] { 1d, 1d });
+            Assert.That(snapshot.V[1], Is.EqualTo(0.9d), "the restored block suppression attenuates its target");
+            Assert.That(restored.EvaluateForwardMapping("vrm", snapshot)["happy"], Is.EqualTo(0.1d),
+                "the restored forward mapping reads u");
             Assert.IsTrue(restored.TryGetForwardMappingSet("vrm", out var restoredForward));
             Assert.That(restoredForward.Targets[0].Contributions[0].Weight, Is.EqualTo(0.1d));
             Assert.IsTrue(restored.TryGetInputMappingSet("relative/v1", out var restoredInput));

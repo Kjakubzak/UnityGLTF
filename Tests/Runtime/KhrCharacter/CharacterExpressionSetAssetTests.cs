@@ -59,7 +59,6 @@ namespace UnityGLTF.KhrCharacter.Tests
                     {
                         Name = "smile",
                         Domains = ExpressionDomain.Morph | ExpressionDomain.Joint,
-                        BlendMode = ExpressionBlendMode.Override,
                         IsBinary = false,
                         MorphDrivers = new[]
                         {
@@ -70,7 +69,6 @@ namespace UnityGLTF.KhrCharacter.Tests
                                 Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Linear },
                                 DeltaValues = new[] { 0f, 1f },
                                 BaseValue = 0f,
-                                Priority = 3,
                             },
                         },
                         JointDrivers = new[]
@@ -82,7 +80,6 @@ namespace UnityGLTF.KhrCharacter.Tests
                                 Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Linear },
                                 DeltaQuat = new[] { Quaternion.identity, Quaternion.Euler(0f, 30f, 0f) },
                                 BaseQuat = Quaternion.Euler(5f, 0f, 0f),
-                                Priority = 2,
                             },
                         },
                         Suppressions = new[]
@@ -167,7 +164,6 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(1, rt.MorphDrivers.Length);
             Assert.AreSame(bodySmr, rt.MorphDrivers[0].Smr);
             Assert.AreEqual(0, rt.MorphDrivers[0].BlendShapeIndex);
-            Assert.AreEqual(3, rt.MorphDrivers[0].Priority);
             CollectionAssert.AreEqual(new[] { 0f, 1f }, rt.MorphDrivers[0].DeltaValues);
 
             Assert.AreEqual(1, rt.JointDrivers.Length);
@@ -178,7 +174,6 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsTrue(QuatApprox(Quaternion.identity, jd.DeltaQuat[0]));
             Assert.IsTrue(QuatApprox(Quaternion.Euler(0f, 30f, 0f), jd.DeltaQuat[1]));
             Assert.IsTrue(QuatApprox(Quaternion.Euler(5f, 0f, 0f), jd.BaseQuat));
-            Assert.AreEqual(2, jd.Priority);
         }
 
         [Test]
@@ -222,7 +217,6 @@ namespace UnityGLTF.KhrCharacter.Tests
             var eb = bindings.Expressions[0];
 
             Assert.AreEqual("smile", eb.Name);
-            Assert.AreEqual(ExpressionBlendMode.Override, eb.BlendMode);
             Assert.AreEqual(ExpressionDomain.Morph | ExpressionDomain.Joint, eb.Domains);
             Assert.IsFalse(eb.IsBinary);
             Assert.AreEqual(1, eb.Suppressions.Length);
@@ -245,7 +239,6 @@ namespace UnityGLTF.KhrCharacter.Tests
             // Metadata also survives the inverse.
             var resolved = CharacterExpressionSetAsset.Resolve(bindings, root);
             Assert.AreEqual("smile", resolved.Expressions[0].Name);
-            Assert.AreEqual(ExpressionBlendMode.Override, resolved.Expressions[0].BlendMode);
             Assert.AreEqual(ExpressionDomain.Morph | ExpressionDomain.Joint, resolved.Expressions[0].Domains);
             Assert.AreEqual("{\"ACME_suppression_root\":{}}", resolved.Expressions[0].SuppressionExtensionsJson);
             Assert.AreEqual(0.1, resolved.Expressions[0].Suppressions[0].Amount);

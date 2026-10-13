@@ -2450,30 +2450,21 @@ namespace UnityGLTF.KhrCharacter.Tests
         [Test]
         public void ExportedExpressions_CarryNoVendorExtras_WireIsNeutral()
         {
-            // R4 neutrality guard: the exporter must emit NO vendor extras on expression items — not for an
-            // all-default expression, and not for one with a non-Additive blend mode or a non-zero driver
-            // priority. blendMode/priority are intentionally not exported (no ratified KHR field; the import baker
-            // reconstructs Additive + Priority 0), so any META_* token would be write-only and break Khronos wire
-            // neutrality. This test FAILS if anyone re-introduces a vendor extras token.
+            // R4 neutrality guard: the exporter must emit NO vendor extras on expression items, so the expression wire
+            // stays Khronos-neutral. This test FAILS if anyone re-introduces a vendor extras token.
             var root = new GameObject("char");
             _created.Add(root);
-            var ctrlDefault = new GameObject("ctrlDefault").transform; ctrlDefault.SetParent(root.transform, false);
-            var ctrlOverride = new GameObject("ctrlOverride").transform; ctrlOverride.SetParent(root.transform, false);
-            var ctrlPriority = new GameObject("ctrlPriority").transform; ctrlPriority.SetParent(root.transform, false);
-
-            var prioritized = RotationDriver(ctrlPriority);
-            prioritized.Priority = 5;
+            var ctrlBlink = new GameObject("ctrlBlink").transform; ctrlBlink.SetParent(root.transform, false);
+            var ctrlJaw = new GameObject("ctrlJaw").transform; ctrlJaw.SetParent(root.transform, false);
+            var ctrlBrow = new GameObject("ctrlBrow").transform; ctrlBrow.SetParent(root.transform, false);
 
             var set = new CharacterExpressionSet
             {
                 Expressions = new[]
                 {
-                    // all-default: Additive blend mode, driver Priority 0
-                    new ExpressionTrack { Name = "neutral", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrlDefault) } },
-                    // non-default blend mode
-                    new ExpressionTrack { Name = "blinkOverride", Domains = ExpressionDomain.Joint, BlendMode = ExpressionBlendMode.Override, JointDrivers = new[] { RotationDriver(ctrlOverride) } },
-                    // non-zero priority
-                    new ExpressionTrack { Name = "prioritized", Domains = ExpressionDomain.Joint, JointDrivers = new[] { prioritized } },
+                    new ExpressionTrack { Name = "neutral", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrlBlink) } },
+                    new ExpressionTrack { Name = "jawOpen", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrlJaw) } },
+                    new ExpressionTrack { Name = "browUp", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrlBrow) } },
                 },
             };
             root.AddComponent<ExpressionController>().Initialize(set);

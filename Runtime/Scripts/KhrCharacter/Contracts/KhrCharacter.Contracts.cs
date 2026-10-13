@@ -6,7 +6,6 @@
 //  • Expression tracks are baked as deltas over the animation's frame-0 value (additive model).
 //  • Morph base + delta are stored in raw glTF [0..1] (before the BlendShapeFrameWeight multiplier).
 //  • Interp is a 3-valued enum (Step/Linear/CubicSpline).
-//  • JointDriver and TextureDriver carry a priority used for override-blend resolution.
 
 using System;
 using System.Collections.Generic;
@@ -17,8 +16,6 @@ namespace UnityGLTF.KhrCharacter
 {
     // ── Enums ────────────────────────────────────────────────────────────────
     public enum Interp { Step, Linear, CubicSpline }
-
-    public enum ExpressionBlendMode { Additive, Override }
 
     [Flags]
     public enum ExpressionDomain { None = 0, Morph = 1, Joint = 2, Texture = 4 }
@@ -67,7 +64,6 @@ namespace UnityGLTF.KhrCharacter
         public Sampler Sampler;
         public float[] DeltaValues;  // frame-0-relative, raw glTF [0..1] space (length == Times.Length)
         public float BaseValue;      // model default weight in raw [0..1]
-        public int Priority;         // tie-break for override blend mode
     }
 
     [Serializable]
@@ -80,7 +76,6 @@ namespace UnityGLTF.KhrCharacter
         public Quaternion[] DeltaQuat;   // Rotation (frame-0-relative delta); null for T/S
         public Vector3 BaseVec;          // model default local position/scale
         public Quaternion BaseQuat;      // model default local rotation
-        public int Priority;
     }
 
     [Serializable]
@@ -97,7 +92,6 @@ namespace UnityGLTF.KhrCharacter
         public Vector4 BaseSt;           // The material's base _ST (runtime rest anchor)
         public Vector4 Frame0St;         // Legacy/provenance copy of the imported animation's frame-0 absolute _ST
         public bool HasFrame0St;         // true when Frame0St was captured; export always anchors responses on BaseSt
-        public int Priority;             // same-slot conflict resolution
     }
 
     /// <summary>
@@ -137,7 +131,6 @@ namespace UnityGLTF.KhrCharacter
     {
         public string Name;
         public ExpressionDomain Domains;     // set only for the sub-extensions present
-        public ExpressionBlendMode BlendMode = ExpressionBlendMode.Additive;
         public bool IsBinary;                // explicit host/UI snapping metadata; never inferred from STEP interpolation
         public MorphDriver[] MorphDrivers;
         public JointDriver[] JointDrivers;
@@ -486,30 +479,5 @@ namespace UnityGLTF.KhrCharacter
         public string ExtrasJson;
         public string AdditionalPropertiesJson;
         public string[] RequiredCompanionExtensions;
-    }
-
-    // ── Evaluator policy implemented by the runtime ExpressionController ──────
-    public interface IExpressionSemantics
-    {
-        float Clamp01(float v);
-
-        // Sample a baked delta track at normalized phase d (input-time mapped). Results are frame-0-relative.
-        float SampleScalarDelta(Sampler s, float[] deltaValues, float baseValue, float d);
-        Vector3 SampleVectorDelta(Sampler s, Vector3[] deltaVec, Vector3 baseVec, float d);
-        Quaternion SampleRotationDelta(Sampler s, Quaternion[] deltaQuat, Quaternion baseQuat, float d);
-        Vector4 SampleVector4Delta(Sampler s, Vector4[] deltaVec, Vector4 baseVec, float d);
-
-        // Suppression: returns the suppressed input for a target track given raw inputs (blend/block, commutative).
-        float ResolveSuppressedInput(int trackIndex, IReadOnlyList<float> rawInputs, ExpressionTrack[] tracks);
-
-        // Mapping operations are explicitly directed and never inferred from one another.
-        void ApplyInputMapping(ExpressionInputMappingSet set,
-                               IReadOnlyDictionary<string, float> commandInputs,
-                               float[] nativeOutputs);
-        IReadOnlyDictionary<string, float> EvaluateForwardMapping(ExpressionMappingSet set,
-                                                                  IReadOnlyList<float> nativeInputs);
-
-        // Commutative rotation accumulation. Returns the new accumulated delta.
-        Quaternion AccumulateRotation(Quaternion accumulatedDelta, Quaternion deltaToAdd, float weight);
     }
 }

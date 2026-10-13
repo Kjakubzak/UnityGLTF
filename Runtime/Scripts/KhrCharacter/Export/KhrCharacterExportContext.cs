@@ -6,6 +6,7 @@ using Newtonsoft.Json.Linq;
 using UnityEngine;
 using UnityGLTF.Extensions;
 using UnityGLTF.Plugins;
+using static UnityGLTF.KhrCharacter.AuthoredExpressionCurves;
 
 namespace UnityGLTF.KhrCharacter
 {
@@ -28,20 +29,6 @@ namespace UnityGLTF.KhrCharacter
                 : base(
                     "Exporting a passive ExpressionResponseSet is not implemented. " +
                     "Refusing to silently discard KHR_character_expression data.") { }
-        }
-
-        private sealed class NormalizedLegacySampler
-        {
-            public float[] Times;
-            public int SourceKeyCount;
-            public bool SynthesizedSingleKey;
-            public InterpolationType Interpolation;
-        }
-
-        private sealed class TextureCurves
-        {
-            public Vector2[] Scale;
-            public Vector2[] Offset;
         }
 
         private sealed class TextureTargetSignature
@@ -605,21 +592,6 @@ namespace UnityGLTF.KhrCharacter
             plan.Add(target, constant);
         }
 
-        private static bool SameComponents(float[] left, float[] right)
-        {
-            if (left.Length != right.Length) return false;
-            for (int index = 0; index < left.Length; index++)
-                if (left[index] != right[index]) return false;
-            return true;
-        }
-
-        private static float[] Negated(float[] value)
-        {
-            var result = new float[value.Length];
-            for (int index = 0; index < result.Length; index++) result[index] = -value[index];
-            return result;
-        }
-
         private void ValidateTextureDriver(
             GLTFSceneExporter exporter,
             GLTFRoot gltfRoot,
@@ -920,197 +892,6 @@ namespace UnityGLTF.KhrCharacter
                 throw new InvalidMappingSetIdentifierException();
         }
 
-        private static NormalizedLegacySampler NormalizeLegacySampler(Sampler sampler, string description)
-        {
-            var source = sampler.Times;
-            if (source == null) throw InvalidExpression($"{description} has no input times.");
-            if (sampler.SingleKey)
-            {
-                if (source.Length != 1 || !IsFinite(source[0]) || source[0] < 0f)
-                    throw InvalidExpression($"{description} has invalid legacy single-key input.");
-                return new NormalizedLegacySampler
-                {
-                    Times = new[] { 0f, 1f },
-                    SourceKeyCount = 1,
-                    SynthesizedSingleKey = true,
-                    Interpolation = InterpolationType.LINEAR,
-                };
-            }
-            if (source.Length < 2)
-                throw InvalidExpression($"{description} must contain at least two input keys.");
-
-            float previous = source[0];
-            if (!IsFinite(previous) || previous < 0f)
-                throw InvalidExpression($"{description} input key 0 must be finite and nonnegative.");
-            for (int index = 1; index < source.Length; index++)
-            {
-                float current = source[index];
-                if (!IsFinite(current) || current < 0f || current <= previous)
-                    throw InvalidExpression($"{description} input keys must be finite, nonnegative, and strictly increasing.");
-                previous = current;
-            }
-
-            InterpolationType interpolation;
-            switch (sampler.Interp)
-            {
-                case Interp.Step:
-                    interpolation = InterpolationType.STEP;
-                    break;
-                case Interp.Linear:
-                case Interp.CubicSpline:
-                    interpolation = InterpolationType.LINEAR;
-                    break;
-                default:
-                    throw InvalidExpression($"{description} has unknown interpolation {sampler.Interp}.");
-            }
-
-            float first = source[0];
-            float duration = source[source.Length - 1] - first;
-            var normalized = new float[source.Length];
-            normalized[0] = 0f;
-            for (int index = 1; index < normalized.Length; index++)
-            {
-                float value = index == normalized.Length - 1
-                    ? 1f
-                    : (source[index] - first) / duration;
-                if (!IsFinite(value) || value <= normalized[index - 1])
-                    throw InvalidExpression(
-                        $"{description} input keys collapse after normalization to response progress.");
-                normalized[index] = value;
-            }
-            return new NormalizedLegacySampler
-            {
-                Times = normalized,
-                SourceKeyCount = source.Length,
-                Interpolation = interpolation,
-            };
-        }
-
-        private static float[] BuildMorphValues(
-            MorphDriver driver,
-            NormalizedLegacySampler sampler,
-            float authoredInitial,
-            string description)
-        {
-            if (!IsFinite(driver.BaseValue))
-                throw InvalidExpression($"{description} has a non-finite base weight.");
-            RequireEquivalent(
-                new[] { authoredInitial },
-                new[] { driver.BaseValue },
-                $"{description} base weight");
-            if (driver.DeltaValues == null || driver.DeltaValues.Length != sampler.SourceKeyCount)
-                throw InvalidExpression($"{description} output count does not match its input count.");
-
-            if (sampler.SynthesizedSingleKey)
-            {
-                RequireFinite(driver.DeltaValues[0], $"{description} target weight");
-                return new[] { authoredInitial, driver.DeltaValues[0] };
-            }
-
-            var values = new float[sampler.SourceKeyCount];
-            for (int index = 0; index < values.Length; index++)
-            {
-                RequireFinite(driver.DeltaValues[index], $"{description} output {index}");
-                values[index] = driver.BaseValue + driver.DeltaValues[index];
-                RequireFinite(values[index], $"{description} reconstructed output {index}");
-            }
-            RequireEquivalent(
-                new[] { authoredInitial },
-                new[] { values[0] },
-                $"{description} time-zero weight");
-            return values;
-        }
-
-        private static Vector3[] BuildJointVectorValues(
-            JointDriver driver,
-            NormalizedLegacySampler sampler,
-            string description)
-        {
-            RequireFinite(driver.BaseVec, $"{description} base value");
-            if (driver.DeltaVec == null || driver.DeltaVec.Length != sampler.SourceKeyCount)
-                throw InvalidExpression($"{description} output count does not match its input count.");
-            if (sampler.SynthesizedSingleKey)
-            {
-                RequireFinite(driver.DeltaVec[0], $"{description} target value");
-                return new[] { driver.BaseVec, driver.DeltaVec[0] };
-            }
-
-            var values = new Vector3[sampler.SourceKeyCount];
-            for (int index = 0; index < values.Length; index++)
-            {
-                RequireFinite(driver.DeltaVec[index], $"{description} output {index}");
-                values[index] = driver.BaseVec + driver.DeltaVec[index];
-                RequireFinite(values[index], $"{description} reconstructed output {index}");
-            }
-            return values;
-        }
-
-        private static Quaternion[] BuildJointRotationValues(
-            JointDriver driver,
-            NormalizedLegacySampler sampler,
-            string description)
-        {
-            RequireQuaternion(driver.BaseQuat, $"{description} base rotation");
-            if (driver.DeltaQuat == null || driver.DeltaQuat.Length != sampler.SourceKeyCount)
-                throw InvalidExpression($"{description} output count does not match its input count.");
-            if (sampler.SynthesizedSingleKey)
-            {
-                RequireQuaternion(driver.DeltaQuat[0], $"{description} target rotation");
-                return new[] { driver.BaseQuat, driver.DeltaQuat[0] };
-            }
-
-            var values = new Quaternion[sampler.SourceKeyCount];
-            for (int index = 0; index < values.Length; index++)
-            {
-                RequireQuaternion(driver.DeltaQuat[index], $"{description} output {index}");
-                values[index] = driver.DeltaQuat[index] * driver.BaseQuat;
-                RequireQuaternion(values[index], $"{description} reconstructed output {index}");
-            }
-            return values;
-        }
-
-        private static TextureCurves BuildTextureCurves(
-            TextureDriver driver,
-            NormalizedLegacySampler sampler,
-            string description)
-        {
-            RequireFinite(driver.BaseSt, $"{description} base texture transform");
-            if (driver.StValues == null || driver.StValues.Length != sampler.SourceKeyCount)
-                throw InvalidExpression($"{description} output count does not match its input count.");
-
-            Vector4[] values;
-            if (sampler.SynthesizedSingleKey)
-            {
-                RequireFinite(driver.StValues[0], $"{description} target texture transform");
-                values = new[] { driver.BaseSt, driver.StValues[0] };
-            }
-            else
-            {
-                values = new Vector4[sampler.SourceKeyCount];
-                for (int index = 0; index < values.Length; index++)
-                {
-                    RequireFinite(driver.StValues[index], $"{description} output {index}");
-                    values[index] = driver.BaseSt + driver.StValues[index];
-                    RequireFinite(values[index], $"{description} reconstructed output {index}");
-                }
-                RequireEquivalent(
-                    ToComponents(driver.BaseSt),
-                    ToComponents(values[0]),
-                    $"{description} time-zero texture transform");
-            }
-
-            var scale = new Vector2[values.Length];
-            var offset = new Vector2[values.Length];
-            for (int index = 0; index < values.Length; index++)
-            {
-                scale[index] = new Vector2(values[index].x, values[index].y);
-                offset[index] = new Vector2(values[index].z, 1f - values[index].w - values[index].y);
-                RequireFinite(scale[index], $"{description} scale output {index}");
-                RequireFinite(offset[index], $"{description} offset output {index}");
-            }
-            return new TextureCurves { Scale = scale, Offset = offset };
-        }
-
         private static Node RequireNode(GLTFRoot root, int nodeIndex, string description)
         {
             if (root?.Nodes == null || nodeIndex < 0 || nodeIndex >= root.Nodes.Count || root.Nodes[nodeIndex] == null)
@@ -1248,75 +1029,10 @@ namespace UnityGLTF.KhrCharacter
             return true;
         }
 
-        private static float[] ToGltfTranslation(Vector3 value)
-        {
-            return new[] { -value.x, value.y, value.z };
-        }
-
-        private static float[] ToGltfRotation(Quaternion value)
-        {
-            var converted = value.SwitchHandedness().normalized;
-            return new[] { converted.x, converted.y, converted.z, converted.w };
-        }
-
-        private static float[] ToComponents(Vector2 value) => new[] { value.x, value.y };
-        private static float[] ToComponents(Vector3 value) => new[] { value.x, value.y, value.z };
-        private static float[] ToComponents(Vector4 value) => new[] { value.x, value.y, value.z, value.w };
-
-        private static void RequireEquivalent(float[] expected, float[] actual, string description)
-        {
-            if (!ExpressionInitialValueValidation.ComponentsEquivalent(
-                    expected,
-                    actual,
-                    ExpressionAccessorComponentEncoding.Float))
-                throw InvalidExpression($"{description} does not match the exported authored initial value.");
-        }
-
         private static void RequireUnit(double value, string description)
         {
             if (double.IsNaN(value) || double.IsInfinity(value) || value < 0d || value > 1d)
                 throw InvalidExpression($"{description} must be finite and in [0, 1].");
-        }
-
-        private static void RequireFinite(float value, string description)
-        {
-            if (!IsFinite(value)) throw InvalidExpression($"{description} must be finite.");
-        }
-
-        private static void RequireFinite(Vector2 value, string description)
-        {
-            if (!IsFinite(value.x) || !IsFinite(value.y))
-                throw InvalidExpression($"{description} must be finite.");
-        }
-
-        private static void RequireFinite(Vector3 value, string description)
-        {
-            if (!IsFinite(value.x) || !IsFinite(value.y) || !IsFinite(value.z))
-                throw InvalidExpression($"{description} must be finite.");
-        }
-
-        private static void RequireFinite(Vector4 value, string description)
-        {
-            if (!IsFinite(value.x) || !IsFinite(value.y) || !IsFinite(value.z) || !IsFinite(value.w))
-                throw InvalidExpression($"{description} must be finite.");
-        }
-
-        private static void RequireQuaternion(Quaternion value, string description)
-        {
-            RequireFinite(new Vector4(value.x, value.y, value.z, value.w), description);
-            float lengthSquared = value.x * value.x + value.y * value.y + value.z * value.z + value.w * value.w;
-            if (!IsFinite(lengthSquared) || !(lengthSquared > 0f))
-                throw InvalidExpression($"{description} must have finite nonzero length.");
-        }
-
-        private static bool IsFinite(float value)
-        {
-            return !float.IsNaN(value) && !float.IsInfinity(value);
-        }
-
-        private static InvalidOperationException InvalidExpression(string message)
-        {
-            return new InvalidOperationException($"KHR_character_expression export is invalid: {message}");
         }
 
         private void ExportExpressions(
@@ -1399,9 +1115,6 @@ namespace UnityGLTF.KhrCharacter
 
                 if (track.Suppressions != null && track.Suppressions.Length > 0)
                     pendingSuppressions[expressionItem] = track;
-
-                // blendMode/priority are intentionally NOT exported (no ratified KHR field; the baker reconstructs
-                // Additive + Priority 0), so no vendor extras are written — the expression wire stays neutral.
 
                 expressions.Add(expressionItem);
             }
