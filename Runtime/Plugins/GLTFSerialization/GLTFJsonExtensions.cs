@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using GLTF.Math;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -50,8 +51,12 @@ namespace GLTF.Extensions
 
 			while (reader.Read() && reader.TokenType != JsonToken.EndArray)
 			{
+				// Converting the boxed double or long keeps the parsed binary64; Mono's double.ToString() keeps
+				// only 15 significant digits. An integer beyond the long range arrives as a BigInteger.
 				var value = reader.Value;
-				if (value != null)
+				if (value is IConvertible number)
+					list.Add(number.ToDouble(CultureInfo.InvariantCulture));
+				else if (value != null)
 					list.Add(double.Parse(value.ToString()));
 			}
 

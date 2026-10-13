@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using GLTF.Schema;
@@ -1394,6 +1395,84 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.That(weights.Contributed, Is.EqualTo(new[] { false, true }));
         }
 
+        [UnityTest]
+        public IEnumerator ImportedMorphWeightsKeepJsonDoublesBeyondFifteenDigits()
+        {
+            // Blender, for example, writes float32 shape-key values with up to 17 significant digits.
+            const double meshWeight = 0.30000001192092896d;
+            const double nodeWeight = 0.7071067811865476d;
+            var glb = new CharacterGlbBuilder();
+            int position = glb.AddFloatAccessor("VEC3", 3, new[] { 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f, 0f });
+            int displacement = glb.AddFloatAccessor("VEC3", 3, new[] { 0f, 0f, 1f, 0f, 0f, 1f, 0f, 0f, 1f });
+            int input = glb.AddFloatAccessor("SCALAR", 2, new[] { 0f, 1f }, true);
+            int output = glb.AddFloatAccessor("SCALAR", 2, new[] { 0f, 1f });
+            glb.Json["extensionsUsed"] = new JArray(
+                "KHR_character", "KHR_character_expression", "KHR_character_expression_morphtarget",
+                "KHR_animation_pointer");
+            glb.Json["meshes"] = new JArray(new JObject
+            {
+                {
+                    "primitives", new JArray(new JObject
+                    {
+                        { "attributes", new JObject { { "POSITION", position } } },
+                        {
+                            "targets", new JArray(
+                                new JObject { { "POSITION", displacement } },
+                                new JObject { { "POSITION", displacement } })
+                        },
+                    })
+                },
+                { "weights", new JRaw("[0.30000001192092896, 0]") },
+            });
+            glb.Json["nodes"] = new JArray(
+                new JObject { { "name", "face" }, { "mesh", 0 }, { "children", new JArray(1) } },
+                new JObject { { "name", "brow" }, { "mesh", 0 }, { "weights", new JRaw("[0.7071067811865476, 0]") } });
+            var channels = new JArray();
+            foreach (var pointer in new[] { "/nodes/0/weights/1", "/nodes/1/weights/1" })
+            {
+                var extension = new JObject { { "KHR_animation_pointer", new JObject { { "pointer", pointer } } } };
+                channels.Add(new JObject
+                {
+                    { "sampler", 0 },
+                    { "target", new JObject { { "path", "pointer" }, { "extensions", extension } } },
+                });
+            }
+            glb.Json["animations"] = new JArray(new JObject
+            {
+                { "samplers", new JArray(new JObject { { "input", input }, { "output", output } }) },
+                { "channels", channels },
+            });
+            var morphtarget = new JObject { { "channels", new JArray(0, 1) } };
+            var entry = new JObject
+            {
+                { "name", "raise" },
+                { "animation", 0 },
+                { "extensions", new JObject { { "KHR_character_expression_morphtarget", morphtarget } } },
+            };
+            glb.Json["extensions"] = new JObject
+            {
+                { "KHR_character", new JObject() },
+                { "KHR_character_expression", new JObject { { "expressions", new JArray(entry) } } },
+            };
+
+            GameObject scene = null;
+            yield return glb.Import(plugin => plugin.CreateExpressionController = false, loaded => scene = loaded);
+            _created.Add(scene);
+            var responses = scene.GetComponent<KhrCharacter>().ExpressionResponses;
+            Assert.IsNotNull(responses);
+            var targets = responses.Entries[0].Animation.Channels;
+            var composition = responses.Compose(responses.BuildSnapshot(new double?[] { 1d }));
+
+            Assert.That(Bits(targets[0].Target.ArrayAuthoredInitial[0]), Is.EqualTo(Bits(meshWeight)), "mesh.weights");
+            Assert.That(Bits(targets[1].Target.ArrayAuthoredInitial[0]), Is.EqualTo(Bits(nodeWeight)), "node.weights");
+            Assert.IsTrue(composition.TryGetRecord("/nodes/0/weights", out var face));
+            Assert.IsTrue(composition.TryGetRecord("/nodes/1/weights", out var brow));
+            Assert.That(face.Contributed, Is.EqualTo(new[] { false, true }));
+            Assert.That(face.Value[1], Is.EqualTo(1d));
+            Assert.That(Bits(face.Value[0]), Is.EqualTo(Bits(meshWeight)), "the untouched element is the JSON double");
+            Assert.That(Bits(brow.Value[0]), Is.EqualTo(Bits(nodeWeight)), "the untouched element is the JSON double");
+        }
+
         [Test]
         public void ComposeHonorsSingleWriterDeclarationsOnlyOfCarriedSupportedExtensions()
         {
@@ -1426,6 +1505,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             _created.Add(gameObject);
             return gameObject;
         }
+
+        private static long Bits(double value) => BitConverter.DoubleToInt64Bits(value);
 
         private static int AddTwoKeyInput(Fixture fixture)
         {
