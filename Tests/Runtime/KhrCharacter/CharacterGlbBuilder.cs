@@ -168,6 +168,19 @@ namespace UnityGLTF.KhrCharacter.Tests
 
         /// <summary>Imports the asset and passes the imported scene root to <paramref name="onLoaded"/>.</summary>
         public IEnumerator Import(Action<KhrCharacterImportPlugin> configure, Action<GameObject> onLoaded)
+            => Import(ToGlb(), configure, onLoaded);
+
+        /// <summary>Imports a complete glTF JSON document whose buffers are data URIs.</summary>
+        public static IEnumerator ImportJson(
+            string json,
+            Action<KhrCharacterImportPlugin> configure,
+            Action<GameObject> onLoaded)
+            => Import(Encoding.UTF8.GetBytes(json), configure, onLoaded);
+
+        private static IEnumerator Import(
+            byte[] asset,
+            Action<KhrCharacterImportPlugin> configure,
+            Action<GameObject> onLoaded)
         {
             var settings = GLTFSettings.GetDefaultSettings();
             foreach (var plugin in settings.ImportPlugins)
@@ -182,7 +195,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                 ThrowOnLowMemory = false,
                 ImportContext = new GLTFImportContext(settings),
             };
-            var stream = new MemoryStream(ToGlb());
+            var stream = new MemoryStream(asset);
             var importer = new GLTFSceneImporter(stream, options);
             var load = importer.LoadSceneAsync();
             while (!load.IsCompleted) yield return null;

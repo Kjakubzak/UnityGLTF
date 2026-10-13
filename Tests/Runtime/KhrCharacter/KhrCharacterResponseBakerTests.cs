@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using GLTF.Schema;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.TestTools;
 using UnityGLTF.Extensions;
 
 namespace UnityGLTF.KhrCharacter.Tests
@@ -1360,6 +1362,62 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsFalse(restored.Validation.IsComplete);
             Assert.That(restored.Validation.IncompleteReasons, Is.EqualTo(new[] { "partial" }));
             Assert.IsNull(restored.GetComponent<ExpressionController>());
+        }
+
+        [Test]
+        public void ElementOnlyMorphCompositionKeepsTheJsonBaseAfterUnitySerialization()
+        {
+            var fixture = new Fixture();
+            int input = AddTwoKeyInput(fixture);
+            int output = fixture.AddFloatAccessor(GLTFAccessorAttributeType.SCALAR, 2, new[] { 0.25f, 1f });
+            AddMorphMesh(fixture, new List<double> { 0.1d, 0.25d }, 2);
+            fixture.Root.Nodes.Add(new Node { Mesh = new MeshId { Id = 0, Root = fixture.Root } });
+            fixture.AddAnimation(
+                new[] { new SamplerSpec(input, output) },
+                new[] { PointerChannel(0, fixture.Root, "/nodes/0/weights/1") });
+            var entries = fixture.Bake("weight-element");
+            var target = entries[0].Animation.Channels[0].Target;
+            Assert.That(target.AuthoredInitial, Is.EqualTo(new[] { 0.25d }));
+            Assert.That(target.ArrayAuthoredInitial, Is.EqualTo(new[] { 0.1d, 0.25d }));
+
+            var source = CreateGameObject("source").AddComponent<ExpressionResponseSet>();
+            source.Bind(entries, false);
+            var restored = CreateGameObject("restored").AddComponent<ExpressionResponseSet>();
+            JsonUtility.FromJsonOverwrite(JsonUtility.ToJson(source), restored);
+            var composition = restored.Compose(restored.BuildSnapshot(new double?[] { 1d }));
+
+            Assert.That(restored.Entries[0].Animation.Channels[0].Target.ArrayAuthoredInitial,
+                Is.EqualTo(new[] { 0.1d, 0.25d }));
+            Assert.IsTrue(composition.TryGetRecord("/nodes/0/weights", out var weights));
+            Assert.That(weights.Value, Is.EqualTo(new[] { 0.1d, 1d }),
+                "the untouched element is the JSON double 0.1, not the float32 value");
+            Assert.That(weights.Contributed, Is.EqualTo(new[] { false, true }));
+        }
+
+        [Test]
+        public void ComposeHonorsSingleWriterDeclarationsOnlyOfCarriedSupportedExtensions()
+        {
+            var fixture = TranslationFixture();
+            var second = Entry("second", 0, joint: new[] { 0 });
+            second.RawExtensions = new JObject { { "ACME_exclusive", new JObject() } };
+            var entries = fixture.Bake(new[] { Entry("first", 0, joint: new[] { 0 }), second }, null, out var validation);
+            var responses = CreateGameObject("responses").AddComponent<ExpressionResponseSet>();
+            responses.Bind(entries, false, validation);
+            var snapshot = responses.BuildSnapshot(new double?[] { 1d, 1d });
+            Func<ExpressionResponseTarget, bool> translation = target => target.Kind == ExpressionPropertyKind.NodeTranslation;
+            Assert.That(responses.Entries[1].ExtensionNames, Is.EqualTo(new[] { "ACME_exclusive" }));
+
+            var unsupported = new ExpressionDerivedExtensionRegistry();
+            unsupported.Register("ACME_exclusive", false, declaresSingleWriter: translation);
+            responses.DerivedExtensions = unsupported;
+            Assert.IsTrue(responses.Compose(snapshot).TryGetRecord("/nodes/0/translation", out var sum));
+            Assert.That(sum.Value, Is.EqualTo(new[] { 2d, 4d, 6d }), "an unsupported extension's declaration is ignored");
+
+            var supported = new ExpressionDerivedExtensionRegistry();
+            supported.Register("ACME_exclusive", false, isSupported: true, declaresSingleWriter: translation);
+            responses.DerivedExtensions = supported;
+            LogAssert.Expect(LogType.Error, new Regex("composition failed for '/nodes/0/translation'"));
+            Assert.IsFalse(responses.Compose(snapshot).TryGetRecord("/nodes/0/translation", out _));
         }
 
         private GameObject CreateGameObject(string name)

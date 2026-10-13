@@ -47,6 +47,7 @@ namespace UnityGLTF.KhrCharacter
             public ExpressionResponseTarget Target;
             public GLTFAccessorAttributeType OutputType;
             public double[] AuthoredInitial;
+            public double[] ArrayAuthoredInitial;
             public bool ScalarPackedArray;
             public bool AllowsNormalizedIntegerOutput;
             public CoreNodeTargetSource Source;
@@ -395,7 +396,8 @@ namespace UnityGLTF.KhrCharacter
                         decoded,
                         resolved.Target.Kind,
                         resolved.AuthoredInitial,
-                        resolved.Target.ArrayLength)
+                        resolved.Target.ArrayLength,
+                        resolved.ArrayAuthoredInitial)
                     : resolved.Target;
                 bool supportedListing = listedBy != null &&
                     context.Registry.TryGet(listedBy, out var listingExtension) && listingExtension.IsSupported;
@@ -492,14 +494,11 @@ namespace UnityGLTF.KhrCharacter
             EntryListing[] listings,
             List<PossibleRecord> possibleRecords)
         {
-            var declarations = new List<ExpressionDerivedExtension>();
+            var carriedExtensions = new List<ExpressionDerivedExtension>();
             foreach (var listing in listings)
-            {
-                if (listing == null) continue;
-                foreach (var carried in listing.Carried)
-                    if (carried.IsSupported && carried.DeclaresSingleWriter != null && !declarations.Contains(carried))
-                        declarations.Add(carried);
-            }
+                if (listing != null)
+                    carriedExtensions.AddRange(listing.Carried);
+            var isSingleWriter = ExpressionComposer.SingleWriterPredicate(carriedExtensions);
 
             var byProperty = new Dictionary<string, List<PossibleRecord>>(StringComparer.Ordinal);
             foreach (var record in possibleRecords)
@@ -519,7 +518,7 @@ namespace UnityGLTF.KhrCharacter
                         var a = group[first];
                         var b = group[second];
                         if (a.EntryIndex == b.EntryIndex || !a.Target.Identity.Overlaps(b.Target.Identity)) continue;
-                        if (!IsSingleWriter(a.Target, declarations) && !IsSingleWriter(b.Target, declarations)) continue;
+                        if (!isSingleWriter(a.Target) && !isSingleWriter(b.Target)) continue;
                         throw Invalid(
                             $"Expression entries {a.EntryIndex} ('{extension.Expressions[a.EntryIndex].Name}') and " +
                             $"{b.EntryIndex} ('{extension.Expressions[b.EntryIndex].Name}') both list " +
@@ -527,21 +526,6 @@ namespace UnityGLTF.KhrCharacter
                     }
                 }
             }
-        }
-
-        private static bool IsSingleWriter(ExpressionResponseTarget target, List<ExpressionDerivedExtension> declarations)
-        {
-            switch (target.Kind)
-            {
-                case ExpressionPropertyKind.NodeRotation:
-                case ExpressionPropertyKind.NodeScale:
-                case ExpressionPropertyKind.TextureScale:
-                    return true;
-            }
-            if (target.ValueKind == ExpressionResponseValueKind.Quaternion) return true;
-            foreach (var declaration in declarations)
-                if (declaration.DeclaresSingleWriter(target)) return true;
-            return false;
         }
 
         private static string FindUndecodableInput(BakeContext context, GLTFAnimation animation, int expressionIndex)
@@ -714,6 +698,7 @@ namespace UnityGLTF.KhrCharacter
                     throw Invalid($"Channel {channelIndex} has unsupported core target path '{path}'.");
             }
 
+            double[] arrayAuthored = arrayLength > 0 ? authored : null;
             ExpressionPropertyIdentity identity;
             if (element.HasValue)
             {
@@ -741,9 +726,11 @@ namespace UnityGLTF.KhrCharacter
                     true,
                     kind,
                     authored,
-                    arrayLength),
+                    arrayLength,
+                    arrayAuthored),
                 OutputType = outputType,
                 AuthoredInitial = authored,
+                ArrayAuthoredInitial = arrayAuthored,
                 ScalarPackedArray = scalarPacked,
                 AllowsNormalizedIntegerOutput = allowsNormalizedIntegerOutput,
                 Source = source,

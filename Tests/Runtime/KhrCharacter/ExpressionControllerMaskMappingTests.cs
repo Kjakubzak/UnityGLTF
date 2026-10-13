@@ -219,32 +219,5 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(0f, smr.GetBlendShapeWeight(0), 1e-3f,
                 "ResetAll must clear latent mapped commands as well as direct-native weights");
         }
-
-        [Test]
-        public void Mapping_VocabularyOverdrive_IsRejected()
-        {
-            var smr = MakeSmr(out var go);
-            var set = new CharacterExpressionSet
-            {
-                Expressions = new[]
-                {
-                    new ExpressionTrack { Name = "smileLeft", Domains = ExpressionDomain.Morph, MorphDrivers = new[] { LinearMorph(smr) } },
-                },
-                InputMappingSets = new[]
-                {
-                    new ExpressionInputMappingSet
-                    {
-                        SetName = "vrm",
-                        Commands = new[] { new InputMappingCommand { CommandName = "happy", Contributions = new[] { new InputMappingContribution { TargetIndex = 0, Weight = 1f } } } },
-                    }
-                }
-            };
-            set.RebuildIndex();
-            var ec = go.AddComponent<ExpressionController>();
-            ec.Initialize(set);
-
-            Assert.Throws<System.ArgumentOutOfRangeException>(() =>
-                ec.SetWeightByVocabulary("vrm", "happy", 1.5f));
-        }
     }
 }

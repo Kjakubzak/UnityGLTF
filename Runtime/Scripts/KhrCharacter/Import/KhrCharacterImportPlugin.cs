@@ -109,8 +109,9 @@ namespace UnityGLTF.KhrCharacter
             if (extensionName == KhrCharacterExtensionNames.ReferencePose) return true;
             if (extensionName == KhrCharacterExtensionNames.SkeletonMapping) return true;
 
-            // Parsing or baking a subset of expression data is not the complete behavior promised by required use.
-            // Keep these explicit so adding a schema factory cannot silently turn recognition into a capability claim.
+            // ExpressionResponseSet implements the expression pipeline: listed channels are sampled and composed
+            // with exact accumulation, suppressions turn u into v, and every mapping set is exposed and computable.
+            // Keep the list explicit so adding a schema factory cannot silently turn recognition into a claim.
             switch (extensionName)
             {
                 case KhrCharacterExtensionNames.Expression:
@@ -119,7 +120,7 @@ namespace UnityGLTF.KhrCharacter
                 case KhrCharacterExtensionNames.ExpressionTextureTransform:
                 case KhrCharacterExtensionNames.ExpressionMapping:
                 case KhrCharacterExtensionNames.ExpressionSuppression:
-                    return false;
+                    return true;
                 default:
                     return false;
             }

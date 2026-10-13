@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using UnityEngine;
 using UnityEngine.Serialization;
 
@@ -33,6 +35,7 @@ namespace UnityGLTF.KhrCharacter
     {
         private static readonly SuppressionEntry[] NoSuppressions = Array.Empty<SuppressionEntry>();
         private SuppressionEntry[] _suppressions = NoSuppressions;
+        private string[] _extensionNames;
 
         internal ExpressionResponseSetEntry(
             string name,
@@ -61,18 +64,40 @@ namespace UnityGLTF.KhrCharacter
         /// </summary>
         public IReadOnlyList<SuppressionEntry> Suppressions => _suppressions;
 
+        /// <summary>The names of the extensions in the entry's <c>extensions</c> object.</summary>
+        public IReadOnlyList<string> ExtensionNames => _extensionNames ?? (_extensionNames = ParseExtensionNames());
+
         internal void SetSuppressions(SuppressionEntry[] suppressions)
         {
             _suppressions = suppressions ?? NoSuppressions;
         }
+
+        private string[] ParseExtensionNames()
+        {
+            if (string.IsNullOrEmpty(ExtensionsJson)) return Array.Empty<string>();
+            try
+            {
+                var names = new List<string>();
+                if (JToken.Parse(ExtensionsJson) is JObject extensions)
+                    foreach (var property in extensions.Properties())
+                        names.Add(property.Name);
+                return names.ToArray();
+            }
+            catch (JsonException)
+            {
+                return Array.Empty<string>();
+            }
+        }
     }
 
     /// <summary>
-    /// Passive imported KHR_character_expression data. It evaluates absolute wire-space response records by
-    /// authoritative expression-array index and never writes Unity scene targets or chooses a composition policy.
-    /// Listing decides which channels produce records: only channels that a supported derived expression extension
-    /// lists emit, while every channel counts toward the duration. It also exposes each entry's suppressions and every
-    /// expression mapping set to host logic.
+    /// Passive imported KHR_character_expression data and its normative pipeline. <see cref="BuildSnapshot"/> turns
+    /// the host's final native drivers into the pre-suppression vector <c>u</c> and the effective vector <c>v</c>;
+    /// <see cref="Compose"/> evaluates every entry at <c>t = v[i] * T</c> and composes the responses once; the mapping
+    /// methods compute both mapping operations. Listing decides which channels produce records: only channels that a
+    /// supported derived expression extension lists emit, while every channel counts toward the duration. Results are
+    /// glTF-space values by authoritative expression-array index and canonical property; nothing here writes Unity
+    /// scene targets or mixes expression output with other writers.
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class ExpressionResponseSet : MonoBehaviour, ISerializationCallbackReceiver
@@ -105,6 +130,8 @@ namespace UnityGLTF.KhrCharacter
             public bool HasAuthoredInitial;
             public double[] AuthoredInitial;
             public int ArrayLength;
+            public bool HasArrayAuthoredInitial;
+            public double[] ArrayAuthoredInitial;
         }
 
         [Serializable]
@@ -138,6 +165,7 @@ namespace UnityGLTF.KhrCharacter
         [NonSerialized] private ExpressionResponseSetEntry[] _entries;
         [NonSerialized] private IReadOnlyList<ExpressionResponseSetEntry> _readOnlyEntries;
         [NonSerialized] private ExpressionValidationStatus _validation;
+        [NonSerialized] private ExpressionDerivedExtensionRegistry _derivedExtensions;
 
         public bool RequiredOnImport => _requiredOnImport;
 
@@ -177,6 +205,17 @@ namespace UnityGLTF.KhrCharacter
         public IReadOnlyList<ExpressionInputMappingSet> InputMappingSets
             => _inputMappingSets ?? Array.Empty<ExpressionInputMappingSet>();
 
+        /// <summary>
+        /// The registry whose single-writer declarations <see cref="Compose"/> honors for derived extensions that an
+        /// entry carries and that the registry marks supported; <see cref="ExpressionDerivedExtensionRegistry.Default"/>
+        /// unless set.
+        /// </summary>
+        public ExpressionDerivedExtensionRegistry DerivedExtensions
+        {
+            get => _derivedExtensions ?? ExpressionDerivedExtensionRegistry.Default;
+            set => _derivedExtensions = value;
+        }
+
         private void Awake()
         {
             EnsureRuntimeEntries();
@@ -211,12 +250,95 @@ namespace UnityGLTF.KhrCharacter
             _serializedEntries = SerializeEntries(_entries);
         }
 
-        public ExpressionResponse Evaluate(int expressionIndex, float? driver = null)
+        /// <summary>Evaluates one entry on its own for a driver, without suppression or composition.</summary>
+        public ExpressionResponse Evaluate(int expressionIndex, double? driver = null)
         {
             EnsureRuntimeEntries();
             if (expressionIndex < 0 || expressionIndex >= _entries.Length)
                 throw new ArgumentOutOfRangeException(nameof(expressionIndex));
             return ExpressionResponseEvaluator.Evaluate(_entries[expressionIndex].Animation, driver);
+        }
+
+        /// <summary>
+        /// Builds the driver snapshot of one composition step. Each supplied driver must be finite and is clamped to
+        /// [0, 1], an absent one is 0, and every entry's suppressions are evaluated from that vector <c>u</c> into
+        /// <c>v</c>.
+        /// </summary>
+        /// <param name="finalNativeDrivers">The host's final native drivers by expression index, after any input
+        /// mapping and arbitration; may be shorter than <see cref="Count"/>.</param>
+        public ExpressionDriverSnapshot BuildSnapshot(IReadOnlyList<double?> finalNativeDrivers)
+        {
+            EnsureRuntimeEntries();
+            var suppressions = new IReadOnlyList<SuppressionEntry>[_entries.Length];
+            for (int index = 0; index < suppressions.Length; index++)
+                suppressions[index] = _entries[index]?.Suppressions;
+            return ExpressionDriverPipeline.BuildSnapshot(finalNativeDrivers, suppressions);
+        }
+
+        /// <summary>
+        /// Evaluates every entry with its driver from <paramref name="snapshot"/>'s <c>v</c> at <c>t = v[i] * T</c> and
+        /// composes all responses in one step. A property whose evaluation fails gets no record and is reported in
+        /// <see cref="ExpressionComposition.Failures"/> and the log.
+        /// </summary>
+        public ExpressionComposition Compose(ExpressionDriverSnapshot snapshot)
+        {
+            if (snapshot == null) throw new ArgumentNullException(nameof(snapshot));
+            EnsureRuntimeEntries();
+            if (snapshot.V.Count != _entries.Length)
+                throw new ArgumentException(
+                    $"The snapshot holds {snapshot.V.Count} drivers for {_entries.Length} expression entries.",
+                    nameof(snapshot));
+
+            var responses = new ExpressionResponse[_entries.Length];
+            var carried = new List<ExpressionDerivedExtension>();
+            var registry = DerivedExtensions;
+            for (int index = 0; index < _entries.Length; index++)
+            {
+                var entry = _entries[index];
+                if (entry == null) continue;
+                responses[index] = ExpressionResponseEvaluator.Evaluate(entry.Animation, snapshot.V[index]);
+                foreach (var name in entry.ExtensionNames)
+                    if (registry.TryGet(name, out var extension) && !carried.Contains(extension))
+                        carried.Add(extension);
+            }
+            return ExpressionComposer.Compose(responses, ExpressionComposer.SingleWriterPredicate(carried));
+        }
+
+        /// <summary>
+        /// Computes the endpoint outputs of the <c>expressionSetMappings</c> set with the exact
+        /// <paramref name="identifier"/> from the snapshot's pre-suppression vector <c>u</c>.
+        /// </summary>
+        public IReadOnlyDictionary<string, double> EvaluateForwardMapping(
+            string identifier,
+            ExpressionDriverSnapshot snapshot)
+        {
+            if (snapshot == null) throw new ArgumentNullException(nameof(snapshot));
+            return EvaluateForwardMapping(identifier, snapshot.U);
+        }
+
+        /// <summary>
+        /// Computes the endpoint outputs of the <c>expressionSetMappings</c> set with the exact
+        /// <paramref name="identifier"/> from native drivers <paramref name="u"/>, which are clamped to [0, 1].
+        /// </summary>
+        /// <exception cref="ArgumentException">The asset has no such forward mapping set.</exception>
+        public IReadOnlyDictionary<string, double> EvaluateForwardMapping(string identifier, IReadOnlyList<double> u)
+        {
+            if (!TryGetForwardMappingSet(identifier, out var set))
+                throw new ArgumentException($"The asset has no expressionSetMappings set '{identifier}'.", nameof(identifier));
+            return ExpressionDriverPipeline.EvaluateForwardMapping(set, u);
+        }
+
+        /// <summary>
+        /// Computes the native drivers, by expression index, of the <c>expressionSetInputMappings</c> set with the
+        /// exact <paramref name="identifier"/> from endpoint commands, which are clamped to [0, 1].
+        /// </summary>
+        /// <exception cref="ArgumentException">The asset has no such input mapping set.</exception>
+        public double[] EvaluateInputMapping(string identifier, IReadOnlyDictionary<string, double> commands)
+        {
+            if (!TryGetInputMappingSet(identifier, out var set))
+                throw new ArgumentException(
+                    $"The asset has no expressionSetInputMappings set '{identifier}'.", nameof(identifier));
+            return ExpressionDriverPipeline.EvaluateInputMapping(set, commands, Count);
         }
 
         /// <summary>Finds a forward mapping set by its exact identifier.</summary>
@@ -319,13 +441,8 @@ namespace UnityGLTF.KhrCharacter
             if (channel == null || channel.Target == null)
                 throw new ExpressionResponseEvaluationException("A response channel cannot be serialized without a target.");
             var target = channel.Target;
-            double[] authoredInitial = null;
-            if (target.AuthoredInitial != null)
-            {
-                authoredInitial = new double[target.AuthoredInitial.Count];
-                for (int component = 0; component < authoredInitial.Length; component++)
-                    authoredInitial[component] = target.AuthoredInitial[component];
-            }
+            var authoredInitial = ToArray(target.AuthoredInitial);
+            var arrayAuthoredInitial = ToArray(target.ArrayAuthoredInitial);
             return new SerializedChannel
             {
                 SamplerIndex = channel.SamplerIndex,
@@ -345,8 +462,18 @@ namespace UnityGLTF.KhrCharacter
                     HasAuthoredInitial = authoredInitial != null,
                     AuthoredInitial = authoredInitial,
                     ArrayLength = target.ArrayLength,
+                    HasArrayAuthoredInitial = arrayAuthoredInitial != null,
+                    ArrayAuthoredInitial = arrayAuthoredInitial,
                 },
             };
+        }
+
+        private static double[] ToArray(IReadOnlyList<double> values)
+        {
+            if (values == null) return null;
+            var array = new double[values.Count];
+            for (int index = 0; index < array.Length; index++) array[index] = values[index];
+            return array;
         }
 
         private static ExpressionResponseSetEntry[] DeserializeEntries(SerializedEntry[] serialized)
@@ -433,7 +560,10 @@ namespace UnityGLTF.KhrCharacter
                     serializedTarget.HasAuthoredInitial
                         ? serializedTarget.AuthoredInitial ?? Array.Empty<double>()
                         : null,
-                    serializedTarget.ArrayLength);
+                    serializedTarget.ArrayLength,
+                    serializedTarget.HasArrayAuthoredInitial
+                        ? serializedTarget.ArrayAuthoredInitial ?? Array.Empty<double>()
+                        : null);
             }
             return new ExpressionResponseChannel
             {

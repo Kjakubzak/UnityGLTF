@@ -52,6 +52,9 @@ namespace UnityGLTF.KhrCharacter.Tests
                 })
                     Assert.IsTrue(hub.Has(capability), $"{capability} is declared by the asset");
                 Assert.IsFalse(hub.Has(CharacterCapability.TextureTransform));
+                foreach (var health in hub.GetHealth().Capabilities)
+                    Assert.AreEqual(CapabilityStatus.Active, health.Status,
+                        $"{health.Capability} is implemented by the passive response set");
             }
             finally
             {
@@ -219,7 +222,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void RequiredExpressionFamily_IsBehaviorGatedAndConservativelyRejected()
+        public void RequiredExpressionFamily_IsRejectedWithoutThePluginAndAcceptedWithIt()
         {
             var factories = new ExtensionFactory[]
             {
@@ -230,23 +233,24 @@ namespace UnityGLTF.KhrCharacter.Tests
                 new KHR_character_expression_mapping_Factory(),
                 new KHR_character_expression_suppression_Factory(),
             };
-            var context = new KhrCharacterImportContext(null);
 
             foreach (var factory in factories)
             {
                 Assert.IsTrue(factory.RequiresRuntimeSupportForRequiredUse,
                     $"{factory.ExtensionName} must not treat schema recognition as required-use support");
-                Assert.IsFalse(context.SupportsRequiredExtension(factory.ExtensionName),
-                    $"{factory.ExtensionName} is not yet implemented completely enough for required use");
-
                 GLTFProperty.TryRegisterExtension(factory);
                 var root = new GLTFRoot
                 {
                     ExtensionsRequired = new List<string> { factory.ExtensionName },
                 };
+
+                Assert.Throws<GLTFLoadException>(() => GLTFSceneImporter.ValidateRequiredExtensionSupport(root, null));
                 Assert.Throws<GLTFLoadException>(() => GLTFSceneImporter.ValidateRequiredExtensionSupport(
-                    root, new List<GLTFImportPluginContext> { context }),
-                    $"{factory.ExtensionName} required use must be rejected until its complete behavior is integrated");
+                    root, new List<GLTFImportPluginContext>()));
+                Assert.IsTrue(new KhrCharacterImportContext(null).SupportsRequiredExtension(factory.ExtensionName),
+                    $"the passive pipeline implements {factory.ExtensionName}");
+                Assert.DoesNotThrow(() => GLTFSceneImporter.ValidateRequiredExtensionSupport(
+                    root, new List<GLTFImportPluginContext> { new KhrCharacterImportContext(null) }));
             }
         }
 

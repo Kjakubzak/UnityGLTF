@@ -118,16 +118,17 @@ namespace UnityGLTF.KhrCharacter
             {
                 case CharacterCapability.Character:
                     return CapabilityStatus.Active;
+                // The passive response set implements every expression extension: listed channels compose,
+                // suppressions build v and every mapping set is computable.
                 case CharacterCapability.Expression:
-                    return (ExpressionResponses != null || Expressions != null)
-                        ? CapabilityStatus.Active
-                        : CapabilityStatus.Inert;
                 case CharacterCapability.Morphtarget:
                 case CharacterCapability.Joint:
                 case CharacterCapability.TextureTransform:
                 case CharacterCapability.Suppression:
                 case CharacterCapability.Mapping:
-                    return Expressions != null ? CapabilityStatus.Active : CapabilityStatus.Inert;
+                    return (ExpressionResponses != null || Expressions != null)
+                        ? CapabilityStatus.Active
+                        : CapabilityStatus.Inert;
                 case CharacterCapability.CameraHint:
                     return CameraHints != null ? CapabilityStatus.Active : CapabilityStatus.Inert;
                 case CharacterCapability.LookAtTarget:

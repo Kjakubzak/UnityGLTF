@@ -17,7 +17,7 @@ look-at-target node extensions also import on ordinary glTF assets without the m
 | Component | Responsibility |
 |---|---|
 | `KhrCharacter` | Hub: its presence means "this asset contains a character". Capability list, readiness, references to the components below. |
-| `ExpressionResponseSet` | Passive, stateless wire evaluator returning absolute response records by authoritative expression index for the channels a supported derived expression extension lists. It also exposes each entry's suppressions, every mapping set and the validation status, and never writes scene targets. |
+| `ExpressionResponseSet` | Passive implementation of the expression pipeline: driver snapshot with suppression, per-entry sampling of the channels a supported derived expression extension lists, order-independent composition, and both mapping operations, by authoritative expression index. It also exposes each entry's suppressions, every mapping set and the validation status, and never writes scene targets. |
 | `ExpressionController` | Optional Unity host adapter for the legacy additive/override morph, joint, and material application policy. |
 | `SkeletonMap` | Every skeleton mapping set (role → node index and transform) and every tagged reference pose with its resolved values; can (re)build a Unity humanoid Avatar. |
 | `LookAtTargetSet` | Passive live `Transform` markers for `KHR_node_lookat_target`; never selects, ranks, or drives a consumer. |
@@ -110,6 +110,51 @@ is requested.
 - **Suppressions and mapping sets** are bound to the response set (`ExpressionResponseSetEntry.Suppressions`,
   `ForwardMappingSets`, `InputMappingSets`) with expression-array indices. An empty mapping-set identifier drops only
   that set, with an error.
+
+## Expression pipeline and composition
+
+`ExpressionResponseSet` implements the normative pipeline as pure code over the imported data. It returns glTF-space
+values keyed by canonical property (`/nodes/3/translation`, `/nodes/2/weights`, or the texture-transform pointer) and
+never writes scene objects; applying the results and mixing them with other writers is host policy.
+
+1. **Driver snapshot.** `BuildSnapshot(finalNativeDrivers)` takes the host's final native drivers by expression index,
+   after any input mapping and arbitration. Each supplied driver must be finite and is clamped to `[0, 1]`; an absent
+   driver is `0`. That vector `u` is turned into the effective vector `v` by every entry's suppressions: a `blend`
+   factor is `1 - amount * u[source]`, a `block` factor is `1 - amount` when `u[source] > threshold` and `1`
+   otherwise, and a custom type has factor `1`. Every factor reads `u`, so cycles and self-suppression are well
+   defined. `ExpressionDriverSnapshot.U` and `V` expose both vectors.
+2. **Sampling and composition.** `Compose(snapshot)` evaluates every entry with `v[i]` at `t = v[i] * T` and composes
+   all responses in one step (`ExpressionComposer`). Each response record carries its sample `s` and the same channel
+   sampled at time zero, `n` (`ExpressionResponseRecord.NeutralValue`). An additive component is `b + sum(s - n)`,
+   added exactly in binary64 and rounded once (`ExactBinary64Sum`), even for a single record, so the result bits do
+   not depend on entry order. `n` is never replaced by `b`, and the result is never clamped or wrapped. Node
+   translation, texture offset and texture rotation are additive; rotation angles add as raw scalars, so whole turns
+   survive. Morph weights fold whole-array and element records into one complete vector per node, whose untouched
+   elements keep their authored value (`ExpressionAggregateRecord.Contributed` marks the touched ones). Node rotation
+   and scale, texture scale, quaternions and properties that a supported derived extension carried by an entry declares
+   single-writer keep their single absolute sample.
+3. **Failures.** A sample that is not finite, a rotation sample of zero length (such as a CUBICSPLINE midpoint) or an
+   aggregate that is not finite fails only its property: the property gets no record, the failure is logged as an error
+   and listed in `ExpressionResponse.Failures` and `ExpressionComposition.Failures`, and the other properties still
+   compose. A failed element withholds its node's whole morph vector. Records from two entries for one single-writer
+   property can only come from an invalid asset that validation missed; the property is reported and gets no record.
+4. **Mappings.** `EvaluateForwardMapping(identifier, snapshot)` reads `u`, never `v`, so endpoint outputs reflect the
+   requested drivers even while suppression attenuates them. `EvaluateInputMapping(identifier, commands)` maps
+   endpoint commands to native drivers. Both clamp each input to `[0, 1]`, form each `weight * value` as one binary64
+   product, add the products exactly and clamp the sum once, so the mapping README's example gives
+   `Smile = 0.6000000000000001`.
+
+`ExpressionDriverPipeline`, `ExpressionComposer` and `ExactBinary64Sum` expose the same stages for hosts that hold
+their own response data.
+
+- **Required use.** With the import plugin enabled, `KHR_character_expression` and its joint, morphtarget,
+  texture_transform, suppression and mapping extensions are supported in `extensionsRequired`; without the plugin they
+  are rejected. The hub reports these capabilities as Active whenever the response set exists.
+- **Precision of `b` (deviation).** UnityGLTF parses node `translation`, `rotation` and `scale` and
+  `KHR_texture_transform` `offset` and `scale` as float32, so the authored initial value of those targets is the
+  float32 value nearest the JSON number rather than the JSON double. Only the additive translation and offset results
+  depend on it, by at most that rounding. Morph weights and texture rotation keep the JSON doubles. Keeping the JSON
+  doubles for every target is a follow-up.
 
 ## Enabling the import plugin
 
@@ -231,9 +276,10 @@ loading in a third-party viewer; they are documented so consumers know what is a
 
 ## Optional Unity compositing policy (additive vs. override)
 
-`KHR_character_expression` returns absolute Asset Object Model response records and does not define their final
-composition. `ExpressionController` is one optional Unity policy for applying a supported subset. It is created only
-when `CreateExpressionController` is enabled.
+`KHR_character_expression` defines how the responses of simultaneous expressions compose (see
+[Expression pipeline and composition](#expression-pipeline-and-composition)); only their mix with other writers is
+host-defined. `ExpressionController` is an older optional Unity policy for applying a supported subset, and it does not
+follow that composition. It is created only when `CreateExpressionController` is enabled.
 
 `ExpressionControllerOwnershipMode.Standalone` (the default) restores targets it owns to their baked bases when no
 contributor is active. `Integrated` leaves an inactive target untouched so an Animator or another earlier system can
@@ -270,9 +316,8 @@ properties independent and must not mistake its application or mixing policy for
 These are honest, documented gaps (raised in the glTF PR #2512 discussion):
 
 1. **The optional controller is not the passive wire evaluator.** Its baked tracks are an older delta-oriented
-   Unity representation and typed classifiers select the subset it can apply. Required expression-family use is
-   conservatively rejected until every required target, classifier, mapping, suppression, and provenance rule is
-   supported.
+   Unity representation and typed classifiers select the subset it can apply. Required expression-family use rests on
+   `ExpressionResponseSet`, not on this controller; use `ExpressionResponseSet.Compose` as the conformance reference.
 2. **Joint / texture absolute-pose expressions assume additive-authored deltas.** Two *absolute-pose*
    expressions on one bone composed additively will **over-rotate**. Author conflicting absolute poses as
    `Override` (with priorities), or keep deltas additive. The spec carries no `blendMode` yet, so the baker
@@ -462,6 +507,8 @@ humanoid-available-but-not-built, over-driven targets). `KhrCharacterDebugHUD` r
 
 The baked data is import-time only, but the components survive being saved as a prefab:
 
+- `ExpressionResponseSet` persists its decoded entries, suppressions, mapping sets and validation status, so a
+  rehydrated prefab builds snapshots and composes like a live import.
 - `ExpressionController` persists the baked `CharacterExpressionSet` in a hidden serialized field and
   rehydrates it in `Awake` (a live import calls `Initialize` directly).
 - `SkeletonMap` persists a `SerializableSkeletonMapping` (Unity cannot serialize the
@@ -477,8 +524,10 @@ The baked data is import-time only, but the components survive being saved as a 
   `Import/KhrCharacterSkeletonBaker.cs`
 - Export: `Export/KhrCharacterExportPlugin.cs`, `Export/KhrCharacterExportContext.cs`
 - Passive expression wire path: `Components/ExpressionResponseSet.cs`,
-  `Evaluation/ExpressionResponseEvaluator.cs`, `Evaluation/ExpressionInitialValueValidation.cs`,
-  `Evaluation/ExpressionDerivedExtensionRegistry.cs`, and `Import/KhrCharacterResponseBaker.cs`
+  `Evaluation/ExpressionResponseEvaluator.cs`, `Evaluation/ExpressionDriverPipeline.cs`,
+  `Evaluation/ExpressionComposer.cs`, `Evaluation/ExactBinary64Sum.cs`,
+  `Evaluation/ExpressionInitialValueValidation.cs`, `Evaluation/ExpressionDerivedExtensionRegistry.cs`, and
+  `Import/KhrCharacterResponseBaker.cs`
 - Runtime host adapters: `Components/ExpressionController.cs`, `Components/SkeletonMap.cs`, `Components/CameraHintSet.cs`,
   `Components/LookAtTargetSet.cs`, `Components/GazeSolver.cs` (optional host adapter), and
   `Components/EyeAimConstraint.cs` (non-spec, opt-in eye aiming)
