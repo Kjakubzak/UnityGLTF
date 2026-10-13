@@ -103,6 +103,19 @@ namespace UnityGLTF.KhrCharacter
         ArrayElement,
     }
 
+    /// <summary>The concrete property type a resolved expression channel targets.</summary>
+    public enum ExpressionPropertyKind
+    {
+        NodeTranslation,
+        NodeRotation,
+        NodeScale,
+        NodeWeights,
+        TextureOffset,
+        TextureScale,
+        TextureRotation,
+        Other,
+    }
+
     /// <summary>
     /// Canonical identity for a concrete channel target. Core animation paths and extension pointer paths must be
     /// resolved to the same canonical property string before construction. Array selections make whole-array and
@@ -190,11 +203,14 @@ namespace UnityGLTF.KhrCharacter
     }
 
     /// <summary>
-    /// Identity and shape of a concrete animation-channel target. Unsupported optional extension targets retain
-    /// their channel and sampler for duration calculation while producing no response record.
+    /// Identity and shape of a concrete animation-channel target. A target that did not resolve, or whose data could
+    /// not be decoded, keeps its channel and sampler for duration calculation while producing no response record.
     /// </summary>
     public sealed class ExpressionResponseTarget
     {
+        private readonly double[] _authoredInitial;
+        private readonly double[] _arrayAuthoredInitial;
+
         public ExpressionResponseTarget(
             string property,
             int componentCount,
@@ -209,12 +225,73 @@ namespace UnityGLTF.KhrCharacter
             int componentCount,
             ExpressionResponseValueKind valueKind = ExpressionResponseValueKind.Components,
             bool isSupported = true)
+            : this(identity, componentCount, valueKind, isSupported, ExpressionPropertyKind.Other, null, 0)
+        {
+        }
+
+        /// <summary>Creates a resolved target with its property kind and authored initial value.</summary>
+        /// <param name="identity">Canonical property identity shared by core and pointer forms.</param>
+        /// <param name="componentCount">Components of one logical sample.</param>
+        /// <param name="valueKind">Whether glTF quaternion rules apply.</param>
+        /// <param name="isSupported">Whether the target resolved and its data decoded.</param>
+        /// <param name="kind">The concrete property type.</param>
+        /// <param name="authoredInitial">The authored initial value <c>b</c> in glTF space; one element for an
+        /// array-element target.</param>
+        /// <param name="arrayLength">The element count of the whole array property (N for morph weights), else 0.</param>
+        public ExpressionResponseTarget(
+            ExpressionPropertyIdentity identity,
+            int componentCount,
+            ExpressionResponseValueKind valueKind,
+            bool isSupported,
+            ExpressionPropertyKind kind,
+            double[] authoredInitial,
+            int arrayLength)
+            : this(
+                identity,
+                componentCount,
+                valueKind,
+                isSupported,
+                kind,
+                authoredInitial,
+                arrayLength,
+                identity != null && identity.Selection != ExpressionPropertySelection.ArrayElement && arrayLength > 0
+                    ? authoredInitial
+                    : null)
+        {
+        }
+
+        /// <summary>Creates a resolved target that also carries the authored value of its whole array property.</summary>
+        /// <param name="identity">Canonical property identity shared by core and pointer forms.</param>
+        /// <param name="componentCount">Components of one logical sample.</param>
+        /// <param name="valueKind">Whether glTF quaternion rules apply.</param>
+        /// <param name="isSupported">Whether the target resolved and its data decoded.</param>
+        /// <param name="kind">The concrete property type.</param>
+        /// <param name="authoredInitial">The authored initial value <c>b</c> in glTF space; one element for an
+        /// array-element target.</param>
+        /// <param name="arrayLength">The element count of the whole array property (N for morph weights), else 0.</param>
+        /// <param name="arrayAuthoredInitial">The authored initial value of the whole array property (the base
+        /// vector B for morph weights), for whole-array and element targets alike; null for other properties.</param>
+        public ExpressionResponseTarget(
+            ExpressionPropertyIdentity identity,
+            int componentCount,
+            ExpressionResponseValueKind valueKind,
+            bool isSupported,
+            ExpressionPropertyKind kind,
+            double[] authoredInitial,
+            int arrayLength,
+            double[] arrayAuthoredInitial)
         {
             Identity = identity ?? throw new ArgumentNullException(nameof(identity));
             Property = identity.ToString();
             ComponentCount = componentCount;
             ValueKind = valueKind;
             IsSupported = isSupported;
+            Kind = kind;
+            _authoredInitial = authoredInitial != null ? (double[])authoredInitial.Clone() : null;
+            AuthoredInitial = _authoredInitial != null ? Array.AsReadOnly(_authoredInitial) : null;
+            ArrayLength = arrayLength;
+            _arrayAuthoredInitial = arrayAuthoredInitial != null ? (double[])arrayAuthoredInitial.Clone() : null;
+            ArrayAuthoredInitial = _arrayAuthoredInitial != null ? Array.AsReadOnly(_arrayAuthoredInitial) : null;
         }
 
         private ExpressionResponseTarget(string diagnosticProperty)
@@ -223,6 +300,7 @@ namespace UnityGLTF.KhrCharacter
             ComponentCount = 0;
             ValueKind = ExpressionResponseValueKind.Components;
             IsSupported = false;
+            Kind = ExpressionPropertyKind.Other;
         }
 
         /// <summary>
@@ -238,7 +316,28 @@ namespace UnityGLTF.KhrCharacter
         public ExpressionPropertyIdentity Identity { get; }
         public int ComponentCount { get; }
         public ExpressionResponseValueKind ValueKind { get; }
+
+        /// <summary>True when the target resolved to a concrete property and its sampler data decoded.</summary>
         public bool IsSupported { get; }
+
+        /// <summary>The concrete property type, or <see cref="ExpressionPropertyKind.Other"/> when unresolved.</summary>
+        public ExpressionPropertyKind Kind { get; }
+
+        /// <summary>
+        /// The authored initial value <c>b</c> in glTF space, or null when the target did not resolve. Node
+        /// translation, rotation and scale and texture offset and scale carry the float32 values UnityGLTF parses;
+        /// morph weights and texture rotation carry the JSON doubles.
+        /// </summary>
+        public IReadOnlyList<double> AuthoredInitial { get; }
+
+        /// <summary>The element count of the whole array property (N for morph weights), or 0.</summary>
+        public int ArrayLength { get; }
+
+        /// <summary>
+        /// The authored initial value of the whole array property (the base vector B for morph weights), so that
+        /// composition can emit the complete array from element records alone; null for other properties.
+        /// </summary>
+        public IReadOnlyList<double> ArrayAuthoredInitial { get; }
     }
 
     /// <summary>A channel in the expression entry's referenced glTF animation.</summary>
@@ -246,6 +345,18 @@ namespace UnityGLTF.KhrCharacter
     {
         public int SamplerIndex { get; set; }
         public ExpressionResponseTarget Target { get; set; }
+
+        /// <summary>
+        /// The derived expression extension on the entry that lists this channel, or null when none lists it. An
+        /// unlisted channel still counts toward the expression duration but produces no response record.
+        /// </summary>
+        public string ListedBy { get; set; }
+
+        /// <summary>
+        /// True when a derived expression extension this implementation supports lists the channel and its target
+        /// resolved and decoded. Only such channels produce response records.
+        /// </summary>
+        public bool EmitsRecords { get; set; }
     }
 
     /// <summary>Decoded sampler and channel data for one expression animation.</summary>
@@ -253,41 +364,131 @@ namespace UnityGLTF.KhrCharacter
     {
         public ExpressionResponseSampler[] Samplers { get; set; }
         public ExpressionResponseChannel[] Channels { get; set; }
+
+        /// <summary>
+        /// Why the expression cannot be evaluated, for example because a sampler input uses a compression filter
+        /// the importer does not decode; null when it can be evaluated.
+        /// </summary>
+        public string UnevaluableReason { get; set; }
+
+        /// <summary>False when <see cref="UnevaluableReason"/> is set; such an expression produces no records.</summary>
+        public bool IsEvaluable => UnevaluableReason == null;
     }
 
     /// <summary>An absolute sampled value for one concrete glTF property target.</summary>
     public sealed class ExpressionResponseRecord
     {
-        internal ExpressionResponseRecord(int channelIndex, ExpressionResponseTarget target, float[] value)
+        internal ExpressionResponseRecord(
+            int channelIndex,
+            ExpressionResponseTarget target,
+            float[] value,
+            float[] neutralValue)
         {
             ChannelIndex = channelIndex;
             Target = target;
             Value = Array.AsReadOnly(value);
+            NeutralValue = Array.AsReadOnly(neutralValue);
         }
 
         public int ChannelIndex { get; }
         public ExpressionResponseTarget Target { get; }
+
+        /// <summary>The ordinary absolute sample <c>s</c> at the response's sample time.</summary>
         public IReadOnlyList<float> Value { get; }
+
+        /// <summary>
+        /// The same channel sampled at time zero (<c>n</c>). Additive composition subtracts it instead of the
+        /// authored initial value, so tolerated quantization of the time-zero key adds nothing.
+        /// </summary>
+        public IReadOnlyList<float> NeutralValue { get; }
     }
 
     /// <summary>
-    /// The stateless result of one expression evaluation. It contains absolute property samples only and does not
-    /// prescribe how a host applies, blends, prioritizes, or otherwise composes them.
+    /// A property whose evaluation failed: a sample or an aggregate was not finite, a rotation sample had zero
+    /// length, or composition met records it cannot combine. No record is emitted for the property, and the failure
+    /// is logged as an error.
+    /// </summary>
+    public sealed class ExpressionEvaluationFailure
+    {
+        internal ExpressionEvaluationFailure(
+            string property,
+            int arrayElement,
+            int expressionIndex,
+            int channelIndex,
+            string message)
+        {
+            Property = property;
+            ArrayElement = arrayElement;
+            ExpressionIndex = expressionIndex;
+            ChannelIndex = channelIndex;
+            Message = message;
+        }
+
+        /// <summary>The canonical property that receives no record.</summary>
+        public string Property { get; }
+
+        /// <summary>The array element the failed sample covered, or -1 for the whole property.</summary>
+        public int ArrayElement { get; }
+
+        /// <summary>
+        /// The expression entry whose evaluation failed, or -1 when the failure is not tied to one entry or the
+        /// animation was evaluated on its own.
+        /// </summary>
+        public int ExpressionIndex { get; }
+
+        /// <summary>The failed channel of the entry's animation, or -1 for a composition failure.</summary>
+        public int ChannelIndex { get; }
+
+        /// <summary>Why the property has no record.</summary>
+        public string Message { get; }
+
+        internal ExpressionEvaluationFailure WithExpressionIndex(int expressionIndex)
+            => new ExpressionEvaluationFailure(Property, ArrayElement, expressionIndex, ChannelIndex, Message);
+    }
+
+    /// <summary>
+    /// The stateless result of one expression evaluation. It contains absolute property samples only; the
+    /// composition stage (<see cref="ExpressionComposer"/>) combines the responses of all entries.
     /// </summary>
     public sealed class ExpressionResponse
     {
-        internal ExpressionResponse(float effectiveDriver, float duration, float sampleTime, ExpressionResponseRecord[] records)
+        private static readonly ExpressionEvaluationFailure[] NoFailures = new ExpressionEvaluationFailure[0];
+
+        internal ExpressionResponse(
+            double effectiveDriver,
+            float duration,
+            float sampleTime,
+            ExpressionResponseRecord[] records,
+            ExpressionEvaluationFailure[] failures = null,
+            bool isEvaluable = true)
         {
             EffectiveDriver = effectiveDriver;
             Duration = duration;
             SampleTime = sampleTime;
             Records = Array.AsReadOnly(records);
+            Failures = Array.AsReadOnly(failures ?? NoFailures);
+            IsEvaluable = isEvaluable;
         }
 
-        public float EffectiveDriver { get; }
+        /// <summary>The effective driver <c>e</c>: the supplied driver clamped to [0, 1].</summary>
+        public double EffectiveDriver { get; }
+
+        /// <summary>The expression duration <c>T</c>; NaN when the expression is not evaluable.</summary>
         public float Duration { get; }
+
+        /// <summary>The sample time <c>t = e * T</c>; NaN when the expression is not evaluable.</summary>
         public float SampleTime { get; }
+
         public IReadOnlyList<ExpressionResponseRecord> Records { get; }
+
+        /// <summary>
+        /// Channels that produced no record because their sample was not finite or, for a rotation, had zero
+        /// length. The other channels still produce records.
+        /// </summary>
+        public IReadOnlyList<ExpressionEvaluationFailure> Failures { get; }
+
+        /// <summary>False when the expression's data could not be decoded; such a response has no records.</summary>
+        public bool IsEvaluable { get; }
     }
 
     /// <summary>Reports invalid decoded expression-animation data supplied to the response evaluator.</summary>
@@ -298,7 +499,11 @@ namespace UnityGLTF.KhrCharacter
 
     /// <summary>
     /// Pure KHR_character_expression response evaluator. Each call derives a fresh response from decoded glTF data
-    /// and the current driver; it retains no history and never reads or writes Unity scene targets.
+    /// and the current driver; it retains no history and never reads or writes Unity scene targets. Every channel
+    /// counts toward the duration and every resolved channel is validated, but only channels with
+    /// <see cref="ExpressionResponseChannel.EmitsRecords"/> produce response records. A channel whose sample is not
+    /// finite, or is a rotation of zero length, produces an <see cref="ExpressionEvaluationFailure"/> and an error log
+    /// instead of a record.
     /// </summary>
     public static class ExpressionResponseEvaluator
     {
@@ -310,15 +515,20 @@ namespace UnityGLTF.KhrCharacter
             return Evaluate(animation, null);
         }
 
-        /// <summary>Evaluates an expression animation for the supplied optional driver.</summary>
-        public static ExpressionResponse Evaluate(ExpressionResponseAnimation animation, float? driver)
+        /// <summary>
+        /// Evaluates an expression animation for the supplied optional driver, which must be finite. The driver is
+        /// clamped to [0, 1] in binary64, so any positive driver samples the animation.
+        /// </summary>
+        public static ExpressionResponse Evaluate(ExpressionResponseAnimation animation, double? driver)
         {
             if (animation == null) throw new ArgumentNullException(nameof(animation));
 
-            float effectiveDriver = driver ?? 0f;
-            if (!IsFinite(effectiveDriver))
+            double effectiveDriver = driver ?? 0d;
+            if (double.IsNaN(effectiveDriver) || double.IsInfinity(effectiveDriver))
                 throw new ArgumentOutOfRangeException(nameof(driver), "Expression drivers must be finite.");
             effectiveDriver = Clamp01(effectiveDriver);
+            if (!animation.IsEvaluable)
+                return new ExpressionResponse(effectiveDriver, float.NaN, float.NaN, EmptyRecords, null, false);
 
             var channels = animation.Channels;
             var samplers = animation.Samplers;
@@ -377,25 +587,44 @@ namespace UnityGLTF.KhrCharacter
 
             // Asset-data validation is independent of the current driver. The extension still contributes no
             // property value at zero and, in particular, never manufactures an authored initial-state record.
-            if (effectiveDriver == 0f)
-                return new ExpressionResponse(0f, duration, 0f, EmptyRecords);
+            if (effectiveDriver == 0d)
+                return new ExpressionResponse(0d, duration, 0f, EmptyRecords);
 
-            float sampleTime = effectiveDriver * duration;
+            float sampleTime = (float)(effectiveDriver * duration);
             var records = new List<ExpressionResponseRecord>(channels.Length);
+            List<ExpressionEvaluationFailure> failures = null;
             for (int channelIndex = 0; channelIndex < channels.Length; channelIndex++)
             {
                 var channel = channels[channelIndex];
                 var target = channel.Target;
-                if (!target.IsSupported) continue;
+                if (!target.IsSupported || !channel.EmitsRecords) continue;
 
                 var sampler = samplers[channel.SamplerIndex];
-                records.Add(new ExpressionResponseRecord(
-                    channelIndex,
-                    target,
-                    Sample(sampler, target, sampleTime)));
+                if (!TrySample(sampler, target, sampleTime, out float[] value, out string error) ||
+                    !TrySample(sampler, target, 0f, out float[] neutralValue, out error))
+                {
+                    var failure = new ExpressionEvaluationFailure(
+                        target.Identity.CanonicalProperty,
+                        target.Identity.ArrayElement,
+                        -1,
+                        channelIndex,
+                        error);
+                    UnityEngine.Debug.LogError(
+                        $"[KHR_character] Expression evaluation failed for channel {channelIndex} " +
+                        $"('{target.Property}'): {error}; it produces no record.");
+                    if (failures == null) failures = new List<ExpressionEvaluationFailure>();
+                    failures.Add(failure);
+                    continue;
+                }
+                records.Add(new ExpressionResponseRecord(channelIndex, target, value, neutralValue));
             }
 
-            return new ExpressionResponse(effectiveDriver, duration, sampleTime, records.ToArray());
+            return new ExpressionResponse(
+                effectiveDriver,
+                duration,
+                sampleTime,
+                records.ToArray(),
+                failures?.ToArray());
         }
 
         private static void ValidateInput(ExpressionResponseSampler sampler, int samplerIndex)
@@ -484,6 +713,31 @@ namespace UnityGLTF.KhrCharacter
             }
         }
 
+        private static bool TrySample(
+            ExpressionResponseSampler sampler,
+            ExpressionResponseTarget target,
+            float sampleTime,
+            out float[] value,
+            out string error)
+        {
+            value = Sample(sampler, target, sampleTime);
+            if (value == null)
+            {
+                error = "the sampled rotation has zero or nonfinite length and cannot be normalized";
+                return false;
+            }
+            for (int component = 0; component < value.Length; component++)
+            {
+                if (IsFinite(value[component])) continue;
+                value = null;
+                error = $"sample component {component} is not finite";
+                return false;
+            }
+            error = null;
+            return true;
+        }
+
+        // Returns null when a quaternion sample cannot be normalized.
         private static float[] Sample(
             ExpressionResponseSampler sampler,
             ExpressionResponseTarget target,
@@ -555,6 +809,7 @@ namespace UnityGLTF.KhrCharacter
         {
             var from = NormalizeQuaternion(Copy(fromValue));
             var to = NormalizeQuaternion(Copy(toValue));
+            if (from == null || to == null) return null;
             float dot = Dot(from, to);
             if (dot < 0f)
             {
@@ -611,14 +866,16 @@ namespace UnityGLTF.KhrCharacter
                 : result;
         }
 
+        // Normalizes in place; returns null for a quaternion of zero or nonfinite length.
         private static float[] NormalizeQuaternion(float[] value)
         {
-            float lengthSquared = Dot(value, value);
-            if (!IsFinite(lengthSquared) || lengthSquared <= 0f)
-                throw Invalid("Quaternion samples must have nonzero finite length.");
-            float inverseLength = 1f / (float)Math.Sqrt(lengthSquared);
+            double lengthSquared = 0d;
             for (int component = 0; component < value.Length; component++)
-                value[component] *= inverseLength;
+                lengthSquared += (double)value[component] * value[component];
+            if (!(lengthSquared > 0d) || double.IsInfinity(lengthSquared)) return null;
+            double inverseLength = 1d / Math.Sqrt(lengthSquared);
+            for (int component = 0; component < value.Length; component++)
+                value[component] = (float)(value[component] * inverseLength);
             return value;
         }
 
@@ -637,10 +894,10 @@ namespace UnityGLTF.KhrCharacter
             return copy;
         }
 
-        private static float Clamp01(float value)
+        private static double Clamp01(double value)
         {
-            if (value < 0f) return 0f;
-            return value > 1f ? 1f : value;
+            if (value < 0d) return 0d;
+            return value > 1d ? 1d : value;
         }
 
         private static bool IsFinite(float value)

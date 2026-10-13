@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using Newtonsoft.Json.Linq;
 
@@ -16,7 +15,7 @@ namespace GLTF.Schema
         {
             public int Source;
             public string Name;
-            public float Weight;
+            public double Weight;
             public JObject Extensions;
             public JToken Extras;
             public JObject AdditionalProperties;
@@ -26,7 +25,7 @@ namespace GLTF.Schema
         {
             public int Target;
             public string Name;
-            public float Weight;
+            public double Weight;
             public JObject Extensions;
             public JToken Extras;
             public JObject AdditionalProperties;
@@ -46,35 +45,10 @@ namespace GLTF.Schema
         public JProperty RawData;
 
         /// <summary>
-        /// Returns whether a mapping-set identifier is a well-formed absolute URI. The original identifier remains
-        /// authoritative and is never normalized or retrieved by this check.
+        /// Returns whether a mapping-set identifier is valid: any nonempty string. Identifiers are opaque keys
+        /// compared by exact code point; they are never parsed, normalized or dereferenced.
         /// </summary>
-        public static bool IsValidMappingSetIdentifier(string identifier)
-        {
-            if (string.IsNullOrEmpty(identifier)) return false;
-
-            int colon = identifier.IndexOf(':');
-            if (colon <= 0 || !IsAsciiLetter(identifier[0])) return false;
-            for (int i = 1; i < colon; i++)
-            {
-                char c = identifier[i];
-                if (!IsAsciiLetter(c) && !char.IsDigit(c) && c != '+' && c != '-' && c != '.')
-                    return false;
-            }
-
-            for (int i = 0; i < identifier.Length; i++)
-            {
-                char c = identifier[i];
-                if (char.IsWhiteSpace(c) || char.IsControl(c) || c == '\\') return false;
-            }
-
-            return Uri.TryCreate(identifier, UriKind.Absolute, out var uri)
-                && uri.IsAbsoluteUri
-                && Uri.IsWellFormedUriString(identifier, UriKind.Absolute);
-        }
-
-        private static bool IsAsciiLetter(char value)
-            => (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z');
+        public static bool IsValidMappingSetIdentifier(string identifier) => !string.IsNullOrEmpty(identifier);
 
         public JProperty Serialize()
         {
@@ -108,9 +82,6 @@ namespace GLTF.Schema
             var sets = new JObject();
             foreach (var setKv in mappings)
             {
-                if (!IsValidMappingSetIdentifier(setKv.Key))
-                    throw new InvalidOperationException(
-                        $"{EXTENSION_NAME} mapping-set identifier '{setKv.Key}' is not a valid absolute URI.");
                 var endpoints = new JObject();
                 if (setKv.Value != null)
                     foreach (var endpointKv in setKv.Value)
@@ -146,9 +117,6 @@ namespace GLTF.Schema
             var sets = new JObject();
             foreach (var setKv in mappings)
             {
-                if (!IsValidMappingSetIdentifier(setKv.Key))
-                    throw new InvalidOperationException(
-                        $"{EXTENSION_NAME} mapping-set identifier '{setKv.Key}' is not a valid absolute URI.");
                 var endpoints = new JObject();
                 if (setKv.Value != null)
                     foreach (var endpointKv in setKv.Value)
@@ -308,7 +276,7 @@ namespace GLTF.Schema
                             {
                                 Source = c["source"]?.Value<int>() ?? -1,
                                 Name = c["name"]?.Value<string>(),
-                                Weight = c["weight"]?.Value<float>() ?? 0f,
+                                Weight = c["weight"]?.Value<double>() ?? 0d,
                                 Extensions = c["extensions"] is JObject contributionExtensions
                                     ? (JObject)contributionExtensions.DeepClone()
                                     : null,
@@ -339,7 +307,7 @@ namespace GLTF.Schema
                             {
                                 Target = c["target"]?.Value<int>() ?? -1,
                                 Name = c["name"]?.Value<string>(),
-                                Weight = c["weight"]?.Value<float>() ?? 0f,
+                                Weight = c["weight"]?.Value<double>() ?? 0d,
                                 Extensions = c["extensions"] is JObject contributionExtensions
                                     ? (JObject)contributionExtensions.DeepClone()
                                     : null,

@@ -1,17 +1,67 @@
+using System.Collections;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using GLTF.Schema;
+using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.TestTools;
 using UnityGLTF.Plugins;
 
 namespace UnityGLTF.KhrCharacter.Tests
 {
     /// <summary>
-    /// Tests that capabilities are derived from the baked set (sub-domains are nested in expression items and
-    /// are not visible in the root/node presence scan).
+    /// Tests that capabilities are derived from <c>extensionsUsed</c>, the expression entries' extension keys and an
+    /// optional baked set (sub-domains are nested in expression items and are not visible in the root/node presence
+    /// scan).
     /// </summary>
     public class KhrCharacterCapabilityTests
     {
+        [UnityTest]
+        public IEnumerator Capabilities_ComeFromExtensionsUsedWithoutTheController()
+        {
+            var glb = CharacterGlbBuilder.TranslationCharacter("aa", "happy");
+            ((JArray)glb.Json["extensionsUsed"]).Add(KhrCharacterExtensionNames.ExpressionMorphtarget);
+            ((JArray)glb.Json["extensionsUsed"]).Add(KhrCharacterExtensionNames.ExpressionSuppression);
+            ((JArray)glb.Json["extensionsUsed"]).Add(KhrCharacterExtensionNames.ExpressionMapping);
+            ((JObject)glb.Expression(1)["extensions"])[KhrCharacterExtensionNames.ExpressionSuppression] = new JObject
+            {
+                { "suppressions", new JArray(new JObject { { "target", 0 } }) },
+            };
+            glb.Json["extensions"][KhrCharacterExtensionNames.ExpressionMapping] = new JObject
+            {
+                {
+                    "expressionSetMappings", new JObject
+                    {
+                        { "vrm", new JObject { { "Aa", new JArray(new JObject { { "source", 0 }, { "weight", 1 } }) } } },
+                    }
+                },
+            };
+
+            GameObject scene = null;
+            yield return glb.Import(plugin => plugin.CreateExpressionController = false, loaded => scene = loaded);
+            try
+            {
+                var hub = scene.GetComponent<KhrCharacter>();
+                Assert.IsNull(hub.Expressions, "the Unity controller was not requested");
+                Assert.IsNotNull(hub.ExpressionResponses);
+                foreach (var capability in new[]
+                {
+                    CharacterCapability.Expression, CharacterCapability.Joint, CharacterCapability.Morphtarget,
+                    CharacterCapability.Suppression, CharacterCapability.Mapping,
+                })
+                    Assert.IsTrue(hub.Has(capability), $"{capability} is declared by the asset");
+                Assert.IsFalse(hub.Has(CharacterCapability.TextureTransform));
+                foreach (var health in hub.GetHealth().Capabilities)
+                    Assert.AreEqual(CapabilityStatus.Active, health.Status,
+                        $"{health.Capability} is implemented by the passive response set");
+            }
+            finally
+            {
+                Object.DestroyImmediate(scene);
+            }
+        }
+
         [Test]
         public void DeriveCapabilities_FromBakedSet_ReportsSubDomains()
         {
@@ -25,7 +75,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                 Expressions = new[]
                 {
                     new ExpressionTrack { Name = "a", Domains = ExpressionDomain.Morph | ExpressionDomain.Joint },
-                    new ExpressionTrack { Name = "b", Domains = ExpressionDomain.Texture, Masks = new[] { new MaskEntry { TargetIndex = 0 } } },
+                    new ExpressionTrack { Name = "b", Domains = ExpressionDomain.Texture, Suppressions = new[] { new SuppressionEntry { TargetIndex = 0 } } },
                 },
                 MappingSets = new[] { new ExpressionMappingSet { SetName = "vrm" } },
             };
@@ -36,9 +86,17 @@ namespace UnityGLTF.KhrCharacter.Tests
             CollectionAssert.Contains(caps, CharacterCapability.Expression);
             CollectionAssert.Contains(caps, CharacterCapability.Morphtarget);
             CollectionAssert.Contains(caps, CharacterCapability.Joint);
-            CollectionAssert.Contains(caps, CharacterCapability.Texture);
-            CollectionAssert.Contains(caps, CharacterCapability.Mask);
+            CollectionAssert.Contains(caps, CharacterCapability.TextureTransform);
+            CollectionAssert.Contains(caps, CharacterCapability.Suppression);
             CollectionAssert.Contains(caps, CharacterCapability.Mapping);
+        }
+
+        [Test]
+        public void CharacterCapability_RenamedMembersKeepTheirPersistedValues()
+        {
+            Assert.AreEqual(4, (int)CharacterCapability.TextureTransform, "serialized capability lists store integers");
+            Assert.AreEqual(6, (int)CharacterCapability.Suppression, "serialized capability lists store integers");
+            Assert.AreEqual(10, (int)CharacterCapability.LookAtTarget);
         }
 
         [Test]
@@ -55,59 +113,144 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void CharacterDesignation_PreservesResolvedIndexAndOptionalTransform()
+        public void CharacterDesignation_IsAnAssetLevelFlagWithoutNodeBinding()
         {
-            var host = new GameObject("host");
-            var designated = new GameObject("designated");
+            var root = new GLTFRoot
+            {
+                Extensions = new Dictionary<string, IExtension>
+                {
+                    { KhrCharacterExtensionNames.Character, new KHR_character() },
+                },
+            };
+            var context = new KhrCharacterImportContext(null);
+            var sceneRoot = new GameObject("scene");
             try
             {
-                var character = host.AddComponent<KhrCharacter>();
-                character.SetDesignation(7, designated.transform);
+                context.OnAfterImportRoot(root);
+                context.OnAfterImportScene(null, 0, sceneRoot);
 
-                Assert.AreEqual(7, character.DesignatedRootNodeIndex);
-                Assert.AreSame(designated.transform, character.DesignatedRoot);
-
-                character.SetDesignation(9, null);
-                Assert.AreEqual(9, character.DesignatedRootNodeIndex,
-                    "the glTF node index remains resolved even when the node is not instantiated in this scene");
-                Assert.IsNull(character.DesignatedRoot);
+                var character = sceneRoot.GetComponent<KhrCharacter>();
+                Assert.IsNotNull(character, "the designation attaches the hub to the imported scene root");
+                Assert.IsTrue(character.Has(CharacterCapability.Character),
+                    "the hub exposes the designation without resolving any node");
             }
             finally
             {
-                Object.DestroyImmediate(host);
-                Object.DestroyImmediate(designated);
+                Object.DestroyImmediate(sceneRoot);
             }
         }
 
         [Test]
-        public void RequiredExpressionFamily_IsBehaviorGatedAndConservativelyRejected()
+        public void NodeLevelCharacter_WarnsAndAddsNoCapability()
+        {
+            var node = new Node
+            {
+                Name = "misplaced",
+                Extensions = new Dictionary<string, IExtension>
+                {
+                    { KhrCharacterExtensionNames.Character, new KHR_character() },
+                },
+            };
+            var root = new GLTFRoot { Nodes = new List<Node> { node } };
+            var context = new KhrCharacterImportContext(null);
+            var nodeObject = new GameObject("misplaced");
+            var sceneRoot = new GameObject("scene");
+            try
+            {
+                context.OnAfterImportRoot(root);
+                LogAssert.Expect(LogType.Warning,
+                    new Regex("Node 0 carries a KHR_character object, which is valid only on the top-level glTF object"));
+                context.OnAfterImportNode(node, 0, nodeObject);
+                context.OnAfterImportScene(null, 0, sceneRoot);
+
+                Assert.IsNull(sceneRoot.GetComponent<KhrCharacter>(),
+                    "a node-level KHR_character is not a designation");
+                Assert.IsNull(nodeObject.GetComponent<KhrCharacter>());
+            }
+            finally
+            {
+                Object.DestroyImmediate(nodeObject);
+                Object.DestroyImmediate(sceneRoot);
+            }
+        }
+
+        [Test]
+        public void RequiredCharacter_IsRejectedWithoutThePluginAndAcceptedWithIt()
+        {
+            var factory = new KHR_character_Factory();
+            Assert.IsTrue(factory.RequiresRuntimeSupportForRequiredUse,
+                "schema recognition alone does not expose the designation to host logic");
+            GLTFProperty.TryRegisterExtension(factory);
+            var root = new GLTFRoot
+            {
+                ExtensionsRequired = new List<string> { KhrCharacterExtensionNames.Character },
+            };
+
+            Assert.Throws<GLTFLoadException>(() => GLTFSceneImporter.ValidateRequiredExtensionSupport(root, null));
+            Assert.Throws<GLTFLoadException>(() => GLTFSceneImporter.ValidateRequiredExtensionSupport(
+                root, new List<GLTFImportPluginContext>()));
+            Assert.IsTrue(new KhrCharacterImportContext(null).SupportsRequiredExtension(KhrCharacterExtensionNames.Character));
+            Assert.DoesNotThrow(() => GLTFSceneImporter.ValidateRequiredExtensionSupport(
+                root, new List<GLTFImportPluginContext> { new KhrCharacterImportContext(null) }));
+        }
+
+        [Test]
+        public void RequiredReferencePoseAndSkeletonMapping_AreRejectedWithoutThePluginAndAcceptedWithIt()
+        {
+            var factories = new ExtensionFactory[]
+            {
+                new KHR_character_reference_pose_Factory(),
+                new KHR_character_skeleton_mapping_Factory(),
+            };
+            foreach (var factory in factories)
+            {
+                Assert.IsTrue(factory.RequiresRuntimeSupportForRequiredUse,
+                    $"{factory.ExtensionName} recognition alone does not expose its data to host logic");
+                GLTFProperty.TryRegisterExtension(factory);
+                var root = new GLTFRoot
+                {
+                    ExtensionsRequired = new List<string> { factory.ExtensionName },
+                };
+
+                Assert.Throws<GLTFLoadException>(() => GLTFSceneImporter.ValidateRequiredExtensionSupport(root, null));
+                Assert.Throws<GLTFLoadException>(() => GLTFSceneImporter.ValidateRequiredExtensionSupport(
+                    root, new List<GLTFImportPluginContext>()));
+                Assert.IsTrue(new KhrCharacterImportContext(null).SupportsRequiredExtension(factory.ExtensionName));
+                Assert.DoesNotThrow(() => GLTFSceneImporter.ValidateRequiredExtensionSupport(
+                    root, new List<GLTFImportPluginContext> { new KhrCharacterImportContext(null) }));
+            }
+        }
+
+        [Test]
+        public void RequiredExpressionFamily_IsRejectedWithoutThePluginAndAcceptedWithIt()
         {
             var factories = new ExtensionFactory[]
             {
                 new KHR_character_expression_Factory(),
                 new KHR_character_expression_morphtarget_Factory(),
                 new KHR_character_expression_joint_Factory(),
-                new KHR_character_expression_texture_Factory(),
+                new KHR_character_expression_texture_transform_Factory(),
                 new KHR_character_expression_mapping_Factory(),
-                new KHR_character_expression_mask_Factory(),
+                new KHR_character_expression_suppression_Factory(),
             };
-            var context = new KhrCharacterImportContext(null);
 
             foreach (var factory in factories)
             {
                 Assert.IsTrue(factory.RequiresRuntimeSupportForRequiredUse,
                     $"{factory.ExtensionName} must not treat schema recognition as required-use support");
-                Assert.IsFalse(context.SupportsRequiredExtension(factory.ExtensionName),
-                    $"{factory.ExtensionName} is not yet implemented completely enough for required use");
-
                 GLTFProperty.TryRegisterExtension(factory);
                 var root = new GLTFRoot
                 {
                     ExtensionsRequired = new List<string> { factory.ExtensionName },
                 };
+
+                Assert.Throws<GLTFLoadException>(() => GLTFSceneImporter.ValidateRequiredExtensionSupport(root, null));
                 Assert.Throws<GLTFLoadException>(() => GLTFSceneImporter.ValidateRequiredExtensionSupport(
-                    root, new List<GLTFImportPluginContext> { context }),
-                    $"{factory.ExtensionName} required use must be rejected until its complete behavior is integrated");
+                    root, new List<GLTFImportPluginContext>()));
+                Assert.IsTrue(new KhrCharacterImportContext(null).SupportsRequiredExtension(factory.ExtensionName),
+                    $"the passive pipeline implements {factory.ExtensionName}");
+                Assert.DoesNotThrow(() => GLTFSceneImporter.ValidateRequiredExtensionSupport(
+                    root, new List<GLTFImportPluginContext> { new KhrCharacterImportContext(null) }));
             }
         }
 
@@ -129,21 +272,19 @@ namespace UnityGLTF.KhrCharacter.Tests
                 root, new List<GLTFImportPluginContext> { context }));
         }
 
+        [TestCase("vrm")]
+        [TestCase("relative/v1")]
         [TestCase("https://example.com/expression-vocabularies/example/v1")]
         [TestCase("urn:example:expression:v1")]
-        [TestCase("tag:example.com,2026:expression-v1")]
-        public void MappingSetIdentifier_AcceptsWellFormedAbsoluteUris(string identifier)
+        [TestCase("https://exa mple.com/v1")]
+        public void MappingSetIdentifier_AcceptsAnyNonemptyString(string identifier)
         {
             Assert.IsTrue(KHR_character_expression_mapping.IsValidMappingSetIdentifier(identifier));
         }
 
         [TestCase(null)]
         [TestCase("")]
-        [TestCase("relative/v1")]
-        [TestCase("://missing-scheme")]
-        [TestCase("https://exa mple.com/v1")]
-        [TestCase(@"https:\example.com\v1")]
-        public void MappingSetIdentifier_RejectsNonAbsoluteOrMalformedValues(string identifier)
+        public void MappingSetIdentifier_RejectsOnlyNullAndEmpty(string identifier)
         {
             Assert.IsFalse(KHR_character_expression_mapping.IsValidMappingSetIdentifier(identifier));
         }

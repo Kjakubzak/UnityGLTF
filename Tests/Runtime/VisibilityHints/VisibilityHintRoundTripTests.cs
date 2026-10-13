@@ -148,8 +148,9 @@ namespace UnityGLTF.VisibilityHints.Tests
 
             var view = dst.GetComponent<ViewContextController>();
             Assert.IsNotNull(view);
-            Assert.IsTrue(view.ShouldRenderNodeForContext(head2.transform, null, true));
-            Assert.IsFalse(view.ShouldRenderNodeForContext(head2.transform, "first_person", true));
+            Assert.IsTrue(view.ShouldRenderNodeForView(head2.transform, new[] { "third_person" }, true));
+            Assert.IsFalse(view.ShouldRenderNodeForView(head2.transform, new[] { "first_person" }, true));
+            Assert.IsFalse(view.ShouldRenderNodeForView(head2.transform, new string[0], true));
             Assert.IsTrue(head2Renderer.enabled, "round-trip evaluation does not mutate renderer state");
         }
 
@@ -196,9 +197,9 @@ namespace UnityGLTF.VisibilityHints.Tests
 
             var view = dst.GetComponent<ViewContextController>();
             Assert.IsNotNull(view);
-            Assert.IsTrue(view.ShouldRenderPrimitiveForContext(renderer, 0, null, true));
-            Assert.IsFalse(view.ShouldRenderPrimitiveForContext(renderer, 0, "third_person", true));
-            Assert.IsTrue(view.ShouldRenderPrimitiveForContext(renderer, 0, "first_person", true));
+            Assert.IsFalse(view.ShouldRenderPrimitiveForView(renderer, 0, new string[0], true));
+            Assert.IsFalse(view.ShouldRenderPrimitiveForView(renderer, 0, new[] { "third_person" }, true));
+            Assert.IsTrue(view.ShouldRenderPrimitiveForView(renderer, 0, new[] { "first_person" }, true));
             Assert.AreSame(original, renderer.sharedMaterials[0],
                 "round-trip evaluation preserves the authored material");
         }

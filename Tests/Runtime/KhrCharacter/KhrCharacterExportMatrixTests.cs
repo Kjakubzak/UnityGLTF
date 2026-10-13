@@ -72,9 +72,9 @@ namespace UnityGLTF.KhrCharacter.Tests
             => root.Accessors[anim.Samplers[channel.Sampler.Id].Input.Id];
 
         // A single-key joint rotation driver: enough to make an expression emit one native channel.
-        private static JointDriver RotationDriver(Transform target, int priority = 0) => new JointDriver
+        private static JointDriver RotationDriver(Transform target) => new JointDriver
         {
-            Target = target, Channel = TrsChannel.Rotation, Priority = priority,
+            Target = target, Channel = TrsChannel.Rotation,
             Sampler = new Sampler { Times = new[] { 0f }, Interp = Interp.Step, SingleKey = true },
             DeltaQuat = new[] { Quaternion.Euler(10f, 0f, 0f) }, BaseQuat = Quaternion.identity,
         };
@@ -201,26 +201,28 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             var ext = gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
             Assert.IsNotNull(ext);
-            var item = ext.Expressions.Find(e => e.Expression == "mixed");
+            var item = ext.Expressions.Find(e => e.Name == "mixed");
             Assert.IsNotNull(item, "the mixed-domain expression item should be present");
             Assert.IsNotNull(item.Morphtarget, "morph sub-extension present");
             Assert.IsNotNull(item.Joint, "joint sub-extension present");
-            Assert.IsNotNull(item.Texture, "texture sub-extension present");
+            Assert.IsNotNull(item.TextureTransform, "texture sub-extension present");
             Assert.AreEqual(1, item.Morphtarget.Channels.Length, "one morph driver -> one channel");
             Assert.AreEqual(1, item.Joint.Channels.Length, "one joint rotation driver -> one channel");
-            Assert.AreEqual(2, item.Texture.Channels.Length, "one UV-transform driver -> scale and offset channels");
+            Assert.AreEqual(1, item.TextureTransform.Channels.Length,
+                "the UV driver scrolls the offset; its scale stays at the authored value and is not listed");
 
             var anim = gltf.Animations[item.Animation];
 
             // Disjoint + total partition: the three domains index distinct channels.
             var morph = new HashSet<int>(item.Morphtarget.Channels);
             var joint = new HashSet<int>(item.Joint.Channels);
-            var tex = new HashSet<int>(item.Texture.Channels);
+            var tex = new HashSet<int>(item.TextureTransform.Channels);
             Assert.AreEqual(0, CountIntersect(morph, joint), "morph and joint channels must be disjoint");
             Assert.AreEqual(0, CountIntersect(morph, tex), "morph and texture channels must be disjoint");
             Assert.AreEqual(0, CountIntersect(joint, tex), "joint and texture channels must be disjoint");
             var union = new HashSet<int>(morph); union.UnionWith(joint); union.UnionWith(tex);
-            Assert.AreEqual(4, union.Count, "the partition must cover the four emitted channels");
+            Assert.AreEqual(3, union.Count, "the partition must cover the three emitted channels");
+            Assert.AreEqual(3, anim.Channels.Count, "the constant scale channel is not written");
             foreach (var ci in union)
                 Assert.IsTrue(ci >= 0 && ci < anim.Channels.Count, "every referenced channel index must be valid");
 
@@ -233,7 +235,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsNotNull(jointCh.Target.Node, "joint is a NATIVE TRS channel (target.Node set)");
             Assert.AreNotEqual("pointer", jointCh.Target.Path, "joint must not route through KHR_animation_pointer");
 
-            var texCh = anim.Channels[item.Texture.Channels[0]];
+            var texCh = anim.Channels[item.TextureTransform.Channels[0]];
             Assert.AreEqual("pointer", texCh.Target.Path, "texture is a KHR_animation_pointer channel");
             StringAssert.StartsWith("/materials/", PointerPath(texCh) ?? "", "texture pointer targets a material");
         }
@@ -465,7 +467,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             // Expressions came from BakedSet.
             var ext = gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
             Assert.IsNotNull(ext, "expressions must be emitted from the baked set fallback");
-            Assert.IsNotNull(ext.Expressions.Find(e => e.Expression == "jawOpen"));
+            Assert.IsNotNull(ext.Expressions.Find(e => e.Name == "jawOpen"));
             // Skeleton came from EditorBakedResult.
             var skelExt = gltf.Extensions[KHR_character_skeleton_mapping.EXTENSION_NAME] as KHR_character_skeleton_mapping;
             Assert.IsNotNull(skelExt, "skeleton mapping must be emitted from the editor-baked result fallback");
@@ -518,7 +520,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                 SelectedRig = SkeletonVocab,
                 ReferencePose = new ReferencePose
                 {
-                    PoseType = "TPose",
+                    PoseType = ReferencePoseLabels.TPose,
                     Bones = new[] { bone },
                     LocalPositions = new[] { bone.localPosition },
                     LocalRotations = new[] { Quaternion.identity },
@@ -530,7 +532,7 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             var ext = gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
             Assert.IsNotNull(ext, "expressions are emitted regardless of the pointer export plugin state");
-            var item = ext.Expressions.Find(e => e.Expression == "morphJoint");
+            var item = ext.Expressions.Find(e => e.Name == "morphJoint");
             Assert.IsNotNull(item);
             Assert.IsNotNull(item.Joint, "joint sub-extension present");
             Assert.IsNotNull(item.Morphtarget, "morph sub-extension present");
@@ -606,11 +608,11 @@ namespace UnityGLTF.KhrCharacter.Tests
         // Parses the /materials/{m}/... index out of the first texture pointer channel of the named expression.
         private static int MaterialIndexOfFirstTextureChannel(GLTFRoot gltf, KHR_character_expression ext, string name)
         {
-            var item = ext.Expressions.Find(e => e.Expression == name);
+            var item = ext.Expressions.Find(e => e.Name == name);
             Assert.IsNotNull(item, $"expression '{name}' present");
-            Assert.IsNotNull(item.Texture, $"expression '{name}' has texture channels");
+            Assert.IsNotNull(item.TextureTransform, $"expression '{name}' has texture channels");
             var anim = gltf.Animations[item.Animation];
-            var ch = anim.Channels[item.Texture.Channels[0]];
+            var ch = anim.Channels[item.TextureTransform.Channels[0]];
             var path = PointerPath(ch);
             Assert.IsNotNull(path, "texture channel carries a pointer path");
             var parts = path.Split('/'); // ["", "materials", "{m}", ...]
@@ -670,7 +672,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                 SelectedRig = SkeletonVocab,
                 ReferencePose = new ReferencePose
                 {
-                    PoseType = "TPose", Bones = new[] { bone },
+                    PoseType = ReferencePoseLabels.TPose, Bones = new[] { bone },
                     LocalPositions = new[] { Vector3.zero }, LocalRotations = new[] { Quaternion.identity }, LocalScales = new[] { Vector3.one },
                 },
             });
@@ -679,7 +681,7 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             var ext = gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
             Assert.IsNotNull(ext);
-            var item = ext.Expressions.Find(e => e.Expression == "anim");
+            var item = ext.Expressions.Find(e => e.Name == "anim");
             Assert.IsNotNull(item);
             var anim = gltf.Animations[item.Animation];
 

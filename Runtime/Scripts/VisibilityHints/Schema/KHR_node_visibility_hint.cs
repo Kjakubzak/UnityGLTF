@@ -3,8 +3,8 @@ using Newtonsoft.Json.Linq;
 namespace GLTF.Schema
 {
     /// <summary>
-    /// glTF node extension <c>KHR_node_visibility_hint</c>: a view-context visibility hint that applies to a node
-    /// and its subtree. <c>role</c> selects the view context in which the subtree should render
+    /// glTF node extension <c>KHR_node_visibility_hint</c>: a visibility hint that applies to a node and its
+    /// subtree. <c>role</c> selects the render views, by their view tags, in which the subtree renders
     /// (<c>always</c> | <c>first_person</c> | <c>third_person</c>, plus custom vocabulary); <c>label</c> is
     /// an optional UI string. The predicate <b>composes on top of</b> core <c>KHR_node_visibility</c> and never
     /// overrides a node hidden by it. Used-only assets may be ignored; required use must honor the predicate.

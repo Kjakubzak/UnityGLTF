@@ -9,7 +9,7 @@ namespace UnityGLTF.KhrCharacter.Tests
     /// <summary>
     /// End-to-end play-mode golden tests for the morph evaluation path: a hand-built CharacterExpressionSet is
     /// driven through ExpressionController.LateUpdate and the resulting SkinnedMeshRenderer blendshape weights
-    /// are asserted (state, not deformation, so these run headless).
+    /// are asserted (state, not deformation, so these run headless). Weights compose as b + sum(s - n), unclamped.
     /// </summary>
     public class ExpressionControllerMorphTests
     {
@@ -62,7 +62,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             var smr = MakeSmr(1, 1f, out var go);
             var set = SetWith(new ExpressionTrack
             {
-                Name = "smile", Domains = ExpressionDomain.Morph, BlendMode = ExpressionBlendMode.Additive,
+                Name = "smile", Domains = ExpressionDomain.Morph,
                 MorphDrivers = new[] { LinearMorphDriver(smr, 0) },
             });
             var ec = go.AddComponent<ExpressionController>();
@@ -87,7 +87,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             var smr = MakeSmr(1, 100f, out var go); // blendshape frame weight 100
             var set = SetWith(new ExpressionTrack
             {
-                Name = "smile", Domains = ExpressionDomain.Morph, BlendMode = ExpressionBlendMode.Additive,
+                Name = "smile", Domains = ExpressionDomain.Morph,
                 MorphDrivers = new[] { LinearMorphDriver(smr, 0) },
             });
             var ec = go.AddComponent<ExpressionController>();
@@ -103,9 +103,10 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [UnityTest]
-        public IEnumerator Morph_OverlappingExpressions_AddThenClamp()
+        public IEnumerator Morph_OverlappingExpressions_AddWithoutClampAndWriteTheWholeVector()
         {
-            var smr = MakeSmr(1, 1f, out var go);
+            var smr = MakeSmr(2, 1f, out var go);
+            smr.SetBlendShapeWeight(1, 0.3f);
             var set = SetWith(
                 new ExpressionTrack { Name = "a", Domains = ExpressionDomain.Morph, MorphDrivers = new[] { LinearMorphDriver(smr, 0) } },
                 new ExpressionTrack { Name = "b", Domains = ExpressionDomain.Morph, MorphDrivers = new[] { LinearMorphDriver(smr, 0) } });
@@ -115,12 +116,15 @@ namespace UnityGLTF.KhrCharacter.Tests
             ec.SetWeight("a", 0.5f);
             ec.SetWeight("b", 0.5f);
             yield return null;
-            Assert.AreEqual(1f, smr.GetBlendShapeWeight(0), 1e-3f); // 0.5 + 0.5
+            Assert.AreEqual(1f, smr.GetBlendShapeWeight(0), 1e-6f); // 0.5 + 0.5
 
             ec.SetWeight("a", 1f);
             ec.SetWeight("b", 1f);
+            smr.SetBlendShapeWeight(1, 0.9f);
             yield return null;
-            Assert.AreEqual(1f, smr.GetBlendShapeWeight(0), 1e-3f); // 1 + 1 -> clamp01 -> 1
+            Assert.AreEqual(2f, smr.GetBlendShapeWeight(0), 1e-6f, "1 + 1 is not clamped");
+            Assert.AreEqual(0.3f, smr.GetBlendShapeWeight(1), 1e-6f,
+                "the complete weight vector is written, so an untouched weight keeps its authored value");
         }
 
         [UnityTest]

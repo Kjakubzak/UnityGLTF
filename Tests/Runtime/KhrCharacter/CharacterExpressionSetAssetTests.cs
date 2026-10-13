@@ -48,7 +48,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             return root.transform;
         }
 
-        // A morph (Body, "smile") + a rotation joint (Eye) expression, with metadata, masks and a mapping set.
+        // A morph (Body, "smile") + a rotation joint (Eye) expression, with metadata, suppressions and a mapping set.
         private static CharacterExpressionSet BuildBaked(SkinnedMeshRenderer bodySmr, Transform eye)
         {
             return new CharacterExpressionSet
@@ -59,7 +59,6 @@ namespace UnityGLTF.KhrCharacter.Tests
                     {
                         Name = "smile",
                         Domains = ExpressionDomain.Morph | ExpressionDomain.Joint,
-                        BlendMode = ExpressionBlendMode.Override,
                         IsBinary = false,
                         MorphDrivers = new[]
                         {
@@ -70,7 +69,6 @@ namespace UnityGLTF.KhrCharacter.Tests
                                 Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Linear },
                                 DeltaValues = new[] { 0f, 1f },
                                 BaseValue = 0f,
-                                Priority = 3,
                             },
                         },
                         JointDrivers = new[]
@@ -82,26 +80,27 @@ namespace UnityGLTF.KhrCharacter.Tests
                                 Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Linear },
                                 DeltaQuat = new[] { Quaternion.identity, Quaternion.Euler(0f, 30f, 0f) },
                                 BaseQuat = Quaternion.Euler(5f, 0f, 0f),
-                                Priority = 2,
                             },
                         },
-                        Masks = new[]
+                        Suppressions = new[]
                         {
-                            new MaskEntry
+                            new SuppressionEntry
                             {
                                 TargetIndex = 0,
-                                Name = "smile",
-                                Type = MaskType.Blend,
-                                Amount = 1f,
-                                RawExtensionsJson = "{\"ACME_mask\":{}}",
+                                Type = SuppressionType.Block,
+                                Amount = 0.1,
+                                HasAmount = true,
+                                Threshold = 0.3,
+                                HasThreshold = true,
+                                RawExtensionsJson = "{\"ACME_suppression\":{}}",
                                 RawExtrasJson = "false",
-                                RawAdditionalPropertiesJson = "{\"futureMaskField\":1}",
+                                RawAdditionalPropertiesJson = "{\"futureSuppressionField\":1}",
                             },
                         },
-                        MaskExtensionsJson = "{\"ACME_mask_root\":{}}",
-                        MaskExtrasJson = "[\"mask-root\"]",
-                        MaskAdditionalPropertiesJson = "{\"futureMaskRootField\":2}",
-                        MaskRequiredCompanionExtensions = new[] { "ACME_mask" },
+                        SuppressionExtensionsJson = "{\"ACME_suppression_root\":{}}",
+                        SuppressionExtrasJson = "[\"suppression-root\"]",
+                        SuppressionAdditionalPropertiesJson = "{\"futureSuppressionRootField\":2}",
+                        SuppressionRequiredCompanionExtensions = new[] { "ACME_suppression" },
                     },
                 },
                 MappingSets = new[]
@@ -120,7 +119,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                                     {
                                         SourceIndex = 0,
                                         Name = "smile",
-                                        Weight = 1f,
+                                        Weight = 1,
                                         ExtensionsJson = "{\"ACME_mapping\":{}}",
                                         ExtrasJson = "\"mapping-entry\"",
                                         AdditionalPropertiesJson = "{\"futureMappingField\":3}",
@@ -165,7 +164,6 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(1, rt.MorphDrivers.Length);
             Assert.AreSame(bodySmr, rt.MorphDrivers[0].Smr);
             Assert.AreEqual(0, rt.MorphDrivers[0].BlendShapeIndex);
-            Assert.AreEqual(3, rt.MorphDrivers[0].Priority);
             CollectionAssert.AreEqual(new[] { 0f, 1f }, rt.MorphDrivers[0].DeltaValues);
 
             Assert.AreEqual(1, rt.JointDrivers.Length);
@@ -176,7 +174,6 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsTrue(QuatApprox(Quaternion.identity, jd.DeltaQuat[0]));
             Assert.IsTrue(QuatApprox(Quaternion.Euler(0f, 30f, 0f), jd.DeltaQuat[1]));
             Assert.IsTrue(QuatApprox(Quaternion.Euler(5f, 0f, 0f), jd.BaseQuat));
-            Assert.AreEqual(2, jd.Priority);
         }
 
         [Test]
@@ -220,15 +217,17 @@ namespace UnityGLTF.KhrCharacter.Tests
             var eb = bindings.Expressions[0];
 
             Assert.AreEqual("smile", eb.Name);
-            Assert.AreEqual(ExpressionBlendMode.Override, eb.BlendMode);
             Assert.AreEqual(ExpressionDomain.Morph | ExpressionDomain.Joint, eb.Domains);
             Assert.IsFalse(eb.IsBinary);
-            Assert.AreEqual(1, eb.Masks.Length);
-            Assert.AreEqual(MaskType.Blend, eb.Masks[0].Type);
-            Assert.AreEqual("smile", eb.Masks[0].Name);
-            Assert.AreEqual("{\"ACME_mask\":{}}", eb.Masks[0].RawExtensionsJson);
-            Assert.AreEqual("{\"ACME_mask_root\":{}}", eb.MaskExtensionsJson);
-            CollectionAssert.AreEqual(new[] { "ACME_mask" }, eb.MaskRequiredCompanionExtensions);
+            Assert.AreEqual(1, eb.Suppressions.Length);
+            Assert.AreEqual(SuppressionType.Block, eb.Suppressions[0].Type);
+            Assert.AreEqual(0.1, eb.Suppressions[0].Amount);
+            Assert.IsTrue(eb.Suppressions[0].HasAmount);
+            Assert.AreEqual(0.3, eb.Suppressions[0].Threshold);
+            Assert.IsTrue(eb.Suppressions[0].HasThreshold);
+            Assert.AreEqual("{\"ACME_suppression\":{}}", eb.Suppressions[0].RawExtensionsJson);
+            Assert.AreEqual("{\"ACME_suppression_root\":{}}", eb.SuppressionExtensionsJson);
+            CollectionAssert.AreEqual(new[] { "ACME_suppression" }, eb.SuppressionRequiredCompanionExtensions);
             Assert.AreEqual("vrm", bindings.MappingSets[0].SetName);
             Assert.AreEqual("happy", bindings.MappingSets[0].Targets[0].TargetName);
             Assert.AreEqual("smile", bindings.MappingSets[0].Targets[0].Contributions[0].Name);
@@ -240,9 +239,12 @@ namespace UnityGLTF.KhrCharacter.Tests
             // Metadata also survives the inverse.
             var resolved = CharacterExpressionSetAsset.Resolve(bindings, root);
             Assert.AreEqual("smile", resolved.Expressions[0].Name);
-            Assert.AreEqual(ExpressionBlendMode.Override, resolved.Expressions[0].BlendMode);
             Assert.AreEqual(ExpressionDomain.Morph | ExpressionDomain.Joint, resolved.Expressions[0].Domains);
-            Assert.AreEqual("{\"ACME_mask_root\":{}}", resolved.Expressions[0].MaskExtensionsJson);
+            Assert.AreEqual("{\"ACME_suppression_root\":{}}", resolved.Expressions[0].SuppressionExtensionsJson);
+            Assert.AreEqual(0.1, resolved.Expressions[0].Suppressions[0].Amount);
+            Assert.IsTrue(resolved.Expressions[0].Suppressions[0].HasAmount);
+            Assert.AreEqual(0.3, resolved.Expressions[0].Suppressions[0].Threshold);
+            Assert.IsTrue(resolved.Expressions[0].Suppressions[0].HasThreshold);
             Assert.AreEqual("vrm", resolved.MappingSets[0].SetName);
             Assert.AreEqual("{\"ACME_mapping_root\":{}}", resolved.MappingExtensionsJson);
         }

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -6,17 +7,26 @@ namespace UnityGLTF.KhrCharacter
     /// <summary>Host-defined ownership policy for the optional Unity expression applicator.</summary>
     public enum ExpressionControllerOwnershipMode
     {
-        /// <summary>The controller owns its targets and restores their baked bases while inactive.</summary>
+        /// <summary>
+        /// The controller owns its targets: a bound property without an expression record returns to its authored
+        /// initial value.
+        /// </summary>
         Standalone,
-        /// <summary>An earlier animation system owns the targets; inactive expressions leave its values untouched.</summary>
+        /// <summary>
+        /// An earlier animation system owns the targets: a property without a record, and a morph weight no record
+        /// covers, keep that system's value. A property with a record replaces that value.
+        /// </summary>
         Integrated,
     }
 
     /// <summary>
-    /// Optional Unity host applicator. Runs in LateUpdate (after the Animator) at a higher execution order than
-    /// <see cref="GazeSolver"/> so gaze can feed the same-frame evaluation. Morph, joint, and texture targets
-    /// are evaluated target-major. Standalone mode restores owned targets to their baked bases while inactive;
-    /// Integrated mode leaves inactive targets to an earlier animation-system writer.
+    /// Optional Unity host applicator for <c>KHR_character_expression</c>. Each <c>LateUpdate</c>, after the Animator and
+    /// after <see cref="GazeSolver"/>, it forms the final native drivers from direct weights or a selected input mapping,
+    /// runs the normative pipeline (driver snapshot with suppression, sampling at <c>t = v[i] * T</c> and
+    /// order-independent composition) and writes the aggregate records to the bound Unity targets. An imported character
+    /// evaluates its <see cref="ExpressionResponseSet"/>; a set authored in Unity is evaluated as the response animations
+    /// its export would contain. Mixing the result with other writers is this host's policy
+    /// (<see cref="ExpressionControllerOwnershipMode"/>).
     /// </summary>
     [DisallowMultipleComponent]
     [DefaultExecutionOrder(100)]
@@ -30,68 +40,67 @@ namespace UnityGLTF.KhrCharacter
             public bool IsBinary;
         }
 
-        // One accumulation slot per concrete (renderer, blendshape) target.
-        private sealed class MorphTarget
+        // The offset, scale and rotation of one KHR_texture_transform object share one _ST vector.
+        private sealed class TextureGroup
         {
-            public SkinnedMeshRenderer Smr;
-            public int BlendShapeIndex;
-            public float BaseValue;
-            public float Multiplier;
-            public readonly List<int> ExprIndices = new List<int>();
-            public readonly List<MorphDriver> Drivers = new List<MorphDriver>();
+            public ExpressionTargetBinding Offset;
+            public ExpressionTargetBinding Scale;
+            public ExpressionTargetBinding Rotation;
+            public Renderer[] Renderers;
+            public int[] Slots;
+            public int StPropertyId;
+            public bool HasStProperty;
+            public int TexturePropertyId;
+            public bool HasTextureProperty;
+            public int RotationPropertyId;
+            public bool HasRotationProperty;
+            public bool Flipped;
+            public readonly MaterialPropertyBlock Block = new MaterialPropertyBlock();
         }
 
-        // One accumulation slot per concrete (transform, TRS channel) target.
-        private sealed class JointTarget
-        {
-            public Transform Target;
-            public TrsChannel Channel;
-            public Vector3 BaseVec;
-            public Quaternion BaseQuat;
-            public readonly List<int> ExprIndices = new List<int>();
-            public readonly List<JointDriver> Drivers = new List<JointDriver>();
-        }
+        // UnityGLTF's camera/light forward-axis turn, 180° about Y (SchemaExtensions.InvertDirection).
+        private static readonly Quaternion ForwardAxisTurn = new Quaternion(0f, -1f, 0f, 0f);
 
-        // Additive _ST property within a render target.
-        private sealed class UvProp
-        {
-            public int PropId;
-            public Vector4 BaseSt;
-            public readonly List<int> ExprIndices = new List<int>();
-            public readonly List<TextureDriver> Drivers = new List<TextureDriver>();
-        }
+        private static readonly List<Material> SharedMaterials = new List<Material>();
 
-        // One MaterialPropertyBlock per (renderer, submesh slot), aggregating its UV properties.
-        private sealed class TextureRenderTarget
-        {
-            public Renderer Renderer;
-            public int Slot;
-            public MaterialPropertyBlock Mpb;
-            public readonly List<UvProp> Uv = new List<UvProp>();
-        }
-
-        // Persisted so an editor-imported prefab can rehydrate on Awake (the live import calls Initialize,
-        // which also stores here). Not the runtime working copy — see _set below, which is rebuilt from this.
-        // Hidden from the inspector: it's baked data, surfaced read-only by ExpressionControllerEditor.
+        // The authoring set and, for an imported character, its response set and bindings are persisted so a prefab
+        // rehydrates in Awake; a live import calls Initialize itself. Hidden from the inspector: baked data.
         [SerializeField, HideInInspector] private CharacterExpressionSet _serializedSet;
         [SerializeField] private ExpressionControllerOwnershipMode _ownershipMode = ExpressionControllerOwnershipMode.Standalone;
+        [SerializeField, HideInInspector] private bool _evaluatesImportedResponses;
+        [SerializeField, HideInInspector] private ExpressionResponseSet _responses;
+        [SerializeField, HideInInspector] private ExpressionTargetBinding[] _bindings = Array.Empty<ExpressionTargetBinding>();
 
+        private bool _initialized;
         private CharacterExpressionSet _set;
-        private IExpressionSemantics _semantics;
-        private ExpressionHandle[] _handles = System.Array.Empty<ExpressionHandle>();
+        private ExpressionHandle[] _handles = Array.Empty<ExpressionHandle>();
+        private float[] _weights = Array.Empty<float>();
+        private readonly Dictionary<string, int> _nameToIndex = new Dictionary<string, int>(StringComparer.Ordinal);
 
-        private float[] _weights;   // user-set driver per expression
-        private float[] _rawInputs; // scratch (post-map)
-        private float[] _d;         // scratch (post-mask + clamp)
-        private readonly List<MorphTarget> _morphTargets = new List<MorphTarget>();
-        private readonly List<JointTarget> _jointTargets = new List<JointTarget>();
-        private readonly List<TextureRenderTarget> _textureTargets = new List<TextureRenderTarget>();
-        private readonly Dictionary<string, ExpressionMappingSet> _outputMappingSets = new Dictionary<string, ExpressionMappingSet>();
-        private readonly Dictionary<string, ExpressionInputMappingSet> _inputMappingSets = new Dictionary<string, ExpressionInputMappingSet>();
-        private readonly Dictionary<(string, string), float> _vocabWeights = new Dictionary<(string, string), float>();
+        private ExpressionResponseAnimation[] _authoredAnimations;
+        private IReadOnlyList<SuppressionEntry>[] _authoredSuppressions;
+        private ExpressionTargetBinding[] _activeBindings = Array.Empty<ExpressionTargetBinding>();
+        private readonly List<ExpressionTargetBinding> _nodeBindings = new List<ExpressionTargetBinding>();
+        private readonly List<ExpressionTargetBinding> _morphBindings = new List<ExpressionTargetBinding>();
+        private readonly List<TextureGroup> _textureGroups = new List<TextureGroup>();
+
+        private readonly Dictionary<string, ExpressionMappingSet> _outputMappingSets =
+            new Dictionary<string, ExpressionMappingSet>(StringComparer.Ordinal);
+        private readonly Dictionary<string, ExpressionInputMappingSet> _inputMappingSets =
+            new Dictionary<string, ExpressionInputMappingSet>(StringComparer.Ordinal);
+        private readonly Dictionary<string, Dictionary<string, double>> _commands =
+            new Dictionary<string, Dictionary<string, double>>(StringComparer.Ordinal);
         private string _selectedInputMappingSet;
 
+        private ExpressionDriverSnapshot _snapshot;
+        private ExpressionComposition _composition;
+
         public IReadOnlyList<ExpressionHandle> Expressions => _handles;
+
+        /// <summary>
+        /// The authoring set: the set an authored controller was initialized with, or the legacy bake of an imported
+        /// character, kept for extraction and export.
+        /// </summary>
         public CharacterExpressionSet Set => _set;
 
         // The baked set as persisted with the component, available at edit time too (the runtime working copy
@@ -109,151 +118,105 @@ namespace UnityGLTF.KhrCharacter
             set => _ownershipMode = value;
         }
 
-        // Rehydrate an editor-imported prefab. A live import adds this component fresh (no serialized set) and
-        // calls Initialize itself, so this is a no-op in that path; it only fires for a deserialized prefab.
+        /// <summary>The response set an imported character evaluates; null for an authored set.</summary>
+        public ExpressionResponseSet Responses => _evaluatesImportedResponses ? _responses : null;
+
+        /// <summary>The scene targets this controller writes, one per composed property.</summary>
+        public IReadOnlyList<ExpressionTargetBinding> Bindings => _activeBindings;
+
+        /// <summary>The driver snapshot (<c>u</c> and <c>v</c>) of the most recent update; null before the first one.</summary>
+        public ExpressionDriverSnapshot Snapshot => _snapshot;
+
+        /// <summary>The composition of the most recent update, with its failures; null before the first one.</summary>
+        public ExpressionComposition Composition => _composition;
+
+        // Rehydrates a deserialized prefab. A live import adds this component fresh and calls Initialize itself.
         private void Awake()
         {
-            // Rehydrate only when a baked set was actually persisted. Unity may rehydrate a never-assigned
-            // [Serializable] field as a default (non-null) instance, so require a real payload, not just non-null.
-            if (_set == null && _serializedSet?.Expressions != null && _serializedSet.Expressions.Length > 0)
+            if (_initialized) return;
+            if (_evaluatesImportedResponses)
+            {
+                if (_responses != null) Initialize(_serializedSet, _responses, _bindings);
+                else Debug.LogWarning("[KHR_character] The expression controller's response set is missing; it drives nothing.", this);
+            }
+            // Unity may rehydrate a never-assigned [Serializable] field as an empty instance, so require a payload.
+            else if (_serializedSet?.Expressions != null && _serializedSet.Expressions.Length > 0)
+            {
                 Initialize(_serializedSet);
+            }
         }
 
         /// <summary>
-        /// Receive the baked expression set and (optionally) an evaluation policy. The default additive policy
-        /// is used when none is supplied.
+        /// Evaluates a set authored in Unity. Its tracks become the response animations its export would contain (legacy
+        /// curves normalized to response progress, in glTF space), so previewing the set matches evaluating the exported
+        /// asset. A track that cannot be expressed that way, or that animates a node rotation, node scale or texture
+        /// scale an earlier track already animates, is reported as a warning and produces no output.
         /// </summary>
-        public void Initialize(CharacterExpressionSet set, IExpressionSemantics semantics = null)
+        public void Initialize(CharacterExpressionSet set)
         {
+            Clear();
+            _evaluatesImportedResponses = false;
+            _responses = null;
+            _bindings = Array.Empty<ExpressionTargetBinding>();
             _set = set;
-            // Persist for prefab rehydration. Guard the self-assign: Awake calls Initialize(_serializedSet), where
-            // set and _serializedSet are already the same reference.
+            // Awake calls Initialize(_serializedSet), where both are already the same reference.
             if (!ReferenceEquals(_serializedSet, set)) _serializedSet = set;
-            _semantics = semantics ?? AdditiveExpressionSemantics.Default;
             _set?.RebuildIndex();
 
-            _handles = System.Array.Empty<ExpressionHandle>();
-            _morphTargets.Clear();
-            _jointTargets.Clear();
-            _textureTargets.Clear();
-            _outputMappingSets.Clear();
-            _inputMappingSets.Clear();
-            _vocabWeights.Clear();
-            _selectedInputMappingSet = null;
+            var tracks = set?.Expressions ?? Array.Empty<ExpressionTrack>();
+            var authored = AuthoredExpressionCurves.BuildResponseAnimations(set);
+            _authoredAnimations = authored.Animations;
+            _authoredSuppressions = BuildAuthoredSuppressions(tracks);
 
-            var outputSetNames = new List<string>();
-            if (_set?.MappingSets != null)
-                foreach (var ms in _set.MappingSets)
-                    if (ms?.SetName != null) { _outputMappingSets[ms.SetName] = ms; outputSetNames.Add(ms.SetName); }
-            var inputSetNames = new List<string>();
-            if (_set?.InputMappingSets != null)
-                foreach (var ms in _set.InputMappingSets)
-                    if (ms?.SetName != null) { _inputMappingSets[ms.SetName] = ms; inputSetNames.Add(ms.SetName); }
-            OutputVocabularySets = outputSetNames;
-            InputVocabularySets = inputSetNames;
-            var allSetNames = new List<string>(outputSetNames);
-            foreach (var setName in inputSetNames)
-                if (!allSetNames.Contains(setName)) allSetNames.Add(setName);
-            VocabularySets = allSetNames;
-
-            int n = _set?.Expressions?.Length ?? 0;
-            _weights = new float[n];
-            _rawInputs = new float[n];
-            _d = new float[n];
-
-            if (_set?.Expressions == null) return;
-
-            // Array (not List): SetWeight/ResetAll replace elements in place; an array's element-write doesn't bump
-            // a version, so callers may safely enumerate Expressions while driving weights.
-            _handles = new ExpressionHandle[_set.Expressions.Length];
-            var morphLookup = new Dictionary<(SkinnedMeshRenderer, int), MorphTarget>();
-            var jointLookup = new Dictionary<(Transform, TrsChannel), JointTarget>();
-            var textureLookup = new Dictionary<(Renderer, int), TextureRenderTarget>();
-
-            for (int e = 0; e < _set.Expressions.Length; e++)
-            {
-                var track = _set.Expressions[e];
-                _handles[e] = new ExpressionHandle
+            var handles = new ExpressionHandle[tracks.Length];
+            for (int index = 0; index < tracks.Length; index++)
+                handles[index] = new ExpressionHandle
                 {
-                    Name = track?.Name,
-                    Value = 0f,
-                    Domains = track?.Domains ?? ExpressionDomain.None,
-                    IsBinary = track?.IsBinary ?? false,
+                    Name = tracks[index]?.Name,
+                    Domains = tracks[index]?.Domains ?? ExpressionDomain.None,
+                    IsBinary = tracks[index]?.IsBinary ?? false,
                 };
-
-                if (track?.MorphDrivers != null)
-                {
-                    foreach (var driver in track.MorphDrivers)
-                    {
-                        if (driver?.Smr == null) continue;
-                        var key = (driver.Smr, driver.BlendShapeIndex);
-                        if (!morphLookup.TryGetValue(key, out var mt))
-                        {
-                            mt = new MorphTarget
-                            {
-                                Smr = driver.Smr,
-                                BlendShapeIndex = driver.BlendShapeIndex,
-                                BaseValue = driver.BaseValue,
-                                Multiplier = GetMultiplier(driver.Smr, driver.BlendShapeIndex),
-                            };
-                            morphLookup[key] = mt;
-                            _morphTargets.Add(mt);
-                        }
-                        mt.ExprIndices.Add(e);
-                        mt.Drivers.Add(driver);
-                    }
-                }
-
-                if (track?.JointDrivers != null)
-                {
-                    foreach (var driver in track.JointDrivers)
-                    {
-                        if (driver?.Target == null) continue;
-                        var key = (driver.Target, driver.Channel);
-                        if (!jointLookup.TryGetValue(key, out var jt))
-                        {
-                            jt = new JointTarget
-                            {
-                                Target = driver.Target,
-                                Channel = driver.Channel,
-                                BaseVec = driver.BaseVec,
-                                BaseQuat = driver.BaseQuat,
-                            };
-                            jointLookup[key] = jt;
-                            _jointTargets.Add(jt);
-                        }
-                        jt.ExprIndices.Add(e);
-                        jt.Drivers.Add(driver);
-                    }
-                }
-
-                if (track?.TextureDrivers != null)
-                {
-                    foreach (var driver in track.TextureDrivers)
-                        AddTextureDriver(textureLookup, e, driver);
-                }
-            }
+            SetHandles(handles);
+            SetMappingSets(set?.MappingSets, set?.InputMappingSets);
+            BindTargets(authored.Bindings);
+            _initialized = true;
         }
 
-        private void AddTextureDriver(Dictionary<(Renderer, int), TextureRenderTarget> lookup, int expr, TextureDriver driver)
+        /// <summary>
+        /// Evaluates an imported character's <paramref name="responses"/> and writes the composed records through
+        /// <paramref name="bindings"/>. <paramref name="authoringSet"/> is kept only as <see cref="Set"/>, for extraction
+        /// and export; it is not evaluated.
+        /// </summary>
+        /// <param name="authoringSet">The legacy bake of the same entries, or null.</param>
+        /// <param name="responses">The imported response set; its entries define the expressions and their order.</param>
+        /// <param name="bindings">The scene targets of the composed properties.</param>
+        public void Initialize(
+            CharacterExpressionSet authoringSet,
+            ExpressionResponseSet responses,
+            ExpressionTargetBinding[] bindings)
         {
-            if (driver?.Renderer == null) return;
-            var key = (driver.Renderer, driver.SubmeshSlot);
-            if (!lookup.TryGetValue(key, out var target))
-            {
-                target = new TextureRenderTarget { Renderer = driver.Renderer, Slot = driver.SubmeshSlot, Mpb = new MaterialPropertyBlock() };
-                lookup[key] = target;
-                _textureTargets.Add(target);
-            }
+            if (responses == null) throw new ArgumentNullException(nameof(responses));
+            Clear();
+            _evaluatesImportedResponses = true;
+            _responses = responses;
+            _bindings = bindings ?? Array.Empty<ExpressionTargetBinding>();
+            _set = authoringSet;
+            if (!ReferenceEquals(_serializedSet, authoringSet)) _serializedSet = authoringSet;
 
-            var uv = target.Uv.Find(p => p.PropId == driver.PropertyId);
-            if (uv == null)
-            {
-                uv = new UvProp { PropId = driver.PropertyId, BaseSt = driver.BaseSt };
-                target.Uv.Add(uv);
-            }
-            uv.ExprIndices.Add(expr);
-            uv.Drivers.Add(driver);
+            var entries = responses.Entries;
+            var tracks = authoringSet?.Expressions;
+            var handles = new ExpressionHandle[entries.Count];
+            for (int index = 0; index < handles.Length; index++)
+                handles[index] = new ExpressionHandle
+                {
+                    Name = entries[index]?.Name,
+                    Domains = DomainsOf(entries[index]),
+                    IsBinary = tracks != null && index < tracks.Length && tracks[index] != null && tracks[index].IsBinary,
+                };
+            SetHandles(handles);
+            SetMappingSets(responses.ForwardMappingSets, responses.InputMappingSets);
+            BindTargets(_bindings);
+            _initialized = true;
         }
 
         public void SetWeight(string name, float driver)
@@ -262,21 +225,21 @@ namespace UnityGLTF.KhrCharacter
             SetWeight(i, driver);
         }
 
+        /// <summary>Sets a native driver. It must be finite and is clamped to [0, 1].</summary>
         public void SetWeight(int index, float driver)
         {
-            if (_weights == null || index < 0 || index >= _weights.Length) return;
-            float normalized = _semantics.Clamp01(driver);
-            _weights[index] = normalized;
-            var h = _handles[index]; h.Value = normalized; _handles[index] = h;
+            if (index < 0 || index >= _weights.Length) return;
+            float value = Clamp01(driver, nameof(driver), "Expression drivers");
+            _weights[index] = value;
+            var h = _handles[index]; h.Value = value; _handles[index] = h;
         }
 
         public float GetWeight(string name) => TryIndex(name, out int i) ? _weights[i] : 0f;
-        public float GetWeight(int index) => _weights != null && index >= 0 && index < _weights.Length ? _weights[index] : 0f;
+        public float GetWeight(int index) => index >= 0 && index < _weights.Length ? _weights[index] : 0f;
 
         public void ResetAll()
         {
-            _vocabWeights.Clear();
-            if (_weights == null) return;
+            _commands.Clear();
             for (int i = 0; i < _weights.Length; i++)
             {
                 _weights[i] = 0f;
@@ -284,11 +247,18 @@ namespace UnityGLTF.KhrCharacter
             }
         }
 
+        /// <summary>
+        /// Sets an endpoint command of an input mapping set. The command must be finite and is clamped to [0, 1]; it
+        /// drives the expressions only while its set is selected (<see cref="SelectVocabularyInputSet"/>).
+        /// </summary>
         public void SetWeightByVocabulary(string setName, string targetExpression, float driver)
         {
             if (setName == null || targetExpression == null) return;
             if (!_inputMappingSets.ContainsKey(setName)) return;
-            _vocabWeights[(setName, targetExpression)] = ValidateUnit(driver);
+            float value = Clamp01(driver, nameof(driver), "Endpoint commands");
+            if (!_commands.TryGetValue(setName, out var commands))
+                _commands.Add(setName, commands = new Dictionary<string, double>(StringComparer.Ordinal));
+            commands[targetExpression] = value;
         }
 
         public bool SelectVocabularyInputSet(string setName)
@@ -300,235 +270,440 @@ namespace UnityGLTF.KhrCharacter
 
         public void UseDirectNativeInputs() => _selectedInputMappingSet = null;
 
+        /// <summary>
+        /// The endpoint outputs of an <c>expressionSetMappings</c> set, computed from the current pre-suppression drivers
+        /// <c>u</c> (after any selected input mapping); suppression never changes them.
+        /// </summary>
         public IReadOnlyDictionary<string, float> EvaluateVocabularyOutputs(string setName)
         {
-            if (setName == null || !_outputMappingSets.TryGetValue(setName, out var mapping))
-                return new Dictionary<string, float>();
-            return _semantics.EvaluateForwardMapping(mapping, _weights);
+            var outputs = new Dictionary<string, float>(StringComparer.Ordinal);
+            if (setName == null || !_outputMappingSets.TryGetValue(setName, out var mapping)) return outputs;
+            var u = ExpressionDriverPipeline.ClampDrivers(FinalNativeDrivers(), _weights.Length);
+            foreach (var output in ExpressionDriverPipeline.EvaluateForwardMapping(mapping, u))
+                outputs[output.Key] = (float)output.Value;
+            return outputs;
         }
 
         public IReadOnlyList<string> VocabularyExpressions(string setName)
         {
             var list = new List<string>();
-            if (setName != null && _inputMappingSets.TryGetValue(setName, out var input) && input.Commands != null)
-                foreach (var command in input.Commands)
-                    if (command?.CommandName != null) list.Add(command.CommandName);
-            else if (setName != null && _outputMappingSets.TryGetValue(setName, out var output) && output.Targets != null)
+            if (setName == null) return list;
+            if (_inputMappingSets.TryGetValue(setName, out var input))
+            {
+                if (input.Commands != null)
+                    foreach (var command in input.Commands)
+                        if (command?.CommandName != null) list.Add(command.CommandName);
+            }
+            else if (_outputMappingSets.TryGetValue(setName, out var output) && output.Targets != null)
+            {
                 foreach (var endpoint in output.Targets)
                     if (endpoint?.TargetName != null) list.Add(endpoint.TargetName);
+            }
             return list;
         }
 
         private void LateUpdate()
         {
-            if (_set?.Expressions == null || _semantics == null) return;
-            if (_morphTargets.Count == 0 && _jointTargets.Count == 0 && _textureTargets.Count == 0) return;
-
-            int n = _set.Expressions.Length;
-
-            // Direct-native and endpoint-command inputs are separate surfaces. The host explicitly selects one.
-            if (_selectedInputMappingSet != null
-                && _inputMappingSets.TryGetValue(_selectedInputMappingSet, out var inputMapping))
+            if (!_initialized || (_evaluatesImportedResponses && _responses == null)) return;
+            var drivers = FinalNativeDrivers();
+            if (_evaluatesImportedResponses)
             {
-                var commands = new Dictionary<string, float>();
-                foreach (var kv in _vocabWeights)
-                    if (kv.Key.Item1 == _selectedInputMappingSet) commands[kv.Key.Item2] = kv.Value;
-                _semantics.ApplyInputMapping(inputMapping, commands, _rawInputs);
+                _snapshot = _responses.BuildSnapshot(drivers);
+                _composition = _responses.Compose(_snapshot);
             }
             else
-                for (int i = 0; i < n; i++) _rawInputs[i] = _weights[i];
-
-            // MASK + CLAMP.
-            for (int i = 0; i < n; i++)
-                _d[i] = _semantics.Clamp01(_semantics.ResolveMaskedInput(i, _rawInputs, _set.Expressions));
-
-            EvaluateMorphTargets();
-            EvaluateJointTargets();
-            EvaluateTextureTargets();
+            {
+                _snapshot = ExpressionDriverPipeline.BuildSnapshot(drivers, _authoredSuppressions);
+                var responses = new ExpressionResponse[_authoredAnimations.Length];
+                for (int index = 0; index < responses.Length; index++)
+                    if (_authoredAnimations[index] != null)
+                        responses[index] = ExpressionResponseEvaluator.Evaluate(
+                            _authoredAnimations[index], _snapshot.V[index]);
+                _composition = ExpressionComposer.Compose(responses);
+            }
+            Apply(_composition);
         }
 
-        // Compositing policy (shared by morph / joint / texture-UV): contributors sum additively as the
-        // default. If any active (d>0) Override contributor exists on a target, the winner (highest Priority,
-        // tie -> latest declaration / highest expression index) replaces the additive result with its absolute
-        // pose (base + winnerDelta). Additive-only targets are byte-identical to the pre-Override behavior
-        // because the winner branch is skipped entirely when no Override contributor is active.
-        private void EvaluateMorphTargets()
+        // The host's final native drivers: the selected input mapping's output, else the direct weights.
+        private double?[] FinalNativeDrivers()
         {
-            for (int t = 0; t < _morphTargets.Count; t++)
+            var drivers = new double?[_weights.Length];
+            if (_selectedInputMappingSet != null &&
+                _inputMappingSets.TryGetValue(_selectedInputMappingSet, out var mapping))
             {
-                var mt = _morphTargets[t];
-                if (mt.Smr == null) continue;
+                _commands.TryGetValue(_selectedInputMappingSet, out var commands);
+                var native = ExpressionDriverPipeline.EvaluateInputMapping(mapping, commands, drivers.Length);
+                for (int index = 0; index < drivers.Length; index++) drivers[index] = native[index];
+            }
+            else
+            {
+                for (int index = 0; index < drivers.Length; index++) drivers[index] = _weights[index];
+            }
+            return drivers;
+        }
 
-                float acc = mt.BaseValue;
-                bool hasActiveContributor = false;
-                int winner = -1, winnerPrio = 0, winnerExpr = -1;
-                for (int k = 0; k < mt.Drivers.Count; k++)
+        private void Apply(ExpressionComposition composition)
+        {
+            bool standalone = _ownershipMode == ExpressionControllerOwnershipMode.Standalone;
+            foreach (var binding in _nodeBindings) ApplyNode(binding, composition, standalone);
+            foreach (var binding in _morphBindings) ApplyMorph(binding, composition, standalone);
+            foreach (var group in _textureGroups) ApplyTexture(group, composition, standalone);
+        }
+
+        private static void ApplyNode(ExpressionTargetBinding binding, ExpressionComposition composition, bool standalone)
+        {
+            var node = binding.Node;
+            if (node == null) return;
+            IReadOnlyList<double> value;
+            if (composition.TryGetRecord(binding.Property, out var record)) value = record.Value;
+            else if (standalone) value = binding.AuthoredInitial;
+            else return;
+
+            switch (binding.Kind)
+            {
+                case ExpressionPropertyKind.NodeTranslation:
+                    if (value == null || value.Count != 3) return;
+                    node.localPosition = binding.TranslationScale *
+                                         new Vector3(-(float)value[0], (float)value[1], (float)value[2]);
+                    break;
+                case ExpressionPropertyKind.NodeRotation:
+                    if (value == null || value.Count != 4) return;
+                    var rotation = new Quaternion((float)value[0], -(float)value[1], -(float)value[2], (float)value[3]);
+                    if (binding.NodeHasForwardAxisConversion) rotation *= ForwardAxisTurn;
+                    node.localRotation = rotation;
+                    break;
+                case ExpressionPropertyKind.NodeScale:
+                    if (value == null || value.Count != 3) return;
+                    node.localScale = new Vector3((float)value[0], (float)value[1], (float)value[2]);
+                    break;
+            }
+        }
+
+        // The composed record is the node's complete weight vector. Integrated mode writes only the elements a current
+        // record covers, so an earlier writer keeps the others.
+        private static void ApplyMorph(ExpressionTargetBinding binding, ExpressionComposition composition, bool standalone)
+        {
+            var authored = binding.AuthoredInitial;
+            var renderers = binding.MorphRenderers;
+            if (authored == null || renderers == null) return;
+            int length = authored.Length;
+            bool hasRecord = composition.TryGetRecord(binding.Property, out var record) && record.Value.Count == length;
+            if (!hasRecord && !standalone) return;
+
+            for (int rendererIndex = 0; rendererIndex < renderers.Length; rendererIndex++)
+            {
+                var renderer = renderers[rendererIndex];
+                if (renderer == null || renderer.sharedMesh == null) continue;
+                int count = Math.Min(length, renderer.sharedMesh.blendShapeCount);
+                for (int element = 0; element < count; element++)
                 {
-                    int e = mt.ExprIndices[k];
-                    float di = _d[e];
-                    if (di <= 0f) continue;
-                    hasActiveContributor = true;
-                    var driver = mt.Drivers[k];
-                    acc += _semantics.SampleScalarDelta(driver.Sampler, driver.DeltaValues, mt.BaseValue, di);
-                    if (IsOverride(e) && IsBetterWinner(driver.Priority, e, winner, winnerPrio, winnerExpr))
-                    { winner = k; winnerPrio = driver.Priority; winnerExpr = e; }
+                    double weight;
+                    if (hasRecord)
+                    {
+                        if (!standalone && !record.Contributed[element]) continue;
+                        weight = record.Value[element];
+                    }
+                    else
+                    {
+                        weight = authored[element];
+                    }
+                    renderer.SetBlendShapeWeight(
+                        element, (float)(weight * FrameWeight(binding, rendererIndex * length + element)));
                 }
-                if (winner >= 0)
+            }
+        }
+
+        private static float FrameWeight(ExpressionTargetBinding binding, int index)
+        {
+            var frameWeights = binding.MorphFrameWeights;
+            return frameWeights != null && index >= 0 && index < frameWeights.Length ? frameWeights[index] : 1f;
+        }
+
+        // Offset and scale share one _ST vector. In Integrated mode, when only one of them has a record, the other keeps
+        // the earlier writer's value.
+        private static void ApplyTexture(TextureGroup group, ExpressionComposition composition, bool standalone)
+        {
+            bool hasOffset = TryGetValue(group.Offset, composition, out var offset);
+            bool hasScale = TryGetValue(group.Scale, composition, out var scale);
+            bool hasRotation = TryGetValue(group.Rotation, composition, out var rotation);
+            bool writeSt = group.HasStProperty && (standalone || hasOffset || hasScale);
+            bool writeRotation = group.HasRotationProperty && (standalone || hasRotation);
+            if (!writeSt && !writeRotation) return;
+
+            bool keepEarlierComponent = writeSt && !standalone && !(hasOffset && hasScale);
+            var gltfOffset = offset != null && offset.Count == 2
+                ? new Vector2((float)offset[0], (float)offset[1])
+                : Vector2.zero;
+            var gltfScale = scale != null && scale.Count == 2
+                ? new Vector2((float)scale[0], (float)scale[1])
+                : Vector2.one;
+            float angle = rotation != null && rotation.Count == 1 ? (float)rotation[0] : 0f;
+
+            for (int index = 0; index < group.Renderers.Length; index++)
+            {
+                var renderer = group.Renderers[index];
+                if (renderer == null) continue;
+                int slot = group.Slots != null && index < group.Slots.Length ? group.Slots[index] : 0;
+                renderer.GetPropertyBlock(group.Block, slot);
+                if (writeSt)
                 {
-                    var d = mt.Drivers[winner];
-                    acc = mt.BaseValue + _semantics.SampleScalarDelta(d.Sampler, d.DeltaValues, mt.BaseValue, _d[mt.ExprIndices[winner]]);
+                    var slotOffset = gltfOffset;
+                    var slotScale = gltfScale;
+                    if (keepEarlierComponent &&
+                        TryGetEarlierTextureTransform(group, renderer, slot, out var earlierOffset, out var earlierScale))
+                    {
+                        if (!hasOffset) slotOffset = earlierOffset;
+                        if (!hasScale) slotScale = earlierScale;
+                    }
+                    GLTFSceneImporter.ConvertTextureTransformScaleAndOffset(
+                        group.Flipped, slotOffset, slotScale, out var unityScale, out var unityOffset);
+                    group.Block.SetVector(
+                        group.StPropertyId, new Vector4(unityScale.x, unityScale.y, unityOffset.x, unityOffset.y));
                 }
-                if (!hasActiveContributor && _ownershipMode == ExpressionControllerOwnershipMode.Integrated)
+                if (writeRotation) group.Block.SetFloat(group.RotationPropertyId, angle);
+                renderer.SetPropertyBlock(group.Block, slot);
+            }
+        }
+
+        // The glTF offset and scale a slot shows before this controller writes it: its property block's _ST, else its
+        // material's texture scale and offset, converted back with the inverse of the importer's _ST conversion.
+        private static bool TryGetEarlierTextureTransform(
+            TextureGroup group,
+            Renderer renderer,
+            int slot,
+            out Vector2 offset,
+            out Vector2 scale)
+        {
+            Vector4 st;
+            if (group.Block.HasVector(group.StPropertyId))
+            {
+                st = group.Block.GetVector(group.StPropertyId);
+            }
+            else
+            {
+                renderer.GetSharedMaterials(SharedMaterials);
+                var material = slot >= 0 && slot < SharedMaterials.Count ? SharedMaterials[slot] : null;
+                SharedMaterials.Clear();
+                if (material == null || !group.HasTextureProperty || !material.HasProperty(group.TexturePropertyId))
+                {
+                    offset = default;
+                    scale = default;
+                    return false;
+                }
+                var textureScale = material.GetTextureScale(group.TexturePropertyId);
+                var textureOffset = material.GetTextureOffset(group.TexturePropertyId);
+                st = new Vector4(textureScale.x, textureScale.y, textureOffset.x, textureOffset.y);
+            }
+            scale = new Vector2(st.x, group.Flipped ? -st.y : st.y);
+            offset = new Vector2(st.z, group.Flipped ? st.w - scale.y : 1f - scale.y - st.w);
+            return true;
+        }
+
+        // The current value of one texture-transform component: its record, else its authored value.
+        private static bool TryGetValue(
+            ExpressionTargetBinding binding,
+            ExpressionComposition composition,
+            out IReadOnlyList<double> value)
+        {
+            value = null;
+            if (binding == null) return false;
+            if (composition.TryGetRecord(binding.Property, out var record))
+            {
+                value = record.Value;
+                return true;
+            }
+            value = binding.AuthoredInitial;
+            return false;
+        }
+
+        private void Clear()
+        {
+            _initialized = false;
+            _set = null;
+            _authoredAnimations = null;
+            _authoredSuppressions = null;
+            _snapshot = null;
+            _composition = null;
+            _commands.Clear();
+            _selectedInputMappingSet = null;
+            SetHandles(Array.Empty<ExpressionHandle>());
+            SetMappingSets(null, null);
+            BindTargets(null);
+        }
+
+        private void SetHandles(ExpressionHandle[] handles)
+        {
+            // Array, not List: SetWeight replaces elements in place, so callers may enumerate Expressions while driving.
+            _handles = handles;
+            _weights = new float[handles.Length];
+            _nameToIndex.Clear();
+            var duplicates = new HashSet<string>(StringComparer.Ordinal);
+            for (int index = 0; index < handles.Length; index++)
+            {
+                string name = handles[index].Name;
+                if (name == null || duplicates.Contains(name)) continue;
+                if (_nameToIndex.Remove(name))
+                {
+                    duplicates.Add(name);
                     continue;
-                mt.Smr.SetBlendShapeWeight(mt.BlendShapeIndex, _semantics.Clamp01(acc) * mt.Multiplier);
+                }
+                _nameToIndex.Add(name, index);
             }
         }
 
-        private void EvaluateJointTargets()
+        private void SetMappingSets(
+            IReadOnlyList<ExpressionMappingSet> forward,
+            IReadOnlyList<ExpressionInputMappingSet> input)
         {
-            for (int t = 0; t < _jointTargets.Count; t++)
+            _outputMappingSets.Clear();
+            _inputMappingSets.Clear();
+            var outputNames = new List<string>();
+            if (forward != null)
+                foreach (var set in forward)
+                    if (set?.SetName != null && !_outputMappingSets.ContainsKey(set.SetName))
+                    {
+                        _outputMappingSets.Add(set.SetName, set);
+                        outputNames.Add(set.SetName);
+                    }
+            var inputNames = new List<string>();
+            if (input != null)
+                foreach (var set in input)
+                    if (set?.SetName != null && !_inputMappingSets.ContainsKey(set.SetName))
+                    {
+                        _inputMappingSets.Add(set.SetName, set);
+                        inputNames.Add(set.SetName);
+                    }
+            OutputVocabularySets = outputNames;
+            InputVocabularySets = inputNames;
+            var allNames = new List<string>(outputNames);
+            foreach (var name in inputNames)
+                if (!allNames.Contains(name)) allNames.Add(name);
+            VocabularySets = allNames;
+        }
+
+        private void BindTargets(ExpressionTargetBinding[] bindings)
+        {
+            _activeBindings = bindings ?? Array.Empty<ExpressionTargetBinding>();
+            _nodeBindings.Clear();
+            _morphBindings.Clear();
+            _textureGroups.Clear();
+            var groups = new Dictionary<string, TextureGroup>(StringComparer.Ordinal);
+            foreach (var binding in _activeBindings)
             {
-                var jt = _jointTargets[t];
-                if (jt.Target == null) continue;
-
-                if (jt.Channel == TrsChannel.Rotation)
+                if (binding == null || string.IsNullOrEmpty(binding.Property)) continue;
+                switch (binding.Kind)
                 {
-                    var accDelta = Quaternion.identity;
-                    bool hasActiveContributor = false;
-                    int winner = -1, winnerPrio = 0, winnerExpr = -1;
-                    for (int k = 0; k < jt.Drivers.Count; k++)
-                    {
-                        int e = jt.ExprIndices[k];
-                        float di = _d[e];
-                        if (di <= 0f) continue;
-                        hasActiveContributor = true;
-                        var driver = jt.Drivers[k];
-                        var delta = _semantics.SampleRotationDelta(driver.Sampler, driver.DeltaQuat, driver.BaseQuat, di);
-                        accDelta = _semantics.AccumulateRotation(accDelta, delta, 1f);
-                        if (IsOverride(e) && IsBetterWinner(driver.Priority, e, winner, winnerPrio, winnerExpr))
-                        { winner = k; winnerPrio = driver.Priority; winnerExpr = e; }
-                    }
-                    if (winner >= 0)
-                    {
-                        var d = jt.Drivers[winner];
-                        accDelta = _semantics.SampleRotationDelta(d.Sampler, d.DeltaQuat, d.BaseQuat, _d[jt.ExprIndices[winner]]);
-                    }
-                    if (!hasActiveContributor && _ownershipMode == ExpressionControllerOwnershipMode.Integrated)
-                        continue;
-                    jt.Target.localRotation = accDelta * jt.BaseQuat;
-                }
-                else
-                {
-                    var acc = jt.BaseVec;
-                    bool hasActiveContributor = false;
-                    int winner = -1, winnerPrio = 0, winnerExpr = -1;
-                    for (int k = 0; k < jt.Drivers.Count; k++)
-                    {
-                        int e = jt.ExprIndices[k];
-                        float di = _d[e];
-                        if (di <= 0f) continue;
-                        hasActiveContributor = true;
-                        var driver = jt.Drivers[k];
-                        acc += _semantics.SampleVectorDelta(driver.Sampler, driver.DeltaVec, driver.BaseVec, di);
-                        if (IsOverride(e) && IsBetterWinner(driver.Priority, e, winner, winnerPrio, winnerExpr))
-                        { winner = k; winnerPrio = driver.Priority; winnerExpr = e; }
-                    }
-                    if (winner >= 0)
-                    {
-                        var d = jt.Drivers[winner];
-                        acc = jt.BaseVec + _semantics.SampleVectorDelta(d.Sampler, d.DeltaVec, d.BaseVec, _d[jt.ExprIndices[winner]]);
-                    }
-                    if (!hasActiveContributor && _ownershipMode == ExpressionControllerOwnershipMode.Integrated)
-                        continue;
-                    if (jt.Channel == TrsChannel.Translation) jt.Target.localPosition = acc;
-                    else jt.Target.localScale = acc;
+                    case ExpressionPropertyKind.NodeTranslation:
+                    case ExpressionPropertyKind.NodeRotation:
+                    case ExpressionPropertyKind.NodeScale:
+                        _nodeBindings.Add(binding);
+                        break;
+                    case ExpressionPropertyKind.NodeWeights:
+                        _morphBindings.Add(binding);
+                        break;
+                    case ExpressionPropertyKind.TextureOffset:
+                    case ExpressionPropertyKind.TextureScale:
+                    case ExpressionPropertyKind.TextureRotation:
+                        string key = string.IsNullOrEmpty(binding.TextureTransform) ? binding.Property : binding.TextureTransform;
+                        if (!groups.TryGetValue(key, out var group))
+                        {
+                            group = CreateTextureGroup(binding);
+                            groups.Add(key, group);
+                            _textureGroups.Add(group);
+                        }
+                        if (binding.Kind == ExpressionPropertyKind.TextureOffset) group.Offset = binding;
+                        else if (binding.Kind == ExpressionPropertyKind.TextureScale) group.Scale = binding;
+                        else group.Rotation = binding;
+                        break;
                 }
             }
         }
 
-        private void EvaluateTextureTargets()
+        private static TextureGroup CreateTextureGroup(ExpressionTargetBinding binding)
         {
-            for (int t = 0; t < _textureTargets.Count; t++)
+            string stProperty = binding.TextureStProperty;
+            bool hasSt = !string.IsNullOrEmpty(stProperty);
+            bool hasTexture = hasSt && stProperty.Length > 3 && stProperty.EndsWith("_ST", StringComparison.Ordinal);
+            bool hasRotation = !string.IsNullOrEmpty(binding.TextureRotationProperty);
+            return new TextureGroup
             {
-                var target = _textureTargets[t];
-                if (target.Renderer == null) continue;
+                Renderers = binding.TextureRenderers ?? Array.Empty<Renderer>(),
+                Slots = binding.TextureMaterialSlots,
+                HasStProperty = hasSt,
+                StPropertyId = hasSt ? Shader.PropertyToID(stProperty) : 0,
+                HasTextureProperty = hasTexture,
+                TexturePropertyId = hasTexture ? Shader.PropertyToID(stProperty.Substring(0, stProperty.Length - 3)) : 0,
+                HasRotationProperty = hasRotation,
+                RotationPropertyId = hasRotation ? Shader.PropertyToID(binding.TextureRotationProperty) : 0,
+                Flipped = binding.TextureFlipped,
+            };
+        }
 
-                target.Renderer.GetPropertyBlock(target.Mpb, target.Slot);
-                bool writesAnyProperty = false;
-
-                // UV transforms: additive _ST over the base, with the same Override winner-takes rule as morph/joint.
-                for (int u = 0; u < target.Uv.Count; u++)
+        private static ExpressionDomain DomainsOf(ExpressionResponseSetEntry entry)
+        {
+            var domains = ExpressionDomain.None;
+            var channels = entry?.Animation?.Channels;
+            if (channels == null) return domains;
+            foreach (var channel in channels)
+            {
+                if (channel?.Target == null || !channel.EmitsRecords) continue;
+                switch (channel.Target.Kind)
                 {
-                    var uv = target.Uv[u];
-                    var st = uv.BaseSt;
-                    bool hasActiveContributor = false;
-                    int winner = -1, winnerPrio = 0, winnerExpr = -1;
-                    for (int k = 0; k < uv.Drivers.Count; k++)
-                    {
-                        int e = uv.ExprIndices[k];
-                        float di = _d[e];
-                        if (di <= 0f) continue;
-                        hasActiveContributor = true;
-                        var driver = uv.Drivers[k];
-                        st += _semantics.SampleVector4Delta(driver.Sampler, driver.StValues, driver.BaseSt, di);
-                        if (IsOverride(e) && IsBetterWinner(driver.Priority, e, winner, winnerPrio, winnerExpr))
-                        { winner = k; winnerPrio = driver.Priority; winnerExpr = e; }
-                    }
-                    if (winner >= 0)
-                    {
-                        var d = uv.Drivers[winner];
-                        st = uv.BaseSt + _semantics.SampleVector4Delta(d.Sampler, d.StValues, d.BaseSt, _d[uv.ExprIndices[winner]]);
-                    }
-                    if (!hasActiveContributor && _ownershipMode == ExpressionControllerOwnershipMode.Integrated)
-                        continue;
-                    target.Mpb.SetVector(uv.PropId, st);
-                    writesAnyProperty = true;
+                    case ExpressionPropertyKind.NodeTranslation:
+                    case ExpressionPropertyKind.NodeRotation:
+                    case ExpressionPropertyKind.NodeScale:
+                        domains |= ExpressionDomain.Joint;
+                        break;
+                    case ExpressionPropertyKind.NodeWeights:
+                        domains |= ExpressionDomain.Morph;
+                        break;
+                    case ExpressionPropertyKind.TextureOffset:
+                    case ExpressionPropertyKind.TextureScale:
+                    case ExpressionPropertyKind.TextureRotation:
+                        domains |= ExpressionDomain.Texture;
+                        break;
                 }
-
-                if (writesAnyProperty)
-                    target.Renderer.SetPropertyBlock(target.Mpb, target.Slot);
             }
+            return domains;
         }
 
-        // True when the expression at exprIndex requests Override (winner-takes) compositing.
-        private bool IsOverride(int exprIndex)
+        // A suppression lives on its source track; one whose target is not a track of the set is dropped.
+        private static IReadOnlyList<SuppressionEntry>[] BuildAuthoredSuppressions(ExpressionTrack[] tracks)
         {
-            var exprs = _set?.Expressions;
-            return exprs != null && exprIndex >= 0 && exprIndex < exprs.Length
-                && exprs[exprIndex] != null && exprs[exprIndex].BlendMode == ExpressionBlendMode.Override;
-        }
-
-        // Override winner selection on a forward scan of a target's contributors: higher Priority wins; on a tie
-        // the latest declaration wins. A target's expression indices are non-decreasing across k, so a >= test
-        // keeps the latest (highest exprIndex / latest declaration order). bestK < 0 means "no winner yet".
-        private static bool IsBetterWinner(int priority, int exprIndex, int bestK, int bestPriority, int bestExpr)
-        {
-            if (bestK < 0) return true;
-            if (priority != bestPriority) return priority > bestPriority;
-            return exprIndex >= bestExpr;
+            var result = new IReadOnlyList<SuppressionEntry>[tracks.Length];
+            for (int source = 0; source < tracks.Length; source++)
+            {
+                var suppressions = tracks[source]?.Suppressions;
+                if (suppressions == null || suppressions.Length == 0) continue;
+                var valid = new List<SuppressionEntry>(suppressions.Length);
+                foreach (var suppression in suppressions)
+                {
+                    if (suppression == null) continue;
+                    if (suppression.TargetIndex < 0 || suppression.TargetIndex >= tracks.Length)
+                    {
+                        Debug.LogWarning(
+                            $"[KHR_character] Expression {source} suppresses expression {suppression.TargetIndex}, " +
+                            "which is not in the set; ignoring that suppression.");
+                        continue;
+                    }
+                    valid.Add(suppression);
+                }
+                result[source] = valid;
+            }
+            return result;
         }
 
         private bool TryIndex(string name, out int index)
         {
             index = -1;
-            if (_set?.NameToIndex == null || name == null) return false;
-            return _set.NameToIndex.TryGetValue(name, out index);
+            return name != null && _nameToIndex.TryGetValue(name, out index);
         }
 
-        private static float GetMultiplier(SkinnedMeshRenderer smr, int blendShapeIndex)
+        private static float Clamp01(float value, string parameter, string description)
         {
-            var mesh = smr.sharedMesh;
-            if (mesh == null || blendShapeIndex < 0 || blendShapeIndex >= mesh.blendShapeCount) return 1f;
-            // The importer adds one blendshape frame per target with weight = BlendShapeFrameWeight.
-            return mesh.GetBlendShapeFrameWeight(blendShapeIndex, 0);
+            if (float.IsNaN(value) || float.IsInfinity(value))
+                throw new ArgumentOutOfRangeException(parameter, $"{description} must be finite.");
+            return value < 0f ? 0f : (value > 1f ? 1f : value);
         }
-
-        private static float ValidateUnit(float value)
-        {
-            if (float.IsNaN(value) || float.IsInfinity(value) || value < 0f || value > 1f)
-                throw new System.ArgumentOutOfRangeException(nameof(value), "Mapping commands must be finite values in [0, 1].");
-            return value;
-        }
-
     }
 }

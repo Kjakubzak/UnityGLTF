@@ -3,9 +3,8 @@ using Newtonsoft.Json.Linq;
 namespace GLTF.Schema
 {
     /// <summary>
-    /// <c>KHR_character_expression_morphtarget</c> sub-extension of <c>KHR_character_expression</c>.
-    /// Classifies indices into the referenced animation's <c>channels[]</c> that target morph weights. Classification
-    /// adds validity rules but never selects or filters the base expression evaluator's channel set.
+    /// <c>KHR_character_expression_morphtarget</c> derived expression extension of <c>KHR_character_expression</c>.
+    /// Lists indices into the referenced animation's <c>channels[]</c> that target morph weights.
     /// </summary>
     public class KHR_character_expression_morphtarget : IExtension
     {

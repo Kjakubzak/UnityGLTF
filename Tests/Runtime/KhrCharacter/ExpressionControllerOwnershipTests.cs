@@ -56,6 +56,23 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [UnityTest]
+        public IEnumerator IntegratedPartlyActiveMorphWritesOnlyCoveredWeights()
+        {
+            var root = BuildMorphAndJointSet(out var set, out var smr, out _, blendShapeCount: 2);
+            var controller = root.AddComponent<ExpressionController>();
+            controller.OwnershipMode = ExpressionControllerOwnershipMode.Integrated;
+            controller.Initialize(set);
+
+            smr.SetBlendShapeWeight(1, 37f);
+            controller.SetWeight(0, 1f);
+            yield return null;
+
+            Assert.That(smr.GetBlendShapeWeight(0), Is.EqualTo(75f).Within(1e-4f), "the covered weight is written");
+            Assert.That(smr.GetBlendShapeWeight(1), Is.EqualTo(37f).Within(1e-4f),
+                "a weight no record covers keeps the earlier writer's value");
+        }
+
+        [UnityTest]
         public IEnumerator IntegratedInactiveTexturePreservesLivePropertyBlock()
         {
             var renderer = BuildTextureSet(out var set, out int propertyId, out var root);
@@ -72,6 +89,31 @@ namespace UnityGLTF.KhrCharacter.Tests
             yield return null;
 
             Assert.That(GetPropertyBlock(renderer, propertyId), Is.EqualTo(underlay));
+        }
+
+        [UnityTest]
+        public IEnumerator IntegratedPartlyActiveTextureKeepsTheEarlierScale()
+        {
+            var renderer = BuildTextureSet(out var set, out int propertyId, out var root);
+            var controller = root.AddComponent<ExpressionController>();
+            controller.OwnershipMode = ExpressionControllerOwnershipMode.Integrated;
+            controller.Initialize(set);
+
+            // The expression lists only the offset: at full weight its record is the glTF offset (1, 0).
+            renderer.sharedMaterial.SetTextureScale("_MainTex", new Vector2(2f, 3f));
+            controller.SetWeight(0, 1f);
+            yield return null;
+            Assert.That(GetPropertyBlock(renderer, propertyId), Is.EqualTo(new Vector4(2f, 3f, 1f, -2f)),
+                "the material's scale is kept under the recorded offset");
+
+            yield return null;
+            Assert.That(GetPropertyBlock(renderer, propertyId), Is.EqualTo(new Vector4(2f, 3f, 1f, -2f)),
+                "reading back its own write keeps the same scale");
+
+            SetPropertyBlock(renderer, propertyId, new Vector4(4f, 0.5f, 9f, 9f));
+            yield return null;
+            Assert.That(GetPropertyBlock(renderer, propertyId), Is.EqualTo(new Vector4(4f, 0.5f, 1f, 0.5f)),
+                "a property block's scale is kept under the recorded offset");
         }
 
         [UnityTest]
@@ -96,19 +138,21 @@ namespace UnityGLTF.KhrCharacter.Tests
         private GameObject BuildMorphAndJointSet(
             out CharacterExpressionSet set,
             out SkinnedMeshRenderer smr,
-            out Transform joint)
+            out Transform joint,
+            int blendShapeCount = 1)
         {
             var root = new GameObject("character");
             _created.Add(root);
             var mesh = new Mesh { name = "ownership-test" };
             mesh.vertices = new[] { Vector3.zero, Vector3.right, Vector3.up };
             mesh.triangles = new[] { 0, 1, 2 };
-            mesh.AddBlendShapeFrame(
-                "shape0",
-                100f,
-                new[] { Vector3.one, Vector3.one, Vector3.one },
-                null,
-                null);
+            for (int index = 0; index < blendShapeCount; index++)
+                mesh.AddBlendShapeFrame(
+                    "shape" + index,
+                    100f,
+                    new[] { Vector3.one, Vector3.one, Vector3.one },
+                    null,
+                    null);
             _created.Add(mesh);
             smr = root.AddComponent<SkinnedMeshRenderer>();
             smr.sharedMesh = mesh;

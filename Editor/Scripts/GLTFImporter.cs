@@ -51,7 +51,8 @@ namespace UnityGLTF
 #endif
     public class GLTFImporter : ScriptedImporter
     {
-	    private const int ImporterVersion = 9;
+	    // 10 is a fork bump for the KHR_character expression component formats; upstream UnityGLTF is still at 9.
+	    private const int ImporterVersion = 10;
 
 	    private static void EnsureShadersAreLoaded()
 	    {

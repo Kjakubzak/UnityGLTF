@@ -15,6 +15,13 @@ namespace UnityGLTF.VisibilityHints
         public class NodeVisibilityEntry
         {
             public Transform Node;
+
+            /// <summary>
+            /// True when the entry was imported from a glTF node without a nonempty <c>name</c>. UnityGLTF names such
+            /// a node's GameObject <c>GLTFNode&lt;index&gt;</c>, which is not a node name, so presentation skips it.
+            /// </summary>
+            public bool NodeUnnamed;
+
             public string Role;
             public string Label;
             public string ExtensionsJson;
@@ -66,8 +73,26 @@ namespace UnityGLTF.VisibilityHints
         }
 
         public bool ShouldRenderVisualContent(
-            Transform node, string activeContext, bool ancestorInclusiveCoreVisible)
+            Transform node,
+            IReadOnlyCollection<string> viewTags,
+            bool ancestorInclusiveCoreVisible,
+            IVisibilityRoleResolver resolver = null,
+            bool renderUnsupportedRoles = false)
             => VisibilityHintEvaluator.ShouldRenderNodeVisualContent(
-                ResolveRole(node), activeContext, ancestorInclusiveCoreVisible);
+                ResolveRole(node), viewTags, ancestorInclusiveCoreVisible, resolver, renderUnsupportedRoles);
+
+        /// <summary>
+        /// Presentation name for an entry: its label, else the node's nonempty name, else its role. The node name is
+        /// the GameObject's name, except for an entry imported from an unnamed glTF node
+        /// (<see cref="NodeVisibilityEntry.NodeUnnamed"/>). Export still writes the synthesized GameObject name back.
+        /// </summary>
+        public static string GetDisplayName(NodeVisibilityEntry entry)
+        {
+            if (entry == null) return null;
+            if (!string.IsNullOrEmpty(entry.Label)) return entry.Label;
+            if (!entry.NodeUnnamed && entry.Node != null && !string.IsNullOrEmpty(entry.Node.name))
+                return entry.Node.name;
+            return entry.Role;
+        }
     }
 }

@@ -6,8 +6,10 @@ namespace GLTF.Schema
 {
     /// <summary>
     /// glTF root extension <c>KHR_character_expression</c> (PR #2512): declares labeled finite scalar-response
-    /// entries, each referencing one glTF animation evaluated by a 0..1 driver. Each item's classifier extensions
-    /// (morphtarget / joint / texture / mask) are parsed inline from the item's <c>extensions</c>.
+    /// entries, each referencing one glTF animation evaluated by a 0..1 driver. Each entry's derived expression
+    /// extensions (morphtarget / joint / texture_transform) and its suppression extension are parsed inline from
+    /// the entry's <c>extensions</c>; any other entry extension is kept verbatim in
+    /// <see cref="ExpressionItem.RawExtensions"/>.
     /// </summary>
     public class KHR_character_expression : IExtension
     {
@@ -21,14 +23,21 @@ namespace GLTF.Schema
 
         public class ExpressionItem
         {
-            public string Expression;                              // expression label (required)
+            /// <summary>Required nonempty descriptive label. Labels are not unique; array indices identify entries.</summary>
+            public string Name;
             public int Animation;                                 // index into glTF animations (required)
             public KHR_character_expression_morphtarget Morphtarget;
             public KHR_character_expression_joint Joint;
-            public KHR_character_expression_texture Texture;
-            public KHR_character_expression_mask Mask;
+            public KHR_character_expression_texture_transform TextureTransform;
+            public KHR_character_expression_suppression Suppression;
             public JToken Extras;                                 // glTF-standard per-item extras; may contain any JSON value
             public JObject RawExtensions;                         // preserved for forward-compat
+
+            /// <summary>
+            /// Entry members other than <c>name</c>, <c>animation</c>, <c>extensions</c> and <c>extras</c>, preserved
+            /// verbatim. A legacy <c>expression</c> label stays here and never populates <see cref="Name"/>.
+            /// </summary>
+            public JObject AdditionalProperties;
         }
 
         public JProperty Serialize()
@@ -39,9 +48,12 @@ namespace GLTF.Schema
                 foreach (var item in Expressions)
                 {
                     if (item == null) continue;
-                    var itemObj = new JObject();
-                    if (item.Expression != null) itemObj.Add("expression", item.Expression);
-                    itemObj.Add("animation", item.Animation);
+                    var itemObj = item.AdditionalProperties != null
+                        ? (JObject)item.AdditionalProperties.DeepClone()
+                        : new JObject();
+                    if (item.Name != null) itemObj["name"] = item.Name;
+                    else itemObj.Remove("name");
+                    itemObj["animation"] = item.Animation;
 
                     var exts = item.RawExtensions != null
                         ? (JObject)item.RawExtensions.DeepClone()
@@ -49,11 +61,13 @@ namespace GLTF.Schema
                     RemoveKnownSubExtensions(exts);
                     AddSubExtension(exts, item.Morphtarget);
                     AddSubExtension(exts, item.Joint);
-                    AddSubExtension(exts, item.Texture);
-                    AddSubExtension(exts, item.Mask);
-                    if (exts.HasValues) itemObj.Add("extensions", exts);
+                    AddSubExtension(exts, item.TextureTransform);
+                    AddSubExtension(exts, item.Suppression);
+                    if (exts.HasValues) itemObj["extensions"] = exts;
+                    else itemObj.Remove("extensions");
 
-                    if (item.Extras != null) itemObj.Add("extras", item.Extras.DeepClone());
+                    if (item.Extras != null) itemObj["extras"] = item.Extras.DeepClone();
+                    else itemObj.Remove("extras");
 
                     arr.Add(itemObj);
                 }
@@ -82,11 +96,10 @@ namespace GLTF.Schema
             var names = new List<string>();
             foreach (var property in extensions.Properties())
             {
-                var canonical = KhrCharacterExtensionNames.Canonicalize(property.Name);
-                if (canonical == KhrCharacterExtensionNames.ExpressionMorphtarget
-                    || canonical == KhrCharacterExtensionNames.ExpressionJoint
-                    || canonical == KhrCharacterExtensionNames.ExpressionTexture
-                    || canonical == KhrCharacterExtensionNames.ExpressionMask)
+                if (property.Name == KhrCharacterExtensionNames.ExpressionMorphtarget
+                    || property.Name == KhrCharacterExtensionNames.ExpressionJoint
+                    || property.Name == KhrCharacterExtensionNames.ExpressionTextureTransform
+                    || property.Name == KhrCharacterExtensionNames.ExpressionSuppression)
                     names.Add(property.Name);
             }
             foreach (var name in names) extensions.Remove(name);
@@ -116,15 +129,18 @@ namespace GLTF.Schema
                 }
                 clone.Add(new ExpressionItem
                 {
-                    Expression = item.Expression,
+                    Name = item.Name,
                     Animation = item.Animation,
                     Morphtarget = item.Morphtarget?.Clone(root) as KHR_character_expression_morphtarget,
                     Joint = item.Joint?.Clone(root) as KHR_character_expression_joint,
-                    Texture = item.Texture?.Clone(root) as KHR_character_expression_texture,
-                    Mask = item.Mask?.Clone(root) as KHR_character_expression_mask,
+                    TextureTransform = item.TextureTransform?.Clone(root) as KHR_character_expression_texture_transform,
+                    Suppression = item.Suppression?.Clone(root) as KHR_character_expression_suppression,
                     Extras = item.Extras?.DeepClone(),
                     RawExtensions = item.RawExtensions != null
                         ? (JObject)item.RawExtensions.DeepClone()
+                        : null,
+                    AdditionalProperties = item.AdditionalProperties != null
+                        ? (JObject)item.AdditionalProperties.DeepClone()
                         : null,
                 });
             }
@@ -164,27 +180,32 @@ namespace GLTF.Schema
                 if (!(node is JObject itemObj)) continue;
                 var item = new KHR_character_expression.ExpressionItem
                 {
-                    Expression = itemObj["expression"]?.Value<string>(),
+                    Name = itemObj["name"]?.Value<string>(),
                     Animation = itemObj["animation"]?.Value<int>() ?? -1,
                     Extras = itemObj["extras"]?.DeepClone(),
+                    AdditionalProperties = new JObject(),
                 };
+                foreach (var property in itemObj.Properties())
+                    if (property.Name != "name" && property.Name != "animation"
+                        && property.Name != "extensions" && property.Name != "extras")
+                        item.AdditionalProperties.Add(property.Name, property.Value.DeepClone());
+                if (!item.AdditionalProperties.HasValues) item.AdditionalProperties = null;
 
                 if (itemObj["extensions"] is JObject itemExts)
                 {
                     item.RawExtensions = (JObject)itemExts.DeepClone();
                     foreach (var p in itemExts.Properties())
                     {
-                        var canonical = KhrCharacterExtensionNames.Canonicalize(p.Name);
                         var subObj = p.Value as JObject;
                         if (subObj == null) continue;
-                        if (canonical == KhrCharacterExtensionNames.ExpressionMorphtarget)
+                        if (p.Name == KhrCharacterExtensionNames.ExpressionMorphtarget)
                             item.Morphtarget = KHR_character_expression_morphtarget.FromJson(subObj);
-                        else if (canonical == KhrCharacterExtensionNames.ExpressionJoint)
+                        else if (p.Name == KhrCharacterExtensionNames.ExpressionJoint)
                             item.Joint = KHR_character_expression_joint.FromJson(subObj);
-                        else if (canonical == KhrCharacterExtensionNames.ExpressionTexture)
-                            item.Texture = KHR_character_expression_texture.FromJson(subObj);
-                        else if (canonical == KhrCharacterExtensionNames.ExpressionMask)
-                            item.Mask = KHR_character_expression_mask.FromJson(subObj);
+                        else if (p.Name == KhrCharacterExtensionNames.ExpressionTextureTransform)
+                            item.TextureTransform = KHR_character_expression_texture_transform.FromJson(subObj);
+                        else if (p.Name == KhrCharacterExtensionNames.ExpressionSuppression)
+                            item.Suppression = KHR_character_expression_suppression.FromJson(subObj);
                     }
                 }
 

@@ -3,13 +3,13 @@ using Newtonsoft.Json.Linq;
 namespace GLTF.Schema
 {
     /// <summary>
-    /// <c>KHR_character_expression_texture</c> sub-extension of <c>KHR_character_expression</c>.
-    /// Classifies channels whose <c>KHR_animation_pointer</c> targets an authored
-    /// <c>KHR_texture_transform</c> property. It does not select or alter base evaluation.
+    /// <c>KHR_character_expression_texture_transform</c> derived expression extension of
+    /// <c>KHR_character_expression</c>. Lists the entry's channels whose <c>KHR_animation_pointer</c> targets an
+    /// authored <c>KHR_texture_transform</c> property.
     /// </summary>
-    public class KHR_character_expression_texture : IExtension
+    public class KHR_character_expression_texture_transform : IExtension
     {
-        public const string EXTENSION_NAME = "KHR_character_expression_texture";
+        public const string EXTENSION_NAME = "KHR_character_expression_texture_transform";
 
         public int[] Channels;
         public JObject Extensions;
@@ -17,9 +17,9 @@ namespace GLTF.Schema
         public JObject AdditionalProperties;
         public JProperty RawData;
 
-        public static KHR_character_expression_texture FromJson(JObject obj)
+        public static KHR_character_expression_texture_transform FromJson(JObject obj)
         {
-            var ext = new KHR_character_expression_texture();
+            var ext = new KHR_character_expression_texture_transform();
             if (obj?["channels"] is JArray arr)
             {
                 ext.Channels = new int[arr.Count];
@@ -59,7 +59,7 @@ namespace GLTF.Schema
             return new JProperty(EXTENSION_NAME, obj);
         }
 
-        public IExtension Clone(GLTFRoot root) => new KHR_character_expression_texture
+        public IExtension Clone(GLTFRoot root) => new KHR_character_expression_texture_transform
         {
             Channels = (int[])Channels?.Clone(),
             Extensions = Extensions != null ? (JObject)Extensions.DeepClone() : null,
@@ -71,17 +71,17 @@ namespace GLTF.Schema
         };
     }
 
-    public class KHR_character_expression_texture_Factory : ExtensionFactory
+    public class KHR_character_expression_texture_transform_Factory : ExtensionFactory
     {
-        public const string EXTENSION_NAME = KHR_character_expression_texture.EXTENSION_NAME;
-        public KHR_character_expression_texture_Factory()
+        public const string EXTENSION_NAME = KHR_character_expression_texture_transform.EXTENSION_NAME;
+        public KHR_character_expression_texture_transform_Factory()
         {
             ExtensionName = EXTENSION_NAME;
             RequiresRuntimeSupportForRequiredUse = true;
         }
         public override IExtension Deserialize(GLTFRoot root, JProperty token)
         {
-            var e = KHR_character_expression_texture.FromJson(token.Value as JObject);
+            var e = KHR_character_expression_texture_transform.FromJson(token.Value as JObject);
             e.RawData = token;
             return e;
         }
