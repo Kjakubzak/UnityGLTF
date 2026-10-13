@@ -646,10 +646,8 @@ namespace UnityGLTF.KhrCharacter
                 {
                     throw InvalidExpression($"{description} identity type has no custom token.");
                 }
-                if (suppression.HasAmount) RequireUnit(suppression.Amount, $"{description} amount");
-                if (suppression.HasThreshold
-                    && KHR_character_expression_suppression.AllowsThreshold(SuppressionTypeToken(suppression)))
-                    RequireUnit(suppression.Threshold, $"{description} threshold");
+                if (WritesAmount(suppression)) RequireUnit(suppression.Amount, $"{description} amount");
+                if (WritesThreshold(suppression)) RequireUnit(suppression.Threshold, $"{description} threshold");
                 AddExtensionNames(
                     companionExtensionNames,
                     ParseExtensionsObject(suppression.RawExtensionsJson, $"{description} companion extensions"));
@@ -667,6 +665,16 @@ namespace UnityGLTF.KhrCharacter
             if (!string.IsNullOrEmpty(suppression.CustomType)) return suppression.CustomType;
             return suppression.Type == SuppressionType.Block ? "block" : "blend";
         }
+
+        // Pre-rename serialized masks, inspector edits and direct field writes can leave a presence flag clear on a
+        // non-default value that the runtime still applies. Such a value counts as authored; a value omitted on
+        // import keeps its default and stays omitted.
+        private static bool WritesAmount(SuppressionEntry suppression)
+            => suppression.HasAmount || suppression.Amount != 1d;
+
+        private static bool WritesThreshold(SuppressionEntry suppression)
+            => (suppression.HasThreshold || suppression.Threshold != 0d)
+               && KHR_character_expression_suppression.AllowsThreshold(SuppressionTypeToken(suppression));
 
         private static void ValidateMappings(CharacterExpressionSet set)
         {
@@ -1311,16 +1319,12 @@ namespace UnityGLTF.KhrCharacter
                     var companionExtensions = ParseExtensionsObject(
                         suppression.RawExtensionsJson,
                         "Suppression entry companion extensions");
-                    string type = SuppressionTypeToken(suppression);
                     suppressions.Add(new KHR_character_expression_suppression.Suppression
                     {
                         Target = targetIndex,
-                        Type = type,
-                        Amount = suppression.HasAmount ? suppression.Amount : (double?)null,
-                        Threshold = suppression.HasThreshold
-                                    && KHR_character_expression_suppression.AllowsThreshold(type)
-                            ? suppression.Threshold
-                            : (double?)null,
+                        Type = SuppressionTypeToken(suppression),
+                        Amount = WritesAmount(suppression) ? suppression.Amount : (double?)null,
+                        Threshold = WritesThreshold(suppression) ? suppression.Threshold : (double?)null,
                         Extensions = companionExtensions,
                         Extras = ParseToken(suppression.RawExtrasJson),
                         AdditionalProperties = ParseObject(suppression.RawAdditionalPropertiesJson),

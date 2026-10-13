@@ -62,8 +62,10 @@ ordinary content, because additional characters are out of scope for one asset.
 
 `KHR_character_expression_suppression` objects carry `target`, `type`, `amount` and `threshold`. Import keeps the
 authored `amount` and `threshold` as JSON doubles together with whether each was present
-(`SuppressionEntry.HasAmount` / `HasThreshold`); an omitted value reads as `1` or `0`. Export writes back exactly what
-was authored: `amount` only when present, and `threshold` only when present on a `block` or custom type. A threshold is
+(`SuppressionEntry.HasAmount` / `HasThreshold`); an omitted value reads as `1` or `0`. Export writes back what was
+authored: `amount` when its flag is set or it differs from `1`, and `threshold` when its flag is set or it differs from
+`0`. A value omitted on import keeps its default and stays omitted, while a non-default value whose flag is clear
+(pre-rename serialized masks, inspector or code edits) is still written, because the runtime applies it. A threshold is
 never written on a `blend` or omitted type. A custom type keeps its token and its uninterpreted `amount` and
 `threshold`. A legacy suppression `name` is an unknown member: preserved, never compared with the target.
 

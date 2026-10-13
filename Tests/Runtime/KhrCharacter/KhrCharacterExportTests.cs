@@ -818,6 +818,111 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
+        public void ExpressionMetadataExport_WritesNonDefaultSuppressionValuesWithoutPresenceFlags()
+        {
+            // Pre-rename serialized masks, inspector edits and direct field writes leave HasAmount / HasThreshold
+            // false while the runtime still applies Amount and Threshold. Export must write those values, or a
+            // block with amount 0.5 above 0.2 would read back as a full block at any positive driver.
+            var root = new GameObject("char");
+            _created.Add(root);
+            var ctrl = new GameObject("ctrl").transform;
+            ctrl.SetParent(root.transform, false);
+            root.AddComponent<ExpressionController>().Initialize(new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack
+                    {
+                        Name = "aa", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
+                    },
+                    new ExpressionTrack
+                    {
+                        Name = "angry", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
+                        Suppressions = new[]
+                        {
+                            new SuppressionEntry
+                            {
+                                TargetIndex = 0, SourceIndex = 1, Type = SuppressionType.Block,
+                                Amount = 0.5, Threshold = 0.2,
+                            },
+                        },
+                    },
+                    new ExpressionTrack
+                    {
+                        Name = "happy", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
+                        Suppressions = new[]
+                        {
+                            new SuppressionEntry
+                            {
+                                TargetIndex = 0, SourceIndex = 2, Type = SuppressionType.Blend,
+                                Amount = 0.5, Threshold = 0.3,
+                            },
+                        },
+                    },
+                },
+            });
+
+            var ext = ExportToGltfRoot(root).Extensions[KHR_character_expression.EXTENSION_NAME]
+                as KHR_character_expression;
+            Assert.IsNotNull(ext);
+            var wireToTrackIndex = new Dictionary<int, int>();
+            for (int i = 0; i < ext.Expressions.Count; i++) wireToTrackIndex[i] = i;
+
+            int angryIndex = ext.Expressions.FindIndex(e => e.Name == "angry");
+            var angry = ext.Expressions[angryIndex].Suppression;
+            var angryWire = (JObject)((JArray)((JObject)angry.Serialize().Value)["suppressions"])[0];
+            Assert.AreEqual("block", angryWire["type"].Value<string>());
+            Assert.AreEqual(0.5, angryWire["amount"].Value<double>());
+            Assert.AreEqual(0.2, angryWire["threshold"].Value<double>());
+            var angryEntries = KhrCharacterBaker.BuildSuppressionEntries(angry, angryIndex, wireToTrackIndex);
+            Assert.AreEqual(0.5, angryEntries[0].Amount);
+            Assert.AreEqual(0.2, angryEntries[0].Threshold);
+
+            var happy = ext.Expressions.Find(e => e.Name == "happy").Suppression;
+            var happyWire = (JObject)((JArray)((JObject)happy.Serialize().Value)["suppressions"])[0];
+            Assert.AreEqual(0.5, happyWire["amount"].Value<double>());
+            Assert.IsNull(happyWire["threshold"], "a blend suppression never writes a threshold");
+        }
+
+        [TestCase(1.5, 0d, "amount")]
+        [TestCase(1d, -0.1, "threshold")]
+        public void UnflaggedOutOfRangeSuppressionValueAbortsWholeCharacterExport(
+            double amount, double threshold, string member)
+        {
+            var root = new GameObject("char");
+            _created.Add(root);
+            root.AddComponent<ExpressionController>().Initialize(new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack
+                    {
+                        Name = "target",
+                        Domains = ExpressionDomain.Joint,
+                        JointDrivers = new[] { RotationDriver(root.transform) },
+                    },
+                    new ExpressionTrack
+                    {
+                        Name = "suppressing",
+                        Domains = ExpressionDomain.Joint,
+                        JointDrivers = new[] { RotationDriver(root.transform) },
+                        Suppressions = new[]
+                        {
+                            new SuppressionEntry
+                            {
+                                TargetIndex = 0, SourceIndex = 1, Type = SuppressionType.Block,
+                                Amount = amount, Threshold = threshold,
+                            },
+                        },
+                    },
+                },
+            });
+
+            var exception = Assert.Catch<System.InvalidOperationException>(() => ExportToGltfRoot(root));
+            StringAssert.Contains($"{member} must be finite and in [0, 1]", exception.Message);
+        }
+
+        [Test]
         public void ExpressionMetadataExport_IncludesMappingSets()
         {
             // ExpressionMappingSet[] export as the root KHR_character_expression_mapping extension:

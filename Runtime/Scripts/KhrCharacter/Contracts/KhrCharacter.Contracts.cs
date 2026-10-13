@@ -102,8 +102,9 @@ namespace UnityGLTF.KhrCharacter
 
     /// <summary>
     /// One <c>KHR_character_expression_suppression</c> rule. <see cref="Amount"/> and <see cref="Threshold"/>
-    /// carry the authored JSON doubles; the presence flags record whether each was authored so export writes
-    /// back exactly what the author set.
+    /// carry the authored JSON doubles; the presence flags record whether each was authored. Export writes a value
+    /// when its flag is set or when it differs from its default, so a value omitted on import stays omitted and a
+    /// non-default value without its flag (pre-rename serialized data, inspector or code edits) is not dropped.
     /// </summary>
     [Serializable]
     public class SuppressionEntry
