@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using GLTF.Schema;
+using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using UnityEngine;
 using UnityGLTF.Extensions;
@@ -391,7 +392,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void MatrixBackedNodeTranslationCanBeTargetedByAnimationPointer()
+        public void MatrixBackedNodeTranslationCannotBeTargetedByAnimationPointer()
         {
             var fixture = new Fixture();
             int input = fixture.AddFloatAccessor(
@@ -417,11 +418,413 @@ namespace UnityGLTF.KhrCharacter.Tests
                 new[] { new SamplerSpec(input, output) },
                 new[] { PointerChannel(0, fixture.Root, "/nodes/0/translation") });
 
-            var response = ExpressionResponseEvaluator.Evaluate(fixture.Bake("matrix-pointer")[0].Animation, 1f);
+            var exception = Assert.Throws<ExpressionResponseEvaluationException>(
+                () => fixture.Bake("matrix-pointer"),
+                "an expression channel must not target the translation of a matrix node, even through a pointer");
+            StringAssert.Contains("matrix-backed", exception.Message);
+        }
 
-            Assert.That(response.Records[0].Value[0], Is.EqualTo(5f));
-            Assert.That(response.Records[0].Value[1], Is.EqualTo(6f));
-            Assert.That(response.Records[0].Value[2], Is.EqualTo(7f));
+        [Test]
+        public void CoreWeightsChannelOnMatrixNodeIsInvalidButPointerWeightsAreAllowed()
+        {
+            foreach (bool pointerForm in new[] { false, true })
+            {
+                var fixture = new Fixture();
+                int input = AddTwoKeyInput(fixture);
+                int output = fixture.AddFloatAccessor(GLTFAccessorAttributeType.SCALAR, 2, new[] { 0f, 1f });
+                AddMorphMesh(fixture, null, 1);
+                fixture.Root.Nodes.Add(new Node
+                {
+                    Mesh = new MeshId { Id = 0, Root = fixture.Root },
+                    Matrix = new GLTF.Math.Matrix4x4(GLTF.Math.Matrix4x4.Identity),
+                    HasMatrix = true,
+                });
+                fixture.AddAnimation(
+                    new[] { new SamplerSpec(input, output) },
+                    new[]
+                    {
+                        pointerForm
+                            ? PointerChannel(0, fixture.Root, "/nodes/0/weights")
+                            : CoreChannel(0, fixture.Root, 0, "weights"),
+                    });
+
+                if (pointerForm)
+                {
+                    Assert.DoesNotThrow(() => fixture.Bake("pointer-weights"),
+                        "core glTF forbids matrix only on nodes a core channel targets");
+                }
+                else
+                {
+                    var exception = Assert.Throws<ExpressionResponseEvaluationException>(
+                        () => fixture.Bake("core-weights"));
+                    StringAssert.Contains("matrix-backed", exception.Message);
+                }
+            }
+        }
+
+        [Test]
+        public void UnlistedChannelExtendsDurationAndEmitsNothing()
+        {
+            var fixture = new Fixture();
+            int shortInput = AddTwoKeyInput(fixture);
+            int longInput = fixture.AddFloatAccessor(GLTFAccessorAttributeType.SCALAR, 2, new[] { 0f, 4f }, 0d, 4d);
+            int move = fixture.AddFloatAccessor(GLTFAccessorAttributeType.VEC3, 2, new[] { 0f, 0f, 0f, 1f, 2f, 3f });
+            int grow = fixture.AddFloatAccessor(GLTFAccessorAttributeType.VEC3, 2, new[] { 1f, 1f, 1f, 2f, 2f, 2f });
+            fixture.Root.Nodes.Add(new Node());
+            fixture.AddAnimation(
+                new[] { new SamplerSpec(shortInput, move), new SamplerSpec(longInput, grow) },
+                new[]
+                {
+                    CoreChannel(0, fixture.Root, 0, "translation"),
+                    CoreChannel(1, fixture.Root, 0, "scale"),
+                });
+
+            var entries = fixture.Bake(Entry("move", 0, joint: new[] { 0 }));
+            var unlisted = entries[0].Animation.Channels[1];
+            var response = ExpressionResponseEvaluator.Evaluate(entries[0].Animation, 0.5f);
+
+            Assert.That(response.Duration, Is.EqualTo(4f), "the unlisted channel still counts toward T");
+            Assert.That(response.Records.Count, Is.EqualTo(1));
+            Assert.That(response.Records[0].ChannelIndex, Is.EqualTo(0));
+            Assert.That(entries[0].Animation.Channels[0].ListedBy, Is.EqualTo(KhrCharacterExtensionNames.ExpressionJoint));
+            Assert.IsNull(unlisted.ListedBy);
+            Assert.IsFalse(unlisted.EmitsRecords);
+            Assert.IsTrue(unlisted.Target.IsSupported, "an unlisted channel is still decoded and validated");
+        }
+
+        [Test]
+        public void UnlistedChannelWithWrongTimeZeroValueIsStillRejected()
+        {
+            var fixture = new Fixture();
+            int input = AddTwoKeyInput(fixture);
+            int move = fixture.AddFloatAccessor(GLTFAccessorAttributeType.VEC3, 2, new[] { 0f, 0f, 0f, 1f, 2f, 3f });
+            int grow = fixture.AddFloatAccessor(GLTFAccessorAttributeType.VEC3, 2, new[] { 2f, 2f, 2f, 3f, 3f, 3f });
+            fixture.Root.Nodes.Add(new Node());
+            fixture.AddAnimation(
+                new[] { new SamplerSpec(input, move), new SamplerSpec(input, grow) },
+                new[]
+                {
+                    CoreChannel(0, fixture.Root, 0, "translation"),
+                    CoreChannel(1, fixture.Root, 0, "scale"),
+                });
+
+            var exception = Assert.Throws<ExpressionResponseEvaluationException>(
+                () => fixture.Bake(Entry("move", 0, joint: new[] { 0 })));
+            StringAssert.Contains("Channel 1 time-zero sample", exception.Message);
+        }
+
+        [Test]
+        public void ChannelListedOnlyByUnknownExtensionEmitsNothingAndMakesValidationIncomplete()
+        {
+            var fixture = TranslationFixture();
+            var item = Entry("vendor", 0);
+            item.RawExtensions = new JObject { { "ACME_x", new JObject { { "channels", new JArray(0) } } } };
+
+            var entries = fixture.Bake(new[] { item }, null, out var validation);
+
+            Assert.IsFalse(validation.IsComplete, "an unrecognized entry extension is not a rejection");
+            StringAssert.Contains("ACME_x", string.Join(" ", validation.IncompleteReasons));
+            Assert.IsNull(entries[0].Animation.Channels[0].ListedBy);
+            Assert.That(ExpressionResponseEvaluator.Evaluate(entries[0].Animation, 1f).Records, Is.Empty);
+        }
+
+        [Test]
+        public void ChannelListedByTwoDerivedExtensionsIsInvalid()
+        {
+            var fixture = TranslationFixture();
+
+            var exception = Assert.Throws<ExpressionResponseEvaluationException>(
+                () => fixture.Bake(Entry("twice", 0, joint: new[] { 0 }, morph: new[] { 0 })));
+            StringAssert.Contains("listed by both", exception.Message);
+        }
+
+        [Test]
+        public void ListingOutsideTheAnimationOrAgainstItsClassificationIsInvalid()
+        {
+            var fixture = TranslationFixture();
+            var outside = Assert.Throws<ExpressionResponseEvaluationException>(
+                () => fixture.Bake(Entry("outside", 0, joint: new[] { 3 })));
+            StringAssert.Contains("lists channel 3", outside.Message);
+
+            var misclassified = Assert.Throws<ExpressionResponseEvaluationException>(
+                () => fixture.Bake(Entry("misclassified", 0, morph: new[] { 0 })));
+            StringAssert.Contains("does not target node morph weights", misclassified.Message);
+        }
+
+        [Test]
+        public void TranslationOverlapAcrossEntriesIsAllowed()
+        {
+            var fixture = TranslationFixture();
+
+            var entries = fixture.Bake(
+                new[] { Entry("first", 0, joint: new[] { 0 }), Entry("second", 0, joint: new[] { 0 }) },
+                null,
+                out var validation);
+
+            Assert.That(entries, Has.Length.EqualTo(2));
+            Assert.IsTrue(validation.IsComplete);
+        }
+
+        [Test]
+        public void CoreRotationOnOneEntryAgainstPointerRotationOnAnotherIsInvalid()
+        {
+            var fixture = new Fixture();
+            int input = AddTwoKeyInput(fixture);
+            float half = (float)Math.Sqrt(0.5d);
+            int output = fixture.AddFloatAccessor(
+                GLTFAccessorAttributeType.VEC4,
+                2,
+                new[] { 0f, 0f, 0f, 1f, 0f, half, 0f, half });
+            fixture.Root.Nodes.Add(new Node());
+            fixture.AddAnimation(
+                new[] { new SamplerSpec(input, output) },
+                new[] { CoreChannel(0, fixture.Root, 0, "rotation") });
+            fixture.AddAnimation(
+                new[] { new SamplerSpec(input, output) },
+                new[] { PointerChannel(0, fixture.Root, "/nodes/0/rotation") });
+
+            var exception = Assert.Throws<ExpressionResponseEvaluationException>(
+                () => fixture.Bake(Entry("lookLeft", 0, joint: new[] { 0 }), Entry("lookRight", 1, joint: new[] { 0 })));
+            StringAssert.Contains("'lookLeft'", exception.Message);
+            StringAssert.Contains("'lookRight'", exception.Message);
+            StringAssert.Contains("/nodes/0/rotation", exception.Message);
+        }
+
+        [Test]
+        public void OverlapOnVendorDeclaredSingleWriterPropertyIsInvalid()
+        {
+            var fixture = TranslationFixture();
+            var registry = new ExpressionDerivedExtensionRegistry();
+            registry.Register(
+                "ACME_translation_lock",
+                false,
+                isSupported: true,
+                declaresSingleWriter: target => target.Kind == ExpressionPropertyKind.NodeTranslation);
+            var first = Entry("first", 0, joint: new[] { 0 });
+            first.RawExtensions = new JObject { { "ACME_translation_lock", new JObject() } };
+
+            var exception = Assert.Throws<ExpressionResponseEvaluationException>(
+                () => fixture.Bake(
+                    new[] { first, Entry("second", 0, joint: new[] { 0 }) },
+                    new ExpressionResponseBakeOptions { Registry = registry },
+                    out _));
+            StringAssert.Contains("single-writer", exception.Message);
+        }
+
+        [Test]
+        public void UnsupportedDerivedExtensionDeclarationsOnlyMakeConflictValidationIncomplete()
+        {
+            var fixture = TranslationFixture();
+            var registry = new ExpressionDerivedExtensionRegistry();
+            registry.Register(
+                "ACME_locked_motion",
+                true,
+                ExpressionChannelClassification.NodeTrs,
+                false,
+                target => target.Kind == ExpressionPropertyKind.NodeTranslation);
+            var vendor = Entry("vendor", 0);
+            vendor.RawExtensions = new JObject
+            {
+                { "ACME_locked_motion", new JObject { { "channels", new JArray(0) } } },
+            };
+
+            var entries = fixture.Bake(
+                new[] { vendor, Entry("joint", 0, joint: new[] { 0 }) },
+                new ExpressionResponseBakeOptions { Registry = registry },
+                out var validation);
+
+            Assert.IsFalse(validation.IsComplete);
+            StringAssert.Contains("ACME_locked_motion", string.Join(" ", validation.IncompleteReasons));
+            Assert.That(entries[0].Animation.Channels[0].ListedBy, Is.EqualTo("ACME_locked_motion"));
+            Assert.IsFalse(entries[0].Animation.Channels[0].EmitsRecords,
+                "a channel listed only by an unsupported derived extension produces no record");
+            Assert.IsTrue(entries[1].Animation.Channels[0].EmitsRecords);
+        }
+
+        [Test]
+        public void TextureTransformPointersResolveWithTheirDefaults()
+        {
+            var fixture = new Fixture();
+            fixture.AddTexturedMaterial(new ExtTextureTransformExtension(
+                new GLTF.Math.Vector2(0.25f, 0.5f),
+                0.1d,
+                new GLTF.Math.Vector2(1f, 1f),
+                null));
+            const string basePath = "/materials/0/pbrMetallicRoughness/baseColorTexture/extensions/KHR_texture_transform/";
+            int input = AddTwoKeyInput(fixture);
+            int offset = fixture.AddFloatAccessor(GLTFAccessorAttributeType.VEC2, 2, new[] { 0.25f, 0.5f, 0.75f, 1f });
+            int scale = fixture.AddFloatAccessor(GLTFAccessorAttributeType.VEC2, 2, new[] { 1f, 1f, 2f, 3f });
+            int rotation = fixture.AddFloatAccessor(GLTFAccessorAttributeType.SCALAR, 2, new[] { 0.1f, 1f });
+            fixture.AddAnimation(
+                new[]
+                {
+                    new SamplerSpec(input, offset),
+                    new SamplerSpec(input, scale),
+                    new SamplerSpec(input, rotation),
+                },
+                new[]
+                {
+                    PointerChannel(0, fixture.Root, basePath + "offset"),
+                    PointerChannel(1, fixture.Root, basePath + "scale"),
+                    PointerChannel(2, fixture.Root, basePath + "rotation"),
+                });
+
+            var entries = fixture.Bake("texture");
+            var channels = entries[0].Animation.Channels;
+            var response = ExpressionResponseEvaluator.Evaluate(entries[0].Animation, 1f);
+
+            Assert.That(channels[0].Target.Kind, Is.EqualTo(ExpressionPropertyKind.TextureOffset));
+            Assert.That(channels[0].Target.AuthoredInitial, Is.EqualTo(new[] { 0.25d, 0.5d }));
+            Assert.That(channels[1].Target.Kind, Is.EqualTo(ExpressionPropertyKind.TextureScale));
+            Assert.That(channels[1].Target.AuthoredInitial, Is.EqualTo(new[] { 1d, 1d }), "an omitted scale is [1, 1]");
+            Assert.That(channels[2].Target.Kind, Is.EqualTo(ExpressionPropertyKind.TextureRotation));
+            Assert.That(channels[2].Target.AuthoredInitial[0], Is.EqualTo(0.1d), "rotation keeps the JSON double");
+            foreach (var channel in channels)
+            {
+                Assert.That(channel.ListedBy, Is.EqualTo(KhrCharacterExtensionNames.ExpressionTextureTransform));
+                Assert.IsTrue(channel.EmitsRecords);
+            }
+            Assert.That(response.Records.Count, Is.EqualTo(3));
+            Assert.That(response.Records[1].Value, Is.EqualTo(new[] { 2f, 3f }));
+        }
+
+        [Test]
+        public void TextureRotationIsSampledWithoutWrapping()
+        {
+            var fixture = new Fixture();
+            fixture.AddTexturedMaterial(new ExtTextureTransformExtension(
+                new GLTF.Math.Vector2(0f, 0f), 0d, new GLTF.Math.Vector2(1f, 1f), null));
+            int input = AddTwoKeyInput(fixture);
+            int rotation = fixture.AddFloatAccessor(
+                GLTFAccessorAttributeType.SCALAR,
+                2,
+                new[] { 0f, (float)(6d * Math.PI) });
+            fixture.AddAnimation(
+                new[] { new SamplerSpec(input, rotation) },
+                new[]
+                {
+                    PointerChannel(
+                        0,
+                        fixture.Root,
+                        "/materials/0/pbrMetallicRoughness/baseColorTexture/extensions/KHR_texture_transform/rotation"),
+                });
+
+            var response = ExpressionResponseEvaluator.Evaluate(fixture.Bake("spin")[0].Animation, 0.5f);
+
+            Assert.That(response.Records[0].Value[0], Is.EqualTo((float)(3d * Math.PI)).Within(1e-5f));
+        }
+
+        [Test]
+        public void PointerToTextureInfoWithoutTextureTransformIsInvalid()
+        {
+            var fixture = new Fixture();
+            fixture.AddTexturedMaterial(null);
+            int input = AddTwoKeyInput(fixture);
+            int offset = fixture.AddFloatAccessor(GLTFAccessorAttributeType.VEC2, 2, new[] { 0f, 0f, 1f, 0f });
+            fixture.AddAnimation(
+                new[] { new SamplerSpec(input, offset) },
+                new[]
+                {
+                    PointerChannel(
+                        0,
+                        fixture.Root,
+                        "/materials/0/pbrMetallicRoughness/baseColorTexture/extensions/KHR_texture_transform/offset"),
+                });
+
+            var exception = Assert.Throws<ExpressionResponseEvaluationException>(() => fixture.Bake("scroll"));
+            StringAssert.Contains("without an authored KHR_texture_transform", exception.Message);
+        }
+
+        [Test]
+        public void TexturePointerThroughUnsupportedMaterialExtensionIsIncomplete()
+        {
+            var fixture = new Fixture();
+            fixture.AddTexturedMaterial(null);
+            int input = AddTwoKeyInput(fixture);
+            int offset = fixture.AddFloatAccessor(GLTFAccessorAttributeType.VEC2, 2, new[] { 0f, 0f, 1f, 0f });
+            fixture.AddAnimation(
+                new[] { new SamplerSpec(input, offset) },
+                new[]
+                {
+                    PointerChannel(
+                        0,
+                        fixture.Root,
+                        "/materials/0/extensions/ACME_material/detailTexture/extensions/KHR_texture_transform/offset"),
+                });
+
+            var entries = fixture.Bake(new[] { Entry("detail", 0, texture: new[] { 0 }) }, null, out var validation);
+
+            Assert.IsFalse(validation.IsComplete);
+            Assert.IsFalse(entries[0].Animation.Channels[0].Target.IsSupported);
+            Assert.That(ExpressionResponseEvaluator.Evaluate(entries[0].Animation, 1f).Records, Is.Empty);
+        }
+
+        [TestCase("KHR_meshopt_compression", false)]
+        [TestCase("EXT_meshopt_compression", false)]
+        [TestCase("EXT_meshopt_compression", true)]
+        public void CompressedOutputIsDecodedOnlyByAnActiveDecoder(string extension, bool decoderActive)
+        {
+            var fixture = TranslationFixture();
+            int outputView = fixture.Root.Accessors[1].BufferView.Id;
+            fixture.Root.BufferViews[outputView].Extensions = new Dictionary<string, IExtension>
+            {
+                { extension, new DefaultExtensionFactory().Deserialize(fixture.Root, new JProperty(extension, new JObject())) },
+            };
+
+            var entries = fixture.Bake(
+                new[] { Entry("compressed", 0, joint: new[] { 0 }) },
+                new ExpressionResponseBakeOptions { MeshoptDecoderActive = decoderActive },
+                out var validation);
+            var response = ExpressionResponseEvaluator.Evaluate(entries[0].Animation, 1f);
+
+            bool decodable = decoderActive && extension == "EXT_meshopt_compression";
+            Assert.That(validation.IsComplete, Is.EqualTo(decodable));
+            Assert.That(entries[0].Animation.Channels[0].Target.IsSupported, Is.EqualTo(decodable));
+            Assert.That(response.Records.Count, Is.EqualTo(decodable ? 1 : 0),
+                "fallback bufferView data never produces records");
+            Assert.That(response.Duration, Is.EqualTo(1f));
+        }
+
+        [Test]
+        public void CompressedInputMakesTheEntryUnevaluable()
+        {
+            var fixture = TranslationFixture();
+            int inputView = fixture.Root.Accessors[0].BufferView.Id;
+            fixture.Root.BufferViews[inputView].Extensions = new Dictionary<string, IExtension>
+            {
+                {
+                    "KHR_meshopt_compression",
+                    new DefaultExtensionFactory().Deserialize(
+                        fixture.Root, new JProperty("KHR_meshopt_compression", new JObject()))
+                },
+            };
+
+            var entries = fixture.Bake(new[] { Entry("compressed", 0, joint: new[] { 0 }) }, null, out var validation);
+            var response = ExpressionResponseEvaluator.Evaluate(entries[0].Animation, 1f);
+
+            Assert.IsFalse(validation.IsComplete);
+            Assert.IsFalse(entries[0].Animation.IsEvaluable);
+            Assert.IsFalse(response.IsEvaluable);
+            Assert.That(response.Records, Is.Empty);
+        }
+
+        [Test]
+        public void MorphWeightsKeepTheirAuthoredJsonDoubles()
+        {
+            var fixture = new Fixture();
+            int input = AddTwoKeyInput(fixture);
+            int output = fixture.AddFloatAccessor(GLTFAccessorAttributeType.SCALAR, 2, new[] { 0.1f, 1f });
+            AddMorphMesh(fixture, new List<double> { 0.1d }, 1);
+            fixture.Root.Nodes.Add(new Node { Mesh = new MeshId { Id = 0, Root = fixture.Root } });
+            fixture.AddAnimation(
+                new[] { new SamplerSpec(input, output) },
+                new[] { CoreChannel(0, fixture.Root, 0, "weights") });
+
+            var target = fixture.Bake("weights")[0].Animation.Channels[0].Target;
+
+            Assert.That(target.Kind, Is.EqualTo(ExpressionPropertyKind.NodeWeights));
+            Assert.That(target.ArrayLength, Is.EqualTo(1));
+            Assert.That(target.AuthoredInitial[0], Is.EqualTo(0.1d), "b is the JSON double, not the float32 0.1");
         }
 
         [TestCase("rotation", 4)]
@@ -745,26 +1148,101 @@ namespace UnityGLTF.KhrCharacter.Tests
                 new[] { 0f, 1f },
                 0d,
                 1d);
+            int longInput = fixture.AddFloatAccessor(GLTFAccessorAttributeType.SCALAR, 2, new[] { 0f, 2f }, 0d, 2d);
             int output = fixture.AddFloatAccessor(
                 GLTFAccessorAttributeType.VEC3,
                 2,
-                new[] { 0f, 0f, 0f, 2f, 0f, 0f });
-            fixture.Root.Nodes.Add(new Node());
+                new[] { 0.5f, 0f, 0f, 2.5f, 0f, 0f });
+            int grow = fixture.AddFloatAccessor(GLTFAccessorAttributeType.VEC3, 2, new[] { 1f, 1f, 1f, 2f, 2f, 2f });
+            fixture.Root.Nodes.Add(new Node { Translation = new GLTF.Math.Vector3(0.5f, 0f, 0f) });
             fixture.AddAnimation(
-                new[] { new SamplerSpec(input, output) },
-                new[] { CoreChannel(0, fixture.Root, 0, "translation") });
-            var entries = fixture.Bake("serialized");
+                new[] { new SamplerSpec(input, output), new SamplerSpec(longInput, grow) },
+                new[]
+                {
+                    CoreChannel(0, fixture.Root, 0, "translation"),
+                    CoreChannel(1, fixture.Root, 0, "scale"),
+                });
+            var entries = fixture.Bake(
+                new[] { Entry("serialized", 0, joint: new[] { 0 }), Entry("other", 0, joint: new[] { 0 }) },
+                null,
+                out _);
+            entries[0].SetSuppressions(new[]
+            {
+                new SuppressionEntry
+                {
+                    SourceIndex = 0,
+                    TargetIndex = 1,
+                    Type = SuppressionType.Block,
+                    Amount = 0.1,
+                    HasAmount = true,
+                    Threshold = 0.3,
+                    HasThreshold = true,
+                },
+            });
+            var forward = new[]
+            {
+                new ExpressionMappingSet
+                {
+                    SetName = "vrm",
+                    Targets = new[]
+                    {
+                        new MappingTarget
+                        {
+                            TargetName = "happy",
+                            Contributions = new[] { new MappingContribution { SourceIndex = 1, Weight = 0.1 } },
+                        },
+                    },
+                },
+            };
+            var inputSets = new[]
+            {
+                new ExpressionInputMappingSet
+                {
+                    SetName = "relative/v1",
+                    Commands = new[]
+                    {
+                        new InputMappingCommand
+                        {
+                            CommandName = "happy",
+                            Contributions = new[] { new InputMappingContribution { TargetIndex = 0, Weight = 0.25 } },
+                        },
+                    },
+                },
+            };
 
             var source = CreateGameObject("source").AddComponent<ExpressionResponseSet>();
-            source.Bind(entries, true);
+            source.Bind(entries, true, new ExpressionValidationStatus(new[] { "partial" }), forward, inputSets);
             string json = JsonUtility.ToJson(source);
             var restored = CreateGameObject("restored").AddComponent<ExpressionResponseSet>();
             JsonUtility.FromJsonOverwrite(json, restored);
 
             var response = restored.Evaluate(0, 0.5f);
+            var channels = restored.Entries[0].Animation.Channels;
             Assert.IsTrue(restored.RequiredOnImport);
             Assert.That(restored.Entries[0].Name, Is.EqualTo("serialized"));
-            Assert.That(response.Records[0].Value[0], Is.EqualTo(1f).Within(1e-6f));
+            Assert.That(response.Duration, Is.EqualTo(2f), "the unlisted scale channel keeps setting T");
+            Assert.That(response.Records.Count, Is.EqualTo(1));
+            Assert.That(response.Records[0].Value[0], Is.EqualTo(2.5f).Within(1e-6f));
+            Assert.That(channels[0].ListedBy, Is.EqualTo(KhrCharacterExtensionNames.ExpressionJoint));
+            Assert.IsTrue(channels[0].EmitsRecords);
+            Assert.That(channels[0].Target.Kind, Is.EqualTo(ExpressionPropertyKind.NodeTranslation));
+            Assert.That(channels[0].Target.AuthoredInitial, Is.EqualTo(new[] { 0.5d, 0d, 0d }));
+            Assert.IsNull(channels[1].ListedBy, "Unity's empty string for null is restored as unlisted");
+            Assert.IsFalse(channels[1].EmitsRecords);
+            Assert.That(channels[1].Target.Kind, Is.EqualTo(ExpressionPropertyKind.NodeScale));
+            Assert.IsTrue(channels[1].Target.IsSupported);
+            var suppression = restored.Entries[0].Suppressions[0];
+            Assert.That(suppression.TargetIndex, Is.EqualTo(1));
+            Assert.That(suppression.Type, Is.EqualTo(SuppressionType.Block));
+            Assert.That(suppression.Amount, Is.EqualTo(0.1d));
+            Assert.That(suppression.Threshold, Is.EqualTo(0.3d));
+            Assert.That(restored.Entries[1].Suppressions, Is.Empty);
+            Assert.IsTrue(restored.TryGetForwardMappingSet("vrm", out var restoredForward));
+            Assert.That(restoredForward.Targets[0].Contributions[0].Weight, Is.EqualTo(0.1d));
+            Assert.IsTrue(restored.TryGetInputMappingSet("relative/v1", out var restoredInput));
+            Assert.That(restoredInput.Commands[0].Contributions[0].TargetIndex, Is.EqualTo(0));
+            Assert.IsFalse(restored.Validation.IsComplete);
+            Assert.That(restored.Validation.IncompleteReasons, Is.EqualTo(new[] { "partial" }));
             Assert.IsNull(restored.GetComponent<ExpressionController>());
         }
 
@@ -783,6 +1261,49 @@ namespace UnityGLTF.KhrCharacter.Tests
                 new[] { 0f, 1f },
                 0d,
                 1d);
+        }
+
+        // Accessor 0 is the input and accessor 1 the output of one core translation channel on node 0.
+        private static Fixture TranslationFixture()
+        {
+            var fixture = new Fixture();
+            int input = AddTwoKeyInput(fixture);
+            int output = fixture.AddFloatAccessor(GLTFAccessorAttributeType.VEC3, 2, new[] { 0f, 0f, 0f, 1f, 2f, 3f });
+            fixture.Root.Nodes.Add(new Node());
+            fixture.AddAnimation(
+                new[] { new SamplerSpec(input, output) },
+                new[] { CoreChannel(0, fixture.Root, 0, "translation") });
+            return fixture;
+        }
+
+        private static void AddMorphMesh(Fixture fixture, List<double> weights, int targetCount)
+        {
+            var targets = new List<Dictionary<string, AccessorId>>();
+            for (int index = 0; index < targetCount; index++) targets.Add(new Dictionary<string, AccessorId>());
+            fixture.Root.Meshes.Add(new GLTFMesh
+            {
+                Weights = weights,
+                Primitives = new List<MeshPrimitive> { new MeshPrimitive { Targets = targets } },
+            });
+        }
+
+        private static KHR_character_expression.ExpressionItem Entry(
+            string name,
+            int animation,
+            int[] joint = null,
+            int[] morph = null,
+            int[] texture = null)
+        {
+            return new KHR_character_expression.ExpressionItem
+            {
+                Name = name,
+                Animation = animation,
+                Joint = joint != null ? new KHR_character_expression_joint { Channels = joint } : null,
+                Morphtarget = morph != null ? new KHR_character_expression_morphtarget { Channels = morph } : null,
+                TextureTransform = texture != null
+                    ? new KHR_character_expression_texture_transform { Channels = texture }
+                    : null,
+            };
         }
 
         private static AnimationChannel CoreChannel(
@@ -844,9 +1365,24 @@ namespace UnityGLTF.KhrCharacter.Tests
                     Accessors = new List<Accessor>(),
                     Animations = new List<GLTFAnimation>(),
                     BufferViews = new List<BufferView>(),
+                    Materials = new List<GLTFMaterial>(),
                     Meshes = new List<GLTFMesh>(),
                     Nodes = new List<Node>(),
                 };
+            }
+
+            public void AddTexturedMaterial(ExtTextureTransformExtension transform)
+            {
+                var textureInfo = new TextureInfo { Index = new TextureId { Id = 0, Root = Root } };
+                if (transform != null)
+                    textureInfo.Extensions = new Dictionary<string, IExtension>
+                    {
+                        { ExtTextureTransformExtensionFactory.EXTENSION_NAME, transform },
+                    };
+                Root.Materials.Add(new GLTFMaterial
+                {
+                    PbrMetallicRoughness = new PbrMetallicRoughness { BaseColorTexture = textureInfo },
+                });
             }
 
             public GLTFRoot Root { get; }
@@ -953,20 +1489,52 @@ namespace UnityGLTF.KhrCharacter.Tests
                 Root.Animations.Add(animation);
             }
 
+            // Lists every channel of animation 0 through the derived extension that classifies its target.
             public ExpressionResponseSetEntry[] Bake(string label)
+            {
+                var joint = new List<int>();
+                var morph = new List<int>();
+                var texture = new List<int>();
+                var channels = Root.Animations[0].Channels;
+                for (int index = 0; index < channels.Count; index++)
+                {
+                    var target = channels[index].Target;
+                    string pointer = target?.Extensions != null &&
+                        target.Extensions.TryGetValue(KHR_animation_pointer.EXTENSION_NAME, out var extension)
+                        ? (extension as KHR_animation_pointer)?.path
+                        : null;
+                    string path = target?.Node != null ? target.Path : pointer?.Split('/').Length > 3
+                        ? pointer.Split('/')[3]
+                        : null;
+                    if (pointer != null && pointer.StartsWith("/materials/") &&
+                        pointer.Contains("/KHR_texture_transform/"))
+                        texture.Add(index);
+                    else if (pointer != null && !pointer.StartsWith("/nodes/"))
+                        continue;
+                    else if (path == "weights") morph.Add(index);
+                    else if (path == "translation" || path == "rotation" || path == "scale") joint.Add(index);
+                }
+                return Bake(Entry(
+                    label,
+                    0,
+                    joint.Count > 0 ? joint.ToArray() : null,
+                    morph.Count > 0 ? morph.ToArray() : null,
+                    texture.Count > 0 ? texture.ToArray() : null));
+            }
+
+            public ExpressionResponseSetEntry[] Bake(params KHR_character_expression.ExpressionItem[] items)
+                => Bake(items, null, out _);
+
+            public ExpressionResponseSetEntry[] Bake(
+                KHR_character_expression.ExpressionItem[] items,
+                ExpressionResponseBakeOptions options,
+                out ExpressionValidationStatus validation)
             {
                 var extension = new KHR_character_expression
                 {
-                    Expressions = new List<KHR_character_expression.ExpressionItem>
-                    {
-                        new KHR_character_expression.ExpressionItem
-                        {
-                            Name = label,
-                            Animation = 0,
-                        },
-                    },
+                    Expressions = new List<KHR_character_expression.ExpressionItem>(items),
                 };
-                return Bake(extension);
+                return KhrCharacterResponseBaker.Bake(Root, view => _bufferData[view], extension, options, out validation);
             }
 
             public ExpressionResponseSetEntry[] Bake(KHR_character_expression extension)

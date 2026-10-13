@@ -5,9 +5,35 @@ using UnityEngine.Serialization;
 
 namespace UnityGLTF.KhrCharacter
 {
+    /// <summary>
+    /// Whether import could validate the expression data completely. Validation is incomplete, never failed, when it
+    /// meets data it cannot check: an unrecognized or unsupported entry extension, a target it cannot resolve, or
+    /// buffer data it cannot decode. Invalid data rejects the whole expression set instead.
+    /// </summary>
+    public sealed class ExpressionValidationStatus
+    {
+        private static readonly string[] NoReasons = Array.Empty<string>();
+
+        public ExpressionValidationStatus(IEnumerable<string> incompleteReasons)
+        {
+            var reasons = incompleteReasons != null ? new List<string>(incompleteReasons) : new List<string>();
+            IncompleteReasons = reasons.Count > 0 ? reasons.AsReadOnly() : (IReadOnlyList<string>)NoReasons;
+        }
+
+        public static ExpressionValidationStatus Complete { get; } = new ExpressionValidationStatus(null);
+
+        public bool IsComplete => IncompleteReasons.Count == 0;
+
+        /// <summary>Why validation is incomplete; empty when it is complete.</summary>
+        public IReadOnlyList<string> IncompleteReasons { get; }
+    }
+
     /// <summary>One authoritative array entry from KHR_character_expression.</summary>
     public sealed class ExpressionResponseSetEntry
     {
+        private static readonly SuppressionEntry[] NoSuppressions = Array.Empty<SuppressionEntry>();
+        private SuppressionEntry[] _suppressions = NoSuppressions;
+
         internal ExpressionResponseSetEntry(
             string name,
             int animationIndex,
@@ -28,11 +54,25 @@ namespace UnityGLTF.KhrCharacter
         public ExpressionResponseAnimation Animation { get; }
         public string ExtensionsJson { get; }
         public string ExtrasJson { get; }
+
+        /// <summary>
+        /// The entry's <c>KHR_character_expression_suppression</c> rules. Source and target are expression-array
+        /// indices; this entry is the source.
+        /// </summary>
+        public IReadOnlyList<SuppressionEntry> Suppressions => _suppressions;
+
+        internal void SetSuppressions(SuppressionEntry[] suppressions)
+        {
+            _suppressions = suppressions ?? NoSuppressions;
+        }
     }
 
     /// <summary>
     /// Passive imported KHR_character_expression data. It evaluates absolute wire-space response records by
     /// authoritative expression-array index and never writes Unity scene targets or chooses a composition policy.
+    /// Listing decides which channels produce records: only channels that a supported derived expression extension
+    /// lists emit, while every channel counts toward the duration. It also exposes each entry's suppressions and every
+    /// expression mapping set to host logic.
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class ExpressionResponseSet : MonoBehaviour, ISerializationCallbackReceiver
@@ -61,6 +101,10 @@ namespace UnityGLTF.KhrCharacter
             public int ComponentCount;
             public ExpressionResponseValueKind ValueKind;
             public bool IsSupported;
+            public ExpressionPropertyKind Kind = ExpressionPropertyKind.Other;
+            public bool HasAuthoredInitial;
+            public double[] AuthoredInitial;
+            public int ArrayLength;
         }
 
         [Serializable]
@@ -68,6 +112,8 @@ namespace UnityGLTF.KhrCharacter
         {
             public int SamplerIndex;
             public SerializedTarget Target;
+            public string ListedBy;
+            public bool EmitsRecords;
         }
 
         [Serializable]
@@ -79,13 +125,19 @@ namespace UnityGLTF.KhrCharacter
             public string ExtrasJson;
             public SerializedSampler[] Samplers;
             public SerializedChannel[] Channels;
+            public string UnevaluableReason;
+            public SuppressionEntry[] Suppressions;
         }
 
         [SerializeField, HideInInspector] private SerializedEntry[] _serializedEntries = Array.Empty<SerializedEntry>();
         [SerializeField, HideInInspector] private bool _requiredOnImport;
+        [SerializeField, HideInInspector] private string[] _incompleteValidationReasons = Array.Empty<string>();
+        [SerializeField, HideInInspector] private ExpressionMappingSet[] _forwardMappingSets = Array.Empty<ExpressionMappingSet>();
+        [SerializeField, HideInInspector] private ExpressionInputMappingSet[] _inputMappingSets = Array.Empty<ExpressionInputMappingSet>();
 
         [NonSerialized] private ExpressionResponseSetEntry[] _entries;
         [NonSerialized] private IReadOnlyList<ExpressionResponseSetEntry> _readOnlyEntries;
+        [NonSerialized] private ExpressionValidationStatus _validation;
 
         public bool RequiredOnImport => _requiredOnImport;
 
@@ -107,6 +159,24 @@ namespace UnityGLTF.KhrCharacter
             }
         }
 
+        /// <summary>Whether import validated the expression data completely, and why not.</summary>
+        public ExpressionValidationStatus Validation
+            => _validation ?? (_validation = new ExpressionValidationStatus(_incompleteValidationReasons));
+
+        /// <summary>
+        /// Every <c>expressionSetMappings</c> set (native drivers to endpoint outputs), keyed by mapping-set
+        /// identifier. Source indices are expression-array indices.
+        /// </summary>
+        public IReadOnlyList<ExpressionMappingSet> ForwardMappingSets
+            => _forwardMappingSets ?? Array.Empty<ExpressionMappingSet>();
+
+        /// <summary>
+        /// Every <c>expressionSetInputMappings</c> set (endpoint commands to native drivers), keyed by mapping-set
+        /// identifier. Target indices are expression-array indices.
+        /// </summary>
+        public IReadOnlyList<ExpressionInputMappingSet> InputMappingSets
+            => _inputMappingSets ?? Array.Empty<ExpressionInputMappingSet>();
+
         private void Awake()
         {
             EnsureRuntimeEntries();
@@ -121,13 +191,23 @@ namespace UnityGLTF.KhrCharacter
         {
             _entries = null;
             _readOnlyEntries = null;
+            _validation = null;
         }
 
-        internal void Bind(ExpressionResponseSetEntry[] entries, bool requiredOnImport)
+        internal void Bind(
+            ExpressionResponseSetEntry[] entries,
+            bool requiredOnImport,
+            ExpressionValidationStatus validation = null,
+            ExpressionMappingSet[] forwardMappingSets = null,
+            ExpressionInputMappingSet[] inputMappingSets = null)
         {
             _entries = entries ?? Array.Empty<ExpressionResponseSetEntry>();
             _readOnlyEntries = Array.AsReadOnly(_entries);
             _requiredOnImport = requiredOnImport;
+            _validation = validation ?? ExpressionValidationStatus.Complete;
+            _incompleteValidationReasons = new List<string>(_validation.IncompleteReasons).ToArray();
+            _forwardMappingSets = forwardMappingSets ?? Array.Empty<ExpressionMappingSet>();
+            _inputMappingSets = inputMappingSets ?? Array.Empty<ExpressionInputMappingSet>();
             _serializedEntries = SerializeEntries(_entries);
         }
 
@@ -137,6 +217,29 @@ namespace UnityGLTF.KhrCharacter
             if (expressionIndex < 0 || expressionIndex >= _entries.Length)
                 throw new ArgumentOutOfRangeException(nameof(expressionIndex));
             return ExpressionResponseEvaluator.Evaluate(_entries[expressionIndex].Animation, driver);
+        }
+
+        /// <summary>Finds a forward mapping set by its exact identifier.</summary>
+        public bool TryGetForwardMappingSet(string identifier, out ExpressionMappingSet set)
+        {
+            set = FindMappingSet(_forwardMappingSets, identifier, mapping => mapping?.SetName);
+            return set != null;
+        }
+
+        /// <summary>Finds an input mapping set by its exact identifier.</summary>
+        public bool TryGetInputMappingSet(string identifier, out ExpressionInputMappingSet set)
+        {
+            set = FindMappingSet(_inputMappingSets, identifier, mapping => mapping?.SetName);
+            return set != null;
+        }
+
+        private static T FindMappingSet<T>(T[] sets, string identifier, Func<T, string> getIdentifier) where T : class
+        {
+            if (sets == null || identifier == null) return null;
+            foreach (var set in sets)
+                if (string.Equals(getIdentifier(set), identifier, StringComparison.Ordinal))
+                    return set;
+            return null;
         }
 
         private void EnsureRuntimeEntries()
@@ -170,6 +273,8 @@ namespace UnityGLTF.KhrCharacter
                     ExtrasJson = entry.ExtrasJson,
                     Samplers = serializedSamplers,
                     Channels = serializedChannels,
+                    UnevaluableReason = animation.UnevaluableReason,
+                    Suppressions = new List<SuppressionEntry>(entry.Suppressions).ToArray(),
                 };
             }
             return serialized;
@@ -214,9 +319,18 @@ namespace UnityGLTF.KhrCharacter
             if (channel == null || channel.Target == null)
                 throw new ExpressionResponseEvaluationException("A response channel cannot be serialized without a target.");
             var target = channel.Target;
+            double[] authoredInitial = null;
+            if (target.AuthoredInitial != null)
+            {
+                authoredInitial = new double[target.AuthoredInitial.Count];
+                for (int component = 0; component < authoredInitial.Length; component++)
+                    authoredInitial[component] = target.AuthoredInitial[component];
+            }
             return new SerializedChannel
             {
                 SamplerIndex = channel.SamplerIndex,
+                ListedBy = channel.ListedBy,
+                EmitsRecords = channel.EmitsRecords,
                 Target = new SerializedTarget
                 {
                     HasIdentity = target.Identity != null,
@@ -227,6 +341,10 @@ namespace UnityGLTF.KhrCharacter
                     ComponentCount = target.ComponentCount,
                     ValueKind = target.ValueKind,
                     IsSupported = target.IsSupported,
+                    Kind = target.Kind,
+                    HasAuthoredInitial = authoredInitial != null,
+                    AuthoredInitial = authoredInitial,
+                    ArrayLength = target.ArrayLength,
                 },
             };
         }
@@ -250,9 +368,15 @@ namespace UnityGLTF.KhrCharacter
                 entries[entryIndex] = new ExpressionResponseSetEntry(
                     entry.Name,
                     entry.AnimationIndex,
-                    new ExpressionResponseAnimation { Samplers = samplers, Channels = channels },
+                    new ExpressionResponseAnimation
+                    {
+                        Samplers = samplers,
+                        Channels = channels,
+                        UnevaluableReason = NullIfEmpty(entry.UnevaluableReason),
+                    },
                     entry.ExtensionsJson,
                     entry.ExtrasJson);
+                entries[entryIndex].SetSuppressions(entry.Suppressions);
             }
             return entries;
         }
@@ -304,9 +428,20 @@ namespace UnityGLTF.KhrCharacter
                     identity,
                     serializedTarget.ComponentCount,
                     serializedTarget.ValueKind,
-                    serializedTarget.IsSupported);
+                    serializedTarget.IsSupported,
+                    serializedTarget.Kind,
+                    serializedTarget.HasAuthoredInitial
+                        ? serializedTarget.AuthoredInitial ?? Array.Empty<double>()
+                        : null,
+                    serializedTarget.ArrayLength);
             }
-            return new ExpressionResponseChannel { SamplerIndex = channel.SamplerIndex, Target = target };
+            return new ExpressionResponseChannel
+            {
+                SamplerIndex = channel.SamplerIndex,
+                Target = target,
+                ListedBy = NullIfEmpty(channel.ListedBy),
+                EmitsRecords = channel.EmitsRecords,
+            };
         }
 
         private static ExpressionPropertyIdentity DeserializeIdentity(SerializedTarget target)
@@ -324,5 +459,8 @@ namespace UnityGLTF.KhrCharacter
                         $"Unknown serialized property selection {target.Selection}.");
             }
         }
+
+        // Unity serializes a null string as an empty one.
+        private static string NullIfEmpty(string value) => string.IsNullOrEmpty(value) ? null : value;
     }
 }

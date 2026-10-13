@@ -162,25 +162,44 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void EverySupportedChannelProducesARecordWithoutTypedClassification()
+        public void UnlistedChannelsEmitNoRecordsButStillSetTheDuration()
         {
+            var unlisted = Channel(1, "/nodes/0/translation/0", 1);
+            unlisted.ListedBy = null;
+            unlisted.EmitsRecords = false;
             var animation = Animation(
                 new[]
                 {
                     Linear(new[] { 0f, 1f }, Scalar(0f), Scalar(1f)),
-                    Linear(new[] { 0f, 1f }, Scalar(10f), Scalar(20f)),
+                    Linear(new[] { 0f, 4f }, Scalar(10f), Scalar(20f)),
                     Linear(new[] { 0f, 1f }, Scalar(30f), Scalar(40f)),
                 },
                 Channel(0, "/nodes/0/weights/0", 1),
-                Channel(1, "/nodes/0/translation/0", 1),
+                unlisted,
                 Channel(2, "/materials/0/pbrMetallicRoughness/baseColorFactor/0", 1));
 
             var response = ExpressionResponseEvaluator.Evaluate(animation, 0.5f);
 
-            Assert.That(response.Records.Count, Is.EqualTo(3));
+            Assert.That(response.Duration, Is.EqualTo(4f), "an unlisted channel still counts toward T");
+            Assert.That(response.SampleTime, Is.EqualTo(2f));
+            Assert.That(response.Records.Count, Is.EqualTo(2));
             Assert.That(response.Records[0].ChannelIndex, Is.EqualTo(0));
-            Assert.That(response.Records[1].ChannelIndex, Is.EqualTo(1));
-            Assert.That(response.Records[2].ChannelIndex, Is.EqualTo(2));
+            Assert.That(response.Records[1].ChannelIndex, Is.EqualTo(2));
+        }
+
+        [Test]
+        public void UnevaluableExpressionReturnsNoRecordsAndNoDuration()
+        {
+            var animation = Animation(
+                new[] { new ExpressionResponseSampler { Interpolation = ExpressionResponseInterpolation.Linear } },
+                Channel(0, "/nodes/0/translation/0", 1));
+            animation.UnevaluableReason = "input data cannot be decoded";
+
+            var response = ExpressionResponseEvaluator.Evaluate(animation, 1f);
+
+            Assert.IsFalse(response.IsEvaluable);
+            Assert.That(response.Records, Is.Empty);
+            Assert.That(float.IsNaN(response.Duration));
         }
 
         [Test]
@@ -479,6 +498,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             {
                 SamplerIndex = samplerIndex,
                 Target = new ExpressionResponseTarget(property, components, kind),
+                ListedBy = KhrCharacterExtensionNames.ExpressionJoint,
+                EmitsRecords = true,
             };
         }
 
@@ -492,6 +513,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             {
                 SamplerIndex = samplerIndex,
                 Target = new ExpressionResponseTarget(identity, components, kind),
+                ListedBy = KhrCharacterExtensionNames.ExpressionJoint,
+                EmitsRecords = true,
             };
         }
 

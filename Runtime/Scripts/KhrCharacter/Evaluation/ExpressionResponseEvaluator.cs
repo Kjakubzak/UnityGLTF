@@ -103,6 +103,19 @@ namespace UnityGLTF.KhrCharacter
         ArrayElement,
     }
 
+    /// <summary>The concrete property type a resolved expression channel targets.</summary>
+    public enum ExpressionPropertyKind
+    {
+        NodeTranslation,
+        NodeRotation,
+        NodeScale,
+        NodeWeights,
+        TextureOffset,
+        TextureScale,
+        TextureRotation,
+        Other,
+    }
+
     /// <summary>
     /// Canonical identity for a concrete channel target. Core animation paths and extension pointer paths must be
     /// resolved to the same canonical property string before construction. Array selections make whole-array and
@@ -190,11 +203,13 @@ namespace UnityGLTF.KhrCharacter
     }
 
     /// <summary>
-    /// Identity and shape of a concrete animation-channel target. Unsupported optional extension targets retain
-    /// their channel and sampler for duration calculation while producing no response record.
+    /// Identity and shape of a concrete animation-channel target. A target that did not resolve, or whose data could
+    /// not be decoded, keeps its channel and sampler for duration calculation while producing no response record.
     /// </summary>
     public sealed class ExpressionResponseTarget
     {
+        private readonly double[] _authoredInitial;
+
         public ExpressionResponseTarget(
             string property,
             int componentCount,
@@ -209,12 +224,37 @@ namespace UnityGLTF.KhrCharacter
             int componentCount,
             ExpressionResponseValueKind valueKind = ExpressionResponseValueKind.Components,
             bool isSupported = true)
+            : this(identity, componentCount, valueKind, isSupported, ExpressionPropertyKind.Other, null, 0)
+        {
+        }
+
+        /// <summary>Creates a resolved target with its property kind and authored initial value.</summary>
+        /// <param name="identity">Canonical property identity shared by core and pointer forms.</param>
+        /// <param name="componentCount">Components of one logical sample.</param>
+        /// <param name="valueKind">Whether glTF quaternion rules apply.</param>
+        /// <param name="isSupported">Whether the target resolved and its data decoded.</param>
+        /// <param name="kind">The concrete property type.</param>
+        /// <param name="authoredInitial">The authored initial value <c>b</c> in glTF space; one element for an
+        /// array-element target.</param>
+        /// <param name="arrayLength">The element count of the whole array property (N for morph weights), else 0.</param>
+        public ExpressionResponseTarget(
+            ExpressionPropertyIdentity identity,
+            int componentCount,
+            ExpressionResponseValueKind valueKind,
+            bool isSupported,
+            ExpressionPropertyKind kind,
+            double[] authoredInitial,
+            int arrayLength)
         {
             Identity = identity ?? throw new ArgumentNullException(nameof(identity));
             Property = identity.ToString();
             ComponentCount = componentCount;
             ValueKind = valueKind;
             IsSupported = isSupported;
+            Kind = kind;
+            _authoredInitial = authoredInitial != null ? (double[])authoredInitial.Clone() : null;
+            AuthoredInitial = _authoredInitial != null ? Array.AsReadOnly(_authoredInitial) : null;
+            ArrayLength = arrayLength;
         }
 
         private ExpressionResponseTarget(string diagnosticProperty)
@@ -223,6 +263,7 @@ namespace UnityGLTF.KhrCharacter
             ComponentCount = 0;
             ValueKind = ExpressionResponseValueKind.Components;
             IsSupported = false;
+            Kind = ExpressionPropertyKind.Other;
         }
 
         /// <summary>
@@ -238,7 +279,22 @@ namespace UnityGLTF.KhrCharacter
         public ExpressionPropertyIdentity Identity { get; }
         public int ComponentCount { get; }
         public ExpressionResponseValueKind ValueKind { get; }
+
+        /// <summary>True when the target resolved to a concrete property and its sampler data decoded.</summary>
         public bool IsSupported { get; }
+
+        /// <summary>The concrete property type, or <see cref="ExpressionPropertyKind.Other"/> when unresolved.</summary>
+        public ExpressionPropertyKind Kind { get; }
+
+        /// <summary>
+        /// The authored initial value <c>b</c> in glTF space, or null when the target did not resolve. Node
+        /// translation, rotation and scale and texture offset and scale carry the float32 values UnityGLTF parses;
+        /// morph weights and texture rotation carry the JSON doubles.
+        /// </summary>
+        public IReadOnlyList<double> AuthoredInitial { get; }
+
+        /// <summary>The element count of the whole array property (N for morph weights), or 0.</summary>
+        public int ArrayLength { get; }
     }
 
     /// <summary>A channel in the expression entry's referenced glTF animation.</summary>
@@ -246,6 +302,18 @@ namespace UnityGLTF.KhrCharacter
     {
         public int SamplerIndex { get; set; }
         public ExpressionResponseTarget Target { get; set; }
+
+        /// <summary>
+        /// The derived expression extension on the entry that lists this channel, or null when none lists it. An
+        /// unlisted channel still counts toward the expression duration but produces no response record.
+        /// </summary>
+        public string ListedBy { get; set; }
+
+        /// <summary>
+        /// True when a derived expression extension this implementation supports lists the channel and its target
+        /// resolved and decoded. Only such channels produce response records.
+        /// </summary>
+        public bool EmitsRecords { get; set; }
     }
 
     /// <summary>Decoded sampler and channel data for one expression animation.</summary>
@@ -253,6 +321,15 @@ namespace UnityGLTF.KhrCharacter
     {
         public ExpressionResponseSampler[] Samplers { get; set; }
         public ExpressionResponseChannel[] Channels { get; set; }
+
+        /// <summary>
+        /// Why the expression cannot be evaluated, for example because a sampler input uses a compression filter
+        /// the importer does not decode; null when it can be evaluated.
+        /// </summary>
+        public string UnevaluableReason { get; set; }
+
+        /// <summary>False when <see cref="UnevaluableReason"/> is set; such an expression produces no records.</summary>
+        public bool IsEvaluable => UnevaluableReason == null;
     }
 
     /// <summary>An absolute sampled value for one concrete glTF property target.</summary>
@@ -276,18 +353,32 @@ namespace UnityGLTF.KhrCharacter
     /// </summary>
     public sealed class ExpressionResponse
     {
-        internal ExpressionResponse(float effectiveDriver, float duration, float sampleTime, ExpressionResponseRecord[] records)
+        internal ExpressionResponse(
+            float effectiveDriver,
+            float duration,
+            float sampleTime,
+            ExpressionResponseRecord[] records,
+            bool isEvaluable = true)
         {
             EffectiveDriver = effectiveDriver;
             Duration = duration;
             SampleTime = sampleTime;
             Records = Array.AsReadOnly(records);
+            IsEvaluable = isEvaluable;
         }
 
         public float EffectiveDriver { get; }
+
+        /// <summary>The expression duration <c>T</c>; NaN when the expression is not evaluable.</summary>
         public float Duration { get; }
+
+        /// <summary>The sample time <c>t = e * T</c>; NaN when the expression is not evaluable.</summary>
         public float SampleTime { get; }
+
         public IReadOnlyList<ExpressionResponseRecord> Records { get; }
+
+        /// <summary>False when the expression's data could not be decoded; such a response has no records.</summary>
+        public bool IsEvaluable { get; }
     }
 
     /// <summary>Reports invalid decoded expression-animation data supplied to the response evaluator.</summary>
@@ -298,7 +389,9 @@ namespace UnityGLTF.KhrCharacter
 
     /// <summary>
     /// Pure KHR_character_expression response evaluator. Each call derives a fresh response from decoded glTF data
-    /// and the current driver; it retains no history and never reads or writes Unity scene targets.
+    /// and the current driver; it retains no history and never reads or writes Unity scene targets. Every channel
+    /// counts toward the duration and every resolved channel is validated, but only channels with
+    /// <see cref="ExpressionResponseChannel.EmitsRecords"/> produce response records.
     /// </summary>
     public static class ExpressionResponseEvaluator
     {
@@ -319,6 +412,8 @@ namespace UnityGLTF.KhrCharacter
             if (!IsFinite(effectiveDriver))
                 throw new ArgumentOutOfRangeException(nameof(driver), "Expression drivers must be finite.");
             effectiveDriver = Clamp01(effectiveDriver);
+            if (!animation.IsEvaluable)
+                return new ExpressionResponse(effectiveDriver, float.NaN, float.NaN, EmptyRecords, false);
 
             var channels = animation.Channels;
             var samplers = animation.Samplers;
@@ -386,7 +481,7 @@ namespace UnityGLTF.KhrCharacter
             {
                 var channel = channels[channelIndex];
                 var target = channel.Target;
-                if (!target.IsSupported) continue;
+                if (!target.IsSupported || !channel.EmitsRecords) continue;
 
                 var sampler = samplers[channel.SamplerIndex];
                 records.Add(new ExpressionResponseRecord(

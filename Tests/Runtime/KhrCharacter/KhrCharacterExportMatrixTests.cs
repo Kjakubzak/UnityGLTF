@@ -208,7 +208,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsNotNull(item.TextureTransform, "texture sub-extension present");
             Assert.AreEqual(1, item.Morphtarget.Channels.Length, "one morph driver -> one channel");
             Assert.AreEqual(1, item.Joint.Channels.Length, "one joint rotation driver -> one channel");
-            Assert.AreEqual(2, item.TextureTransform.Channels.Length, "one UV-transform driver -> scale and offset channels");
+            Assert.AreEqual(1, item.TextureTransform.Channels.Length,
+                "the UV driver scrolls the offset; its scale stays at the authored value and is not listed");
 
             var anim = gltf.Animations[item.Animation];
 
@@ -220,7 +221,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(0, CountIntersect(morph, tex), "morph and texture channels must be disjoint");
             Assert.AreEqual(0, CountIntersect(joint, tex), "joint and texture channels must be disjoint");
             var union = new HashSet<int>(morph); union.UnionWith(joint); union.UnionWith(tex);
-            Assert.AreEqual(4, union.Count, "the partition must cover the four emitted channels");
+            Assert.AreEqual(3, union.Count, "the partition must cover the three emitted channels");
+            Assert.AreEqual(3, anim.Channels.Count, "the constant scale channel is not written");
             foreach (var ci in union)
                 Assert.IsTrue(ci >= 0 && ci < anim.Channels.Count, "every referenced channel index must be valid");
 

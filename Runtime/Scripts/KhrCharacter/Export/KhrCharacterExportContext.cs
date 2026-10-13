@@ -50,10 +50,36 @@ namespace UnityGLTF.KhrCharacter
             public Vector2[] Values;
         }
 
+        // The concrete targets of one track in write order. A target whose exported keys all equal its authored
+        // initial value is constant: it is never listed and is written only when the track would otherwise have no
+        // channel. Every exported channel ends at normalized time 1, so omitting the others keeps the duration.
+        private sealed class TrackExportPlan
+        {
+            public readonly List<string> Targets = new List<string>();
+            public readonly HashSet<string> ConstantTargets = new HashSet<string>(StringComparer.Ordinal);
+            public string KeptUnlistedTarget;
+
+            public void Add(string target, bool constant)
+            {
+                Targets.Add(target);
+                if (constant) ConstantTargets.Add(target);
+            }
+
+            public bool Writes(string target) => !ConstantTargets.Contains(target) || target == KeptUnlistedTarget;
+
+            public bool Lists(string target) => !ConstantTargets.Contains(target);
+        }
+
         private sealed class ExpressionExportPreflight
         {
             public readonly Dictionary<TextureInfo, ExtTextureTransformExtension> TextureTransformsToAdd
                 = new Dictionary<TextureInfo, ExtTextureTransformExtension>();
+            public readonly Dictionary<TextureInfo, ExtTextureTransformExtension> PlannedTextureTransforms
+                = new Dictionary<TextureInfo, ExtTextureTransformExtension>();
+            public readonly Dictionary<string, TextureInfo> TextureInfoByTarget
+                = new Dictionary<string, TextureInfo>(StringComparer.Ordinal);
+            public readonly Dictionary<ExpressionTrack, TrackExportPlan> Plans
+                = new Dictionary<ExpressionTrack, TrackExportPlan>();
 
             public void Apply()
             {
@@ -120,7 +146,7 @@ namespace UnityGLTF.KhrCharacter
             if (hasExpressions)
             {
                 expressionPreflight.Apply();
-                ExportExpressions(exporter, gltfRoot, expressionSet);
+                ExportExpressions(exporter, gltfRoot, expressionSet, expressionPreflight);
             }
 
             // Phase 4: Export skeleton mapping
@@ -384,6 +410,7 @@ namespace UnityGLTF.KhrCharacter
                 throw InvalidExpression("The expression set is empty.");
 
             var preflight = new ExpressionExportPreflight();
+            var singleWriterOwners = new Dictionary<string, int>(StringComparer.Ordinal);
             for (int expressionIndex = 0; expressionIndex < set.Expressions.Length; expressionIndex++)
             {
                 var track = set.Expressions[expressionIndex];
@@ -394,6 +421,7 @@ namespace UnityGLTF.KhrCharacter
 
                 var concreteTargets = new HashSet<string>();
                 var textureTargets = new Dictionary<string, TextureTargetSignature>();
+                var plan = new TrackExportPlan();
                 if (track.MorphDrivers != null)
                     for (int driverIndex = 0; driverIndex < track.MorphDrivers.Length; driverIndex++)
                         ValidateMorphDriver(
@@ -401,7 +429,8 @@ namespace UnityGLTF.KhrCharacter
                             gltfRoot,
                             track.MorphDrivers[driverIndex],
                             $"Expression {expressionIndex} morph driver {driverIndex}",
-                            concreteTargets);
+                            concreteTargets,
+                            plan);
                 if (track.JointDrivers != null)
                     for (int driverIndex = 0; driverIndex < track.JointDrivers.Length; driverIndex++)
                         ValidateJointDriver(
@@ -409,7 +438,8 @@ namespace UnityGLTF.KhrCharacter
                             gltfRoot,
                             track.JointDrivers[driverIndex],
                             $"Expression {expressionIndex} joint driver {driverIndex}",
-                            concreteTargets);
+                            concreteTargets,
+                            plan);
                 if (track.TextureDrivers != null)
                     for (int driverIndex = 0; driverIndex < track.TextureDrivers.Length; driverIndex++)
                         ValidateTextureDriver(
@@ -419,15 +449,62 @@ namespace UnityGLTF.KhrCharacter
                             $"Expression {expressionIndex} texture driver {driverIndex}",
                             concreteTargets,
                             textureTargets,
-                            preflight);
+                            preflight,
+                            plan);
 
                 if (concreteTargets.Count == 0)
                     throw InvalidExpression($"Expression {expressionIndex} has no exportable animation channels.");
+                if (plan.ConstantTargets.Count == plan.Targets.Count)
+                {
+                    plan.KeptUnlistedTarget = plan.Targets[0];
+                    Debug.LogWarning(
+                        $"[KHR_character] Expression '{track.Name}' changes no property: it is exported with one " +
+                        "unlisted channel and produces no response records.");
+                }
+                foreach (var target in plan.Targets)
+                {
+                    if (!plan.Lists(target) || !IsSingleWriterTarget(target)) continue;
+                    if (singleWriterOwners.TryGetValue(target, out int owner))
+                        throw InvalidExpression(
+                            $"Expressions {owner} ('{set.Expressions[owner].Name}') and {expressionIndex} " +
+                            $"('{track.Name}') both animate '{target}', which only one expression may write. " +
+                            SingleWriterHint(target));
+                    singleWriterOwners.Add(target, expressionIndex);
+                }
+                preflight.Plans[track] = plan;
                 ValidateSuppressions(set.Expressions, expressionIndex, track);
             }
 
+            // Author a missing KHR_texture_transform only where an exported channel points at it.
+            foreach (var plan in preflight.Plans.Values)
+                foreach (var target in plan.Targets)
+                    if (plan.Writes(target) &&
+                        preflight.TextureInfoByTarget.TryGetValue(target, out var textureInfo) &&
+                        preflight.PlannedTextureTransforms.TryGetValue(textureInfo, out var transform))
+                        preflight.TextureTransformsToAdd[textureInfo] = transform;
+
             ValidateMappings(set);
             return preflight;
+        }
+
+        // Node rotation and scale and KHR_texture_transform scale are single-writer (EXP-06): at most one expression
+        // may list each of them. The exporter writes no other single-writer property.
+        private static bool IsSingleWriterTarget(string target)
+        {
+            if (target.StartsWith("/nodes/", StringComparison.Ordinal))
+                return target.EndsWith("/rotation", StringComparison.Ordinal)
+                       || target.EndsWith("/scale", StringComparison.Ordinal);
+            return target.EndsWith(
+                $"/{ExtTextureTransformExtensionFactory.EXTENSION_NAME}/{ExtTextureTransformExtensionFactory.SCALE}",
+                StringComparison.Ordinal);
+        }
+
+        private static string SingleWriterHint(string target)
+        {
+            return target.StartsWith("/nodes/", StringComparison.Ordinal)
+                ? "Give each expression its own helper node: insert one ancestor of the joint per expression at the " +
+                  "joint's pivot and let each expression rotate or scale only its own helper node."
+                : "Move the texture scale change into one expression; texture offsets and rotations may still add up.";
         }
 
         private static void ValidateMorphDriver(
@@ -435,7 +512,8 @@ namespace UnityGLTF.KhrCharacter
             GLTFRoot gltfRoot,
             MorphDriver driver,
             string description,
-            HashSet<string> concreteTargets)
+            HashSet<string> concreteTargets,
+            TrackExportPlan plan)
         {
             if (driver == null) throw InvalidExpression($"{description} is null.");
             if (driver.Smr == null || driver.Smr.sharedMesh == null)
@@ -452,19 +530,24 @@ namespace UnityGLTF.KhrCharacter
 
             var sampler = NormalizeLegacySampler(driver.Sampler, description);
             float authoredInitial = ResolveMorphWeights(node, morphTargetCount, description)[driver.BlendShapeIndex];
-            BuildMorphValues(driver, sampler, authoredInitial, description);
-            AddUniqueTarget(
-                concreteTargets,
-                $"/nodes/{nodeIndex}/weights/{driver.BlendShapeIndex}",
-                description);
+            var values = BuildMorphValues(driver, sampler, authoredInitial, description);
+            string target = MorphTarget(nodeIndex, driver);
+            AddUniqueTarget(concreteTargets, target, description);
+            bool constant = true;
+            foreach (float value in values) constant &= value == authoredInitial;
+            plan.Add(target, constant);
         }
+
+        private static string MorphTarget(int nodeIndex, MorphDriver driver)
+            => $"/nodes/{nodeIndex}/weights/{driver.BlendShapeIndex}";
 
         private static void ValidateJointDriver(
             GLTFSceneExporter exporter,
             GLTFRoot gltfRoot,
             JointDriver driver,
             string description,
-            HashSet<string> concreteTargets)
+            HashSet<string> concreteTargets,
+            TrackExportPlan plan)
         {
             if (driver == null) throw InvalidExpression($"{description} is null.");
             if (driver.Target == null) throw InvalidExpression($"{description} has no target transform.");
@@ -475,45 +558,66 @@ namespace UnityGLTF.KhrCharacter
 
             var sampler = NormalizeLegacySampler(driver.Sampler, description);
             string path;
+            bool constant = true;
             switch (driver.Channel)
             {
                 case TrsChannel.Translation:
                 {
                     path = "translation";
                     var values = BuildJointVectorValues(driver, sampler, description);
-                    RequireEquivalent(
-                        new[] { node.Translation.X, node.Translation.Y, node.Translation.Z },
-                        ToGltfTranslation(values[0]),
-                        $"{description} time-zero translation");
+                    var authored = new[] { node.Translation.X, node.Translation.Y, node.Translation.Z };
+                    RequireEquivalent(authored, ToGltfTranslation(values[0]), $"{description} time-zero translation");
+                    foreach (var value in values) constant &= SameComponents(authored, ToGltfTranslation(value));
                     break;
                 }
                 case TrsChannel.Scale:
                 {
                     path = "scale";
                     var values = BuildJointVectorValues(driver, sampler, description);
-                    RequireEquivalent(
-                        new[] { node.Scale.X, node.Scale.Y, node.Scale.Z },
-                        ToComponents(values[0]),
-                        $"{description} time-zero scale");
+                    var authored = new[] { node.Scale.X, node.Scale.Y, node.Scale.Z };
+                    RequireEquivalent(authored, ToComponents(values[0]), $"{description} time-zero scale");
+                    foreach (var value in values) constant &= SameComponents(authored, ToComponents(value));
                     break;
                 }
                 case TrsChannel.Rotation:
                 {
                     path = "rotation";
                     var values = BuildJointRotationValues(driver, sampler, description);
-                    var first = ToGltfRotation(values[0]);
+                    var authored = new[] { node.Rotation.X, node.Rotation.Y, node.Rotation.Z, node.Rotation.W };
                     if (!ExpressionInitialValueValidation.QuaternionsEquivalent(
-                            new[] { node.Rotation.X, node.Rotation.Y, node.Rotation.Z, node.Rotation.W },
-                            first,
+                            authored,
+                            ToGltfRotation(values[0]),
                             ExpressionAccessorComponentEncoding.Float))
                         throw InvalidExpression($"{description} time-zero rotation does not match the exported node.");
+                    foreach (var value in values)
+                    {
+                        var exported = ToGltfRotation(value);
+                        constant &= SameComponents(authored, exported) || SameComponents(authored, Negated(exported));
+                    }
                     break;
                 }
                 default:
                     throw InvalidExpression($"{description} has unknown TRS channel {driver.Channel}.");
             }
 
-            AddUniqueTarget(concreteTargets, $"/nodes/{nodeIndex}/{path}", description);
+            string target = $"/nodes/{nodeIndex}/{path}";
+            AddUniqueTarget(concreteTargets, target, description);
+            plan.Add(target, constant);
+        }
+
+        private static bool SameComponents(float[] left, float[] right)
+        {
+            if (left.Length != right.Length) return false;
+            for (int index = 0; index < left.Length; index++)
+                if (left[index] != right[index]) return false;
+            return true;
+        }
+
+        private static float[] Negated(float[] value)
+        {
+            var result = new float[value.Length];
+            for (int index = 0; index < result.Length; index++) result[index] = -value[index];
+            return result;
         }
 
         private void ValidateTextureDriver(
@@ -523,7 +627,8 @@ namespace UnityGLTF.KhrCharacter
             string description,
             HashSet<string> concreteTargets,
             Dictionary<string, TextureTargetSignature> textureTargets,
-            ExpressionExportPreflight preflight)
+            ExpressionExportPreflight preflight,
+            TrackExportPlan plan)
         {
             if (driver == null) throw InvalidExpression($"{description} is null.");
             if (driver.Renderer == null) throw InvalidExpression($"{description} has no renderer.");
@@ -569,9 +674,12 @@ namespace UnityGLTF.KhrCharacter
                     basePath + ExtTextureTransformExtensionFactory.SCALE,
                     sampler,
                     curves.Scale,
+                    expectedScale,
                     description,
                     concreteTargets,
-                    textureTargets);
+                    textureTargets,
+                    plan);
+                preflight.TextureInfoByTarget[basePath + ExtTextureTransformExtensionFactory.SCALE] = textureInfo;
             }
             if (driver.TransformTarget != TextureTransformTarget.Scale)
             {
@@ -580,9 +688,12 @@ namespace UnityGLTF.KhrCharacter
                     basePath + ExtTextureTransformExtensionFactory.OFFSET,
                     sampler,
                     curves.Offset,
+                    expectedOffset,
                     description,
                     concreteTargets,
-                    textureTargets);
+                    textureTargets,
+                    plan);
+                preflight.TextureInfoByTarget[basePath + ExtTextureTransformExtensionFactory.OFFSET] = textureInfo;
             }
         }
 
@@ -590,9 +701,11 @@ namespace UnityGLTF.KhrCharacter
             string target,
             NormalizedLegacySampler sampler,
             Vector2[] values,
+            float[] authored,
             string description,
             HashSet<string> concreteTargets,
-            Dictionary<string, TextureTargetSignature> textureTargets)
+            Dictionary<string, TextureTargetSignature> textureTargets,
+            TrackExportPlan plan)
         {
             if (textureTargets.TryGetValue(target, out var existing))
             {
@@ -604,6 +717,9 @@ namespace UnityGLTF.KhrCharacter
             if (!concreteTargets.Add(target))
                 throw InvalidExpression($"{description} duplicates concrete target '{target}'.");
             textureTargets[target] = new TextureTargetSignature { Sampler = sampler, Values = values };
+            bool constant = true;
+            foreach (var value in values) constant &= SameComponents(authored, ToComponents(value));
+            plan.Add(target, constant);
         }
 
         private static void ValidateSuppressions(ExpressionTrack[] expressions, int expressionIndex, ExpressionTrack track)
@@ -1079,10 +1195,10 @@ namespace UnityGLTF.KhrCharacter
                     }
                 }
             }
-            else if (!preflight.TextureTransformsToAdd.TryGetValue(textureInfo, out transform))
+            else if (!preflight.PlannedTextureTransforms.TryGetValue(textureInfo, out transform))
             {
                 transform = TextureTransformFromSt(baseSt);
-                preflight.TextureTransformsToAdd.Add(textureInfo, transform);
+                preflight.PlannedTextureTransforms.Add(textureInfo, transform);
             }
 
             if (transform == null) throw InvalidExpression($"{description} could not resolve KHR_texture_transform.");
@@ -1203,7 +1319,11 @@ namespace UnityGLTF.KhrCharacter
             return new InvalidOperationException($"KHR_character_expression export is invalid: {message}");
         }
 
-        private void ExportExpressions(GLTFSceneExporter exporter, GLTFRoot gltfRoot, CharacterExpressionSet set)
+        private void ExportExpressions(
+            GLTFSceneExporter exporter,
+            GLTFRoot gltfRoot,
+            CharacterExpressionSet set,
+            ExpressionExportPreflight preflight)
         {
             var expressions = new List<KHR_character_expression.ExpressionItem>();
             var mappingDict = new Dictionary<string, Dictionary<string, List<KHR_character_expression_mapping.SourceWeight>>>();
@@ -1227,43 +1347,20 @@ namespace UnityGLTF.KhrCharacter
                 var jointChannels = new List<int>();
                 var texChannels = new List<int>();
                 var emittedTextureTargets = new HashSet<string>();
+                var plan = preflight.Plans[track];
 
-                // Write driver channels, capture indices (Phase 3)
+                // Write driver channels and capture the listed indices (Phase 3)
                 if (track.MorphDrivers != null)
-                {
                     foreach (var driver in track.MorphDrivers)
-                    {
-                        int before = anim.Channels.Count;
-                        WriteMorphDriver(exporter, gltfRoot, anim, driver);
-                        int after = anim.Channels.Count;
-                        for (int i = before; i < after; i++)
-                            morphChannels.Add(i);
-                    }
-                }
+                        WriteMorphDriver(exporter, gltfRoot, anim, driver, plan, morphChannels);
 
                 if (track.JointDrivers != null)
-                {
                     foreach (var driver in track.JointDrivers)
-                    {
-                        int before = anim.Channels.Count;
-                        WriteJointDriver(exporter, gltfRoot, anim, driver);
-                        int after = anim.Channels.Count;
-                        for (int i = before; i < after; i++)
-                            jointChannels.Add(i);
-                    }
-                }
+                        WriteJointDriver(exporter, gltfRoot, anim, driver, plan, jointChannels);
 
                 if (track.TextureDrivers != null)
-                {
                     foreach (var driver in track.TextureDrivers)
-                    {
-                        int before = anim.Channels.Count;
-                        WriteTextureDriver(exporter, gltfRoot, anim, driver, emittedTextureTargets);
-                        int after = anim.Channels.Count;
-                        for (int i = before; i < after; i++)
-                            texChannels.Add(i);
-                    }
-                }
+                        WriteTextureDriver(exporter, gltfRoot, anim, driver, emittedTextureTargets, plan, texChannels);
 
                 // Skip empty expressions
                 if (anim.Channels.Count == 0) continue;
@@ -1513,10 +1610,18 @@ namespace UnityGLTF.KhrCharacter
             return JToken.Parse(json);
         }
 
-        private void WriteMorphDriver(GLTFSceneExporter exporter, GLTFRoot gltfRoot, GLTFAnimation anim, MorphDriver driver)
+        private void WriteMorphDriver(
+            GLTFSceneExporter exporter,
+            GLTFRoot gltfRoot,
+            GLTFAnimation anim,
+            MorphDriver driver,
+            TrackExportPlan plan,
+            List<int> listedChannels)
         {
-            var normalizedSampler = NormalizeLegacySampler(driver.Sampler, "Morph driver");
             int nodeIdx = exporter.GetTransformIndex(driver.Smr.transform);
+            string concreteTarget = MorphTarget(nodeIdx, driver);
+            if (!plan.Writes(concreteTarget)) return;
+            var normalizedSampler = NormalizeLegacySampler(driver.Sampler, "Morph driver");
             var node = RequireNode(gltfRoot, nodeIdx, "Morph driver");
             int morphTargetCount = GetMorphTargetCount(node, "Morph driver");
             float authoredInitial = ResolveMorphWeights(node, morphTargetCount, "Morph driver")[driver.BlendShapeIndex];
@@ -1551,15 +1656,20 @@ namespace UnityGLTF.KhrCharacter
                 },
                 Target = target
             });
+            if (plan.Lists(concreteTarget)) listedChannels.Add(anim.Channels.Count - 1);
             exporter.DeclareExtensionUsage(KHR_animation_pointer.EXTENSION_NAME);
         }
 
         // F7: joints are written as MANUAL native glTF TRS channels (target.Node + path
-        // translation/rotation/scale), NOT via AddAnimationData. Under UseAnimationPointer, AddAnimationData
-        // rewrites the channel into a `pointer` channel (target.Node = null), which the native-only joint baker
-        // (KhrCharacterBaker.BakeJointChannels) silently drops -> joint round-trip breaks. Emitting native TRS
-        // directly keeps joints readable in both native and AnimationPointer export modes.
-        private void WriteJointDriver(GLTFSceneExporter exporter, GLTFRoot gltfRoot, GLTFAnimation anim, JointDriver driver)
+        // translation/rotation/scale), NOT via AddAnimationData, which under UseAnimationPointer rewrites the channel
+        // into a `pointer` channel. Native TRS channels need no KHR_animation_pointer in either export mode.
+        private void WriteJointDriver(
+            GLTFSceneExporter exporter,
+            GLTFRoot gltfRoot,
+            GLTFAnimation anim,
+            JointDriver driver,
+            TrackExportPlan plan,
+            List<int> listedChannels)
         {
             string path = driver.Channel switch
             {
@@ -1571,6 +1681,8 @@ namespace UnityGLTF.KhrCharacter
             if (path == null) throw InvalidExpression($"Joint driver has unknown TRS channel {driver.Channel}.");
 
             int nodeIndex = exporter.GetTransformIndex(driver.Target);
+            string concreteTarget = $"/nodes/{nodeIndex}/{path}";
+            if (!plan.Writes(concreteTarget)) return;
             RequireNode(gltfRoot, nodeIndex, "Joint driver");
             var normalizedSampler = NormalizeLegacySampler(driver.Sampler, "Joint driver");
             AccessorId outputAcc;
@@ -1588,6 +1700,7 @@ namespace UnityGLTF.KhrCharacter
 
             EmitNativeTrsChannel(exporter, gltfRoot, anim, nodeIndex, path,
                 exporter.ExportAccessor(normalizedSampler.Times), outputAcc, normalizedSampler.Interpolation);
+            if (plan.Lists(concreteTarget)) listedChannels.Add(anim.Channels.Count - 1);
         }
 
         // Translation/scale output accessor (VEC3). Translation gets the Unity->glTF (-1,1,1) X-flip; scale is raw.
@@ -1651,7 +1764,9 @@ namespace UnityGLTF.KhrCharacter
             GLTFRoot gltfRoot,
             GLTFAnimation anim,
             TextureDriver driver,
-            HashSet<string> emittedTargets)
+            HashSet<string> emittedTargets,
+            TrackExportPlan plan,
+            List<int> listedChannels)
         {
             var normalizedSampler = NormalizeLegacySampler(driver.Sampler, "Texture driver");
             var curves = BuildTextureCurves(driver, normalizedSampler, "Texture driver");
@@ -1674,33 +1789,42 @@ namespace UnityGLTF.KhrCharacter
                 matId.Id,
                 normalizedSampler,
                 curves,
-                emittedTargets);
+                emittedTargets,
+                plan,
+                listedChannels);
         }
 
         // UV transform: reconstruct the absolute Unity _ST per key (inverse of the import bake), unpack into glTF
-        // scale/offset (the KHR_texture_transform V-flip), and emit two KHR_animation_pointer channels:
+        // scale/offset (the KHR_texture_transform V-flip), and emit a KHR_animation_pointer channel for each target
+        // the plan writes:
         //   /materials/{m}/{slot}/extensions/KHR_texture_transform/{scale,offset}
         private void WriteUvTransformChannels(GLTFSceneExporter exporter, GLTFRoot gltfRoot, GLTFAnimation anim,
             TextureDriver driver,
             int materialIndex,
             NormalizedLegacySampler sampler,
             TextureCurves curves,
-            HashSet<string> emittedTargets)
+            HashSet<string> emittedTargets,
+            TrackExportPlan plan,
+            List<int> listedChannels)
         {
             string basePath = $"/materials/{materialIndex}/{driver.GltfTextureSlot}/extensions/{ExtTextureTransformExtensionFactory.EXTENSION_NAME}/";
             bool emitted = false;
             string scaleTarget = basePath + ExtTextureTransformExtensionFactory.SCALE;
-            if (driver.TransformTarget != TextureTransformTarget.Offset && emittedTargets.Add(scaleTarget))
+            if (driver.TransformTarget != TextureTransformTarget.Offset && plan.Writes(scaleTarget) &&
+                emittedTargets.Add(scaleTarget))
             {
                 EmitPointerChannel(exporter, gltfRoot, anim, sampler.Times, exporter.ExportAccessor(curves.Scale),
                     scaleTarget, sampler.Interpolation);
+                if (plan.Lists(scaleTarget)) listedChannels.Add(anim.Channels.Count - 1);
                 emitted = true;
             }
             string offsetTarget = basePath + ExtTextureTransformExtensionFactory.OFFSET;
-            if (driver.TransformTarget != TextureTransformTarget.Scale && emittedTargets.Add(offsetTarget))
+            if (driver.TransformTarget != TextureTransformTarget.Scale && plan.Writes(offsetTarget) &&
+                emittedTargets.Add(offsetTarget))
             {
                 EmitPointerChannel(exporter, gltfRoot, anim, sampler.Times, exporter.ExportAccessor(curves.Offset),
                     offsetTarget, sampler.Interpolation);
+                if (plan.Lists(offsetTarget)) listedChannels.Add(anim.Channels.Count - 1);
                 emitted = true;
             }
 

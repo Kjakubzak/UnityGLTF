@@ -15,6 +15,12 @@
     "precompiledReferences": [],
     "autoReferenced": true,
     "defineConstraints": [],
-    "versionDefines": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.meshopt.decompress",
+            "expression": "",
+            "define": "HAVE_MESHOPT_DECOMPRESS"
+        }
+    ],
     "noEngineReferences": false
 }

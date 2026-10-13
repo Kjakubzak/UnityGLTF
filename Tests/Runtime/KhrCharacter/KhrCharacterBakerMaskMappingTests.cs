@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using GLTF.Schema;
@@ -22,6 +23,73 @@ namespace UnityGLTF.KhrCharacter.Tests
                 new KHR_character_expression.ExpressionItem { Name = "zero" },
                 new KHR_character_expression.ExpressionItem { Name = "target" },
             };
+
+        [UnityTest]
+        public IEnumerator SuppressionsAndMappingSetsBindToTheResponseSetWithoutTheController()
+        {
+            var glb = CharacterGlbBuilder.TranslationCharacter("aa", "happy");
+            ((JArray)glb.Json["extensionsUsed"]).Add(KhrCharacterExtensionNames.ExpressionSuppression);
+            ((JArray)glb.Json["extensionsUsed"]).Add(KhrCharacterExtensionNames.ExpressionMapping);
+            ((JObject)glb.Expression(1)["extensions"])[KhrCharacterExtensionNames.ExpressionSuppression] = new JObject
+            {
+                {
+                    "suppressions", new JArray(new JObject
+                    {
+                        { "target", 0 }, { "type", "block" }, { "amount", 0.5 }, { "threshold", 0.25 },
+                    })
+                },
+            };
+            JArray Contribution(string key, int index, double weight)
+                => new JArray(new JObject { { key, index }, { "weight", weight } });
+            glb.Json["extensions"][KhrCharacterExtensionNames.ExpressionMapping] = new JObject
+            {
+                {
+                    "expressionSetMappings", new JObject
+                    {
+                        { "vrm", new JObject { { "Smile", Contribution("source", 1, 0.5) } } },
+                        { "", new JObject { { "Smile", Contribution("source", 0, 1) } } },
+                    }
+                },
+                {
+                    "expressionSetInputMappings", new JObject
+                    {
+                        { "relative/v1", new JObject { { "Smile", Contribution("target", 1, 0.25) } } },
+                    }
+                },
+            };
+
+            LogAssert.Expect(LogType.Error,
+                new Regex("Expression mapping set dropped: an expressionSetMappings identifier is empty"));
+            GameObject scene = null;
+            yield return glb.Import(plugin => plugin.CreateExpressionController = false, loaded => scene = loaded);
+            try
+            {
+                var hub = scene.GetComponent<KhrCharacter>();
+                Assert.IsNull(hub.Expressions);
+                var responses = hub.ExpressionResponses;
+                Assert.IsNotNull(responses);
+
+                Assert.IsEmpty(responses.Entries[0].Suppressions);
+                var suppression = responses.Entries[1].Suppressions[0];
+                Assert.AreEqual(1, suppression.SourceIndex);
+                Assert.AreEqual(0, suppression.TargetIndex);
+                Assert.AreEqual(SuppressionType.Block, suppression.Type);
+                Assert.AreEqual(0.5, suppression.Amount);
+                Assert.AreEqual(0.25, suppression.Threshold);
+
+                Assert.AreEqual(1, responses.ForwardMappingSets.Count, "the empty identifier drops only its own set");
+                Assert.IsTrue(responses.TryGetForwardMappingSet("vrm", out var forward));
+                Assert.AreEqual(1, forward.Targets[0].Contributions[0].SourceIndex);
+                Assert.AreEqual(0.5, forward.Targets[0].Contributions[0].Weight);
+                Assert.IsTrue(responses.TryGetInputMappingSet("relative/v1", out var input));
+                Assert.AreEqual(1, input.Commands[0].Contributions[0].TargetIndex);
+                Assert.AreEqual(0.25, input.Commands[0].Contributions[0].Weight);
+            }
+            finally
+            {
+                Object.DestroyImmediate(scene);
+            }
+        }
 
         [Test]
         public void BuildSuppressionEntries_ResolvesTargetAndSource()

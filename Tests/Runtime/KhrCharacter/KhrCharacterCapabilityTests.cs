@@ -1,6 +1,8 @@
+using System.Collections;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using GLTF.Schema;
+using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
@@ -9,11 +11,54 @@ using UnityGLTF.Plugins;
 namespace UnityGLTF.KhrCharacter.Tests
 {
     /// <summary>
-    /// Tests that capabilities are derived from the baked set (sub-domains are nested in expression items and
-    /// are not visible in the root/node presence scan).
+    /// Tests that capabilities are derived from <c>extensionsUsed</c>, the expression entries' extension keys and an
+    /// optional baked set (sub-domains are nested in expression items and are not visible in the root/node presence
+    /// scan).
     /// </summary>
     public class KhrCharacterCapabilityTests
     {
+        [UnityTest]
+        public IEnumerator Capabilities_ComeFromExtensionsUsedWithoutTheController()
+        {
+            var glb = CharacterGlbBuilder.TranslationCharacter("aa", "happy");
+            ((JArray)glb.Json["extensionsUsed"]).Add(KhrCharacterExtensionNames.ExpressionMorphtarget);
+            ((JArray)glb.Json["extensionsUsed"]).Add(KhrCharacterExtensionNames.ExpressionSuppression);
+            ((JArray)glb.Json["extensionsUsed"]).Add(KhrCharacterExtensionNames.ExpressionMapping);
+            ((JObject)glb.Expression(1)["extensions"])[KhrCharacterExtensionNames.ExpressionSuppression] = new JObject
+            {
+                { "suppressions", new JArray(new JObject { { "target", 0 } }) },
+            };
+            glb.Json["extensions"][KhrCharacterExtensionNames.ExpressionMapping] = new JObject
+            {
+                {
+                    "expressionSetMappings", new JObject
+                    {
+                        { "vrm", new JObject { { "Aa", new JArray(new JObject { { "source", 0 }, { "weight", 1 } }) } } },
+                    }
+                },
+            };
+
+            GameObject scene = null;
+            yield return glb.Import(plugin => plugin.CreateExpressionController = false, loaded => scene = loaded);
+            try
+            {
+                var hub = scene.GetComponent<KhrCharacter>();
+                Assert.IsNull(hub.Expressions, "the Unity controller was not requested");
+                Assert.IsNotNull(hub.ExpressionResponses);
+                foreach (var capability in new[]
+                {
+                    CharacterCapability.Expression, CharacterCapability.Joint, CharacterCapability.Morphtarget,
+                    CharacterCapability.Suppression, CharacterCapability.Mapping,
+                })
+                    Assert.IsTrue(hub.Has(capability), $"{capability} is declared by the asset");
+                Assert.IsFalse(hub.Has(CharacterCapability.TextureTransform));
+            }
+            finally
+            {
+                Object.DestroyImmediate(scene);
+            }
+        }
+
         [Test]
         public void DeriveCapabilities_FromBakedSet_ReportsSubDomains()
         {

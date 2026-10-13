@@ -242,6 +242,18 @@ namespace UnityGLTF.Plugins
         {
             return exportMaps.TryGetValue(unityPropertyName, out map);
         }
+
+        /// <summary>
+        /// True when an import map handles the glTF material property, as its primary or secondary property,
+        /// independent of which shader properties a particular material has.
+        /// </summary>
+        public bool HasImportMap(string gltfPropertyName)
+        {
+            foreach (var map in importMaps.Values)
+                if (map.GltfPropertyName == gltfPropertyName || map.GltfSecondaryPropertyName == gltfPropertyName)
+                    return true;
+            return false;
+        }
         
         public bool GetMapFromUnityMaterial(Material mat, string unityPropertyName, out MaterialPointerPropertyMap map)
         {

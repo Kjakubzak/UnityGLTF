@@ -17,7 +17,7 @@ look-at-target node extensions also import on ordinary glTF assets without the m
 | Component | Responsibility |
 |---|---|
 | `KhrCharacter` | Hub: its presence means "this asset contains a character". Capability list, readiness, references to the components below. |
-| `ExpressionResponseSet` | Passive, stateless wire evaluator returning absolute response records by authoritative expression index. It never writes scene targets. |
+| `ExpressionResponseSet` | Passive, stateless wire evaluator returning absolute response records by authoritative expression index for the channels a supported derived expression extension lists. It also exposes each entry's suppressions, every mapping set and the validation status, and never writes scene targets. |
 | `ExpressionController` | Optional Unity host adapter for the legacy additive/override morph, joint, and material application policy. |
 | `SkeletonMap` | Every skeleton mapping set (role → node index and transform) and every tagged reference pose with its resolved values; can (re)build a Unity humanoid Avatar. |
 | `LookAtTargetSet` | Passive live `Transform` markers for `KHR_node_lookat_target`; never selects, ranks, or drives a consumer. |
@@ -69,6 +69,46 @@ authored: `amount` when its flag is set or it differs from `1`, and `threshold` 
 never written on a `blend` or omitted type. A custom type keeps its token and its uninterpreted `amount` and
 `threshold`. A legacy suppression `name` is an unknown member: preserved, never compared with the target.
 
+## Expression import and validation
+
+The import plugin bakes `KHR_character_expression` into `ExpressionResponseSet` whether or not the Unity controller
+is requested.
+
+- **Listing decides which channels animate.** A channel produces response records only when a derived expression
+  extension on its entry lists it, this implementation supports that extension, and its target resolves.
+  `ExpressionResponseChannel.ListedBy` names the listing extension and `EmitsRecords` says whether the channel
+  produces records. An unlisted channel, or one listed only by an unsupported extension, produces none, but it still
+  counts toward the duration `T` and its time-zero value is still checked when its target resolves.
+- **Derived extensions.** The built-in joint, morphtarget and texture_transform extensions list channels and are
+  supported; `KHR_character_expression_suppression` is recognized and lists none. A host registers vendor entry
+  extensions in `ExpressionDerivedExtensionRegistry.Default` before import, with whether they list channels, their
+  channel classification, whether the host supports them, and any properties they declare single-writer. A
+  declaration counts only when the host supports the extension. Registered extensions are unsupported by default.
+- **Targets.** Node `translation`, `rotation`, `scale` and morph `weights` resolve in core and pointer form, as one
+  canonical property. `KHR_texture_transform` `offset`, `scale` and `rotation` resolve on the core texture slots and
+  on material-extension textures that the material remapper handles; the textureInfo must author a
+  `KHR_texture_transform`, whose omitted values read as `[0, 0]`, `[1, 1]` and `0`. Texture rotation is sampled as
+  an ordinary scalar and never wrapped. Each resolved target keeps its kind and authored initial value `b`
+  (`ExpressionResponseTarget.Kind`, `AuthoredInitial`, `ArrayLength`). Node TRS and texture offset and scale carry
+  the float32 values UnityGLTF parses; morph weights and texture rotation carry the JSON doubles.
+- **Matrix nodes.** A core channel must not target a node that defines `matrix`, and a pointer must not target its
+  `translation`, `rotation` or `scale`. Pointer-form morph weights on such a node are allowed.
+- **Conflicts.** Every listed channel, supported or not, is a possible record. Two entries whose possible records
+  overlap on node `rotation`, node `scale`, `KHR_texture_transform` `scale`, a quaternion, or a property a supported
+  derived extension declares single-writer make the asset invalid; the error names both entries and the property.
+- **Invalid data is rejected as a whole.** A missing `name`, a listed index outside the animation, a channel listed
+  by two derived extensions, a channel outside its extension's classification, a matrix-node target, a time-zero
+  mismatch or a single-writer conflict logs an error and binds no `ExpressionResponseSet`.
+- **Incomplete validation is not a rejection.** `ExpressionResponseSet.Validation` reports, and the import logs as a
+  warning, data the importer cannot check: an unrecognized or unsupported entry extension, a target it cannot
+  resolve, or compressed buffer data. A bufferView with `KHR_meshopt_compression`, an unknown extension, or
+  `EXT_meshopt_compression` without the decompression package and its import plugin is never read from fallback
+  data: such an output leaves its channel without records, and such an input makes the whole entry unevaluable
+  (`ExpressionResponse.IsEvaluable` is false).
+- **Suppressions and mapping sets** are bound to the response set (`ExpressionResponseSetEntry.Suppressions`,
+  `ForwardMappingSets`, `InputMappingSets`) with expression-array indices. An empty mapping-set identifier drops only
+  that set, with an error.
+
 ## Enabling the import plugin
 
 `KhrCharacterImportPlugin` is a `GLTFImportPlugin` with `EnabledByDefault => false`. Enable it before
@@ -81,10 +121,11 @@ When disabled, used-only extension data can still import as ordinary glTF metada
 behavioral extension in `extensionsRequired` is rejected unless an enabled plugin claims its complete minimum
 support; schema recognition alone is not a support claim.
 
-`CreateExpressionController` explicitly opts into the Unity scene-writing adapter. It is off by default. When that
-adapter is created successfully, `SuppressNonInteractiveAnimationAutoPlay` may additionally alter Unity's default
-clip selection; it is also off by default. Invalid or passive-only expression data never triggers suppression.
-Imported animation clips, wrap modes, and Animator state are otherwise left untouched.
+`CreateExpressionController` explicitly opts into the Unity scene-writing adapter. It is off by default.
+`SuppressNonInteractiveAnimationAutoPlay` keeps the animations that expression entries reference, and the
+reference-pose animations, from becoming Unity's default clip; they stay explicitly playable. It is also off by
+default and does not need the controller. Imported animation clips, wrap modes, and Animator state are otherwise left
+untouched.
 
 The passive response representation is not yet an export source. Export aborts whenever a character has passive
 expression data, even if a lossy legacy controller projection is also present, rather than silently discarding the
@@ -115,6 +156,18 @@ When enabled, the plugin writes the following extensions from a Unity character 
   `ReferencePose_<label>`.
 - **`KHR_node_camera_hint` / `KHR_node_lookat_target`**: Independent passive node annotations. They export
   from all matching sets under the selected export roots and do not synthesize `KHR_character`.
+
+### Listing and single-writer rules
+
+- **Constant channels are not listed.** A channel whose exported keys all equal the authored initial value would
+  still produce records and count for conflicts, so the exporter omits it. Every exported channel ends at normalized
+  time `1`, so omitting one never shortens the duration. When every channel of an expression is constant, the
+  exporter keeps one unlisted channel so the entry still has a duration, and warns that the expression produces no
+  records. A missing `KHR_texture_transform` is authored only on textureInfos an exported channel points at.
+- **Single-writer properties.** Node `rotation`, node `scale` and `KHR_texture_transform` `scale` may be listed by at
+  most one expression. A second expression listing one aborts the export with the property's name. For a joint,
+  give each expression its own helper node: one ancestor of the joint per expression at the joint's pivot, each
+  rotated or scaled by one expression only. Translation, morph weights and texture offset add up across expressions.
 
 ### Response-animation scope
 
@@ -422,8 +475,8 @@ The baked data is import-time only, but the components survive being saved as a 
   `Import/KhrCharacterSkeletonBaker.cs`
 - Export: `Export/KhrCharacterExportPlugin.cs`, `Export/KhrCharacterExportContext.cs`
 - Passive expression wire path: `Components/ExpressionResponseSet.cs`,
-  `Evaluation/ExpressionResponseEvaluator.cs`, `Evaluation/ExpressionInitialValueValidation.cs`, and
-  `Import/KhrCharacterResponseBaker.cs`
+  `Evaluation/ExpressionResponseEvaluator.cs`, `Evaluation/ExpressionInitialValueValidation.cs`,
+  `Evaluation/ExpressionDerivedExtensionRegistry.cs`, and `Import/KhrCharacterResponseBaker.cs`
 - Runtime host adapters: `Components/ExpressionController.cs`, `Components/SkeletonMap.cs`, `Components/CameraHintSet.cs`,
   `Components/LookAtTargetSet.cs`, `Components/GazeSolver.cs` (optional host adapter), and
   `Components/EyeAimConstraint.cs` (non-spec, opt-in eye aiming)

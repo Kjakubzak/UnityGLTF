@@ -29,12 +29,14 @@ namespace UnityGLTF.KhrCharacter
 
         [Tooltip("Optional Unity host adapter. When enabled, imports the legacy additive/override " +
                  "ExpressionController and lets it write scene targets. This is application policy, not " +
-                 "KHR_character_expression wire behavior.")]
+                 "KHR_character_expression wire behavior. The passive ExpressionResponseSet, its suppressions " +
+                 "and its mapping sets are imported either way.")]
         public bool CreateExpressionController;
 
-        [Tooltip("Optional Unity host policy. When enabled together with the expression controller, prevents " +
-                 "the imported expression/reference-pose clips from becoming an automatic default animation. " +
-                 "This changes the Unity animation host and is not extension conformance behavior.")]
+        [Tooltip("Optional Unity host policy. When enabled, prevents the animations that expression entries " +
+                 "reference and the reference-pose animations from becoming an automatic default animation; they " +
+                 "stay explicitly playable. This changes the Unity animation host and is not extension " +
+                 "conformance behavior.")]
         public bool SuppressNonInteractiveAnimationAutoPlay;
 
         public override GLTFImportPluginContext CreateInstance(GLTFImportContext context)
@@ -228,8 +230,9 @@ namespace UnityGLTF.KhrCharacter
             // controller nor clip suppression is implied by the extension, so both remain opt-in import policy.
             var expressionExt = _context?.Root != null ? GetExpressionExtension(_context.Root) : null;
 
-            // The passive response set is the wire implementation: it preserves every channel, evaluates absolute
-            // records, and never writes scene targets. It is independent of the optional Unity controller below.
+            // The passive response set is the wire implementation: it evaluates absolute records for the channels a
+            // supported derived extension lists and never writes scene targets. It is independent of the optional
+            // Unity controller below.
             var responses = TryBakeExpressionResponses(sceneObject, hub, expressionExt);
 
             // The legacy scene-writing adapter may only consume data that passed the base wire evaluator's
@@ -240,12 +243,11 @@ namespace UnityGLTF.KhrCharacter
             WireSkeleton(sceneObject, hub);
             WireNodeFeatures(sceneObject, hub);
 
-            // A host that explicitly gives the optional controller ownership may also opt into changing Unity's
-            // default animation selection. Ordinary imported clips are otherwise left untouched.
-            if (_suppressNonInteractiveAnimationAutoPlay && set != null)
+            // An explicit host policy; ordinary imported clips are otherwise left untouched.
+            if (_suppressNonInteractiveAnimationAutoPlay)
                 SuppressNonInteractiveClipAutoPlay(sceneObject, expressionExt);
 
-            var capabilities = DeriveCapabilities(_presentExtensions, set);
+            var capabilities = DeriveCapabilities(_presentExtensions, set, _context?.Root?.ExtensionsUsed, expressionExt);
             if (hub.Skeleton != null && hub.Skeleton.ReferencePoses.Count > 0)
                 capabilities.Add(CharacterCapability.ReferencePose);
             hub.SetCapabilities(capabilities);
@@ -287,23 +289,77 @@ namespace UnityGLTF.KhrCharacter
             var importer = _context?.SceneImporter;
             if (root == null || importer == null || expressionExt == null) return null;
 
+            MaterialPropertiesRemapper remapper = null;
+            if (_context.TryGetPlugin<AnimationPointerImportContext>(out var pointerContext))
+                remapper = pointerContext.materialPropertiesRemapper;
+            var options = new ExpressionResponseBakeOptions
+            {
+                MaterialRemapper = remapper,
+                MeshoptDecoderActive = MeshoptDecoderActive,
+            };
+
             try
             {
-                var entries = KhrCharacterResponseBaker.Bake(root, importer, expressionExt);
+                var entries = KhrCharacterResponseBaker.Bake(root, importer, expressionExt, options, out var validation);
                 if (entries.Length == 0) return null;
+
+                // Indices stay expression-array indices: the set is all-or-nothing, so every entry is present.
+                var identity = new Dictionary<int, int>();
+                for (int index = 0; index < entries.Length; index++) identity[index] = index;
+                for (int index = 0; index < entries.Length; index++)
+                {
+                    var suppression = expressionExt.Expressions[index]?.Suppression;
+                    if (suppression != null)
+                        entries[index].SetSuppressions(
+                            KhrCharacterBaker.BuildSuppressionEntries(suppression, index, identity));
+                }
+
+                ExpressionMappingSet[] forward = null;
+                ExpressionInputMappingSet[] input = null;
+                var mappingExt = KhrCharacterBaker.GetMappingExtension(root);
+                if (mappingExt != null)
+                {
+                    void DropSet(string message) =>
+                        Debug.LogError($"[KHR_character] Expression mapping set dropped: {message}");
+                    forward = KhrCharacterBaker.BuildMappingSets(mappingExt, identity, expressionExt.Expressions, DropSet);
+                    input = KhrCharacterBaker.BuildInputMappingSets(
+                        mappingExt, identity, expressionExt.Expressions, DropSet);
+                }
+
                 var responses = sceneObject.GetComponent<ExpressionResponseSet>();
                 if (responses == null) responses = sceneObject.AddComponent<ExpressionResponseSet>();
                 responses.Bind(
                     entries,
                     root.ExtensionsRequired != null &&
-                    root.ExtensionsRequired.Contains(KhrCharacterExtensionNames.Expression));
+                    root.ExtensionsRequired.Contains(KhrCharacterExtensionNames.Expression),
+                    validation,
+                    forward,
+                    input);
                 hub.ExpressionResponses = responses;
+                if (!validation.IsComplete)
+                    Debug.LogWarning(
+                        "[KHR_character] Expression validation is incomplete: " +
+                        string.Join(" ", validation.IncompleteReasons));
                 return responses;
             }
             catch (ExpressionResponseEvaluationException exception)
             {
                 Debug.LogError($"[KHR_character] Expression response data is invalid: {exception.Message}");
                 return null;
+            }
+        }
+
+        // EXT_meshopt_compression bufferViews are decoded only when the decompression package is installed and its
+        // import plugin is enabled.
+        private bool MeshoptDecoderActive
+        {
+            get
+            {
+#if HAVE_MESHOPT_DECOMPRESS
+                return _context != null && _context.TryGetPlugin<MeshoptImportContext>(out _);
+#else
+                return false;
+#endif
             }
         }
 
@@ -640,11 +696,40 @@ namespace UnityGLTF.KhrCharacter
         internal static bool ShouldBuildHumanoid(RigImportMode rigMode, SkeletonMappingResult result)
             => rigMode == RigImportMode.Humanoid && result?.Bones != null && result.Bones.Count > 0;
 
-        internal static List<CharacterCapability> DeriveCapabilities(ICollection<string> presentExtensions, CharacterExpressionSet set)
+        /// <summary>
+        /// Lists the extension capabilities an asset declares. The expression types come from
+        /// <c>extensionsUsed</c>, from the extension keys of the expression entries and from an optional baked set,
+        /// so they are discovered without the Unity controller.
+        /// </summary>
+        internal static List<CharacterCapability> DeriveCapabilities(
+            ICollection<string> presentExtensions,
+            CharacterExpressionSet set,
+            IEnumerable<string> extensionsUsed = null,
+            KHR_character_expression expressionExt = null)
         {
             var caps = new List<CharacterCapability>();
+            var declared = new HashSet<string>();
+            if (extensionsUsed != null)
+                foreach (var name in extensionsUsed)
+                    if (name != null) declared.Add(name);
+            if (expressionExt?.Expressions != null)
+            {
+                foreach (var item in expressionExt.Expressions)
+                {
+                    if (item == null) continue;
+                    if (item.Morphtarget != null) declared.Add(KhrCharacterExtensionNames.ExpressionMorphtarget);
+                    if (item.Joint != null) declared.Add(KhrCharacterExtensionNames.ExpressionJoint);
+                    if (item.TextureTransform != null) declared.Add(KhrCharacterExtensionNames.ExpressionTextureTransform);
+                    if (item.Suppression != null) declared.Add(KhrCharacterExtensionNames.ExpressionSuppression);
+                    if (item.RawExtensions != null)
+                        foreach (var property in item.RawExtensions.Properties())
+                            declared.Add(property.Name);
+                }
+            }
+
             void AddIf(bool present, CharacterCapability c) { if (present) caps.Add(c); }
             bool Present(string name) => presentExtensions != null && presentExtensions.Contains(name);
+            bool Declared(string name) => declared.Contains(name) || Present(name);
 
             // Root/node extensions come from the presence scan.
             AddIf(Present(KhrCharacterExtensionNames.Character), CharacterCapability.Character);
@@ -653,10 +738,13 @@ namespace UnityGLTF.KhrCharacter
             AddIf(Present(KhrCharacterExtensionNames.NodeLookatTarget), CharacterCapability.LookAtTarget);
             AddIf(Present(KhrCharacterExtensionNames.SkeletonMapping), CharacterCapability.SkeletonMapping);
 
-            // Per-domain sub-extensions are nested inside expression items, so report what was actually baked.
+            bool morph = Declared(KhrCharacterExtensionNames.ExpressionMorphtarget);
+            bool joint = Declared(KhrCharacterExtensionNames.ExpressionJoint);
+            bool texture = Declared(KhrCharacterExtensionNames.ExpressionTextureTransform);
+            bool suppression = Declared(KhrCharacterExtensionNames.ExpressionSuppression);
+            bool mapping = Declared(KhrCharacterExtensionNames.ExpressionMapping);
             if (set?.Expressions != null)
             {
-                bool morph = false, joint = false, texture = false, suppression = false;
                 foreach (var t in set.Expressions)
                 {
                     if (t == null) continue;
@@ -665,14 +753,14 @@ namespace UnityGLTF.KhrCharacter
                     texture |= (t.Domains & ExpressionDomain.Texture) != 0;
                     suppression |= t.Suppressions != null && t.Suppressions.Length > 0;
                 }
-                AddIf(morph, CharacterCapability.Morphtarget);
-                AddIf(joint, CharacterCapability.Joint);
-                AddIf(texture, CharacterCapability.TextureTransform);
-                AddIf(suppression, CharacterCapability.Suppression);
             }
-            AddIf((set?.MappingSets != null && set.MappingSets.Length > 0)
-                  || (set?.InputMappingSets != null && set.InputMappingSets.Length > 0),
-                CharacterCapability.Mapping);
+            mapping |= (set?.MappingSets != null && set.MappingSets.Length > 0)
+                       || (set?.InputMappingSets != null && set.InputMappingSets.Length > 0);
+            AddIf(morph, CharacterCapability.Morphtarget);
+            AddIf(joint, CharacterCapability.Joint);
+            AddIf(texture, CharacterCapability.TextureTransform);
+            AddIf(suppression, CharacterCapability.Suppression);
+            AddIf(mapping, CharacterCapability.Mapping);
 
             return caps;
         }

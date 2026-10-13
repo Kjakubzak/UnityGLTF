@@ -344,12 +344,7 @@ namespace UnityGLTF.KhrCharacter
                 {
                     if (channelIndex < 0 || channelIndex >= animation.Channels.Count) continue;
                     var channel = animation.Channels[channelIndex];
-                    if (channel?.Target?.Node == null) continue;
-
-                    var path = channel.Target.Path;
-                    if (path != "translation" && path != "rotation" && path != "scale") continue;
-
-                    int nodeIndex = channel.Target.Node.Id;
+                    if (!TryResolveJointTarget(channel, out int nodeIndex, out string path)) continue;
                     if (!nodeIndexToGo.TryGetValue(nodeIndex, out var go) || go == null) continue;
                     var target = go.transform;
 
@@ -365,7 +360,7 @@ namespace UnityGLTF.KhrCharacter
                         var raw = DecodeVec4(importer, GetAccessor(root, sampler.Output));
                         if (raw.Length == 0) continue;
                         var quats = new Quaternion[raw.Length];
-                        for (int k = 0; k < raw.Length; k++) quats[k] = raw[k].ToUnityQuaternionConvert();
+                        for (int k = 0; k < raw.Length; k++) quats[k] = Normalized(raw[k].ToUnityQuaternionConvert());
                         BuildJointRotationDriver(target, times, quats, sampler.Interpolation, target.localRotation, output);
                     }
                     else
@@ -386,6 +381,38 @@ namespace UnityGLTF.KhrCharacter
                     Debug.LogWarning($"[KHR_character] Skipping joint channel {channelIndex}: {e.Message}");
                 }
             }
+        }
+
+        // A joint channel targets node translation, rotation or scale through target.node or through a
+        // KHR_animation_pointer "/nodes/{n}/{path}" pointer.
+        internal static bool TryResolveJointTarget(AnimationChannel channel, out int nodeIndex, out string path)
+        {
+            nodeIndex = -1;
+            path = null;
+            if (channel?.Target == null) return false;
+            if (channel.Target.Node != null)
+            {
+                nodeIndex = channel.Target.Node.Id;
+                path = channel.Target.Path;
+            }
+            else
+            {
+                var parts = GetPointer(channel)?.Split('/');
+                if (parts == null || parts.Length != 4 || parts[0].Length != 0 || parts[1] != "nodes" ||
+                    !int.TryParse(parts[2], out nodeIndex))
+                    return false;
+                path = parts[3];
+            }
+            return path == "translation" || path == "rotation" || path == "scale";
+        }
+
+        // Rotation keys hold unit quaternions; decoded normalized-integer keys are only approximately unit length.
+        private static Quaternion Normalized(Quaternion value)
+        {
+            float length = Mathf.Sqrt(value.x * value.x + value.y * value.y + value.z * value.z + value.w * value.w);
+            if (!(length > 0f) || float.IsInfinity(length))
+                throw new InvalidOperationException("a rotation key has zero or non-finite length");
+            return new Quaternion(value.x / length, value.y / length, value.z / length, value.w / length);
         }
 
         /// <summary>
@@ -760,17 +787,26 @@ namespace UnityGLTF.KhrCharacter
             return list.ToArray();
         }
 
+        /// <summary>
+        /// Builds the forward mapping sets. An empty identifier throws, or, when <paramref name="onInvalidSet"/> is
+        /// supplied, drops only that set and reports it.
+        /// </summary>
         internal static ExpressionMappingSet[] BuildMappingSets(
             KHR_character_expression_mapping mappingExt,
             IReadOnlyDictionary<int, int> wireToTrackIndex,
-            IReadOnlyList<KHR_character_expression.ExpressionItem> wireExpressions = null)
+            IReadOnlyList<KHR_character_expression.ExpressionItem> wireExpressions = null,
+            Action<string> onInvalidSet = null)
         {
             if (mappingExt?.ExpressionSetMappings == null) return null;
             var sets = new List<ExpressionMappingSet>();
             foreach (var setKv in mappingExt.ExpressionSetMappings)
             {
                 if (!KHR_character_expression_mapping.IsValidMappingSetIdentifier(setKv.Key))
-                    throw new InvalidOperationException("A mapping-set identifier is empty.");
+                {
+                    if (onInvalidSet == null) throw new InvalidOperationException("A mapping-set identifier is empty.");
+                    onInvalidSet("an expressionSetMappings identifier is empty.");
+                    continue;
+                }
                 var targets = new List<MappingTarget>();
                 if (setKv.Value != null)
                 {
@@ -810,17 +846,26 @@ namespace UnityGLTF.KhrCharacter
             return sets.Count > 0 ? sets.ToArray() : null;
         }
 
+        /// <summary>
+        /// Builds the input mapping sets. An empty identifier throws, or, when <paramref name="onInvalidSet"/> is
+        /// supplied, drops only that set and reports it.
+        /// </summary>
         internal static ExpressionInputMappingSet[] BuildInputMappingSets(
             KHR_character_expression_mapping mappingExt,
             IReadOnlyDictionary<int, int> wireToTrackIndex,
-            IReadOnlyList<KHR_character_expression.ExpressionItem> wireExpressions = null)
+            IReadOnlyList<KHR_character_expression.ExpressionItem> wireExpressions = null,
+            Action<string> onInvalidSet = null)
         {
             if (mappingExt?.ExpressionSetInputMappings == null) return null;
             var sets = new List<ExpressionInputMappingSet>();
             foreach (var setKv in mappingExt.ExpressionSetInputMappings)
             {
                 if (!KHR_character_expression_mapping.IsValidMappingSetIdentifier(setKv.Key))
-                    throw new InvalidOperationException("A mapping-set identifier is empty.");
+                {
+                    if (onInvalidSet == null) throw new InvalidOperationException("A mapping-set identifier is empty.");
+                    onInvalidSet("an expressionSetInputMappings identifier is empty.");
+                    continue;
+                }
                 var commands = new List<InputMappingCommand>();
                 if (setKv.Value != null)
                     foreach (var commandKv in setKv.Value)
@@ -873,7 +918,7 @@ namespace UnityGLTF.KhrCharacter
                 && string.Equals(diagnosticName, wireExpressions[expressionIndex]?.Name, StringComparison.Ordinal);
         }
 
-        private static KHR_character_expression_mapping GetMappingExtension(GLTFRoot root)
+        internal static KHR_character_expression_mapping GetMappingExtension(GLTFRoot root)
         {
             if (root.Extensions == null) return null;
             if (!root.Extensions.TryGetValue(KhrCharacterExtensionNames.ExpressionMapping, out var ext)) return null;

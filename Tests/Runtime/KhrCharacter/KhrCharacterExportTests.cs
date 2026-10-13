@@ -90,6 +90,14 @@ namespace UnityGLTF.KhrCharacter.Tests
             DeltaQuat = new[] { Quaternion.Euler(10f, 0f, 0f) }, BaseQuat = Quaternion.identity,
         };
 
+        // Translation is additive, so several expressions may move the same node; node rotation is single-writer.
+        private static JointDriver TranslationDriver(Transform target) => new JointDriver
+        {
+            Target = target, Channel = TrsChannel.Translation,
+            Sampler = new Sampler { Times = new[] { 0f }, Interp = Interp.Step, SingleKey = true },
+            DeltaVec = new[] { new Vector3(0.1f, 0f, 0f) }, BaseVec = Vector3.zero,
+        };
+
         private static void BindPassiveResponse(ExpressionResponseSet responses)
         {
             responses.Bind(
@@ -442,26 +450,22 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsNotNull(item, "the exported expression item should be present");
             Assert.IsNotNull(item.TextureTransform,
                 "the expression should have a KHR_character_expression_texture_transform extension");
-            Assert.AreEqual(2, item.TextureTransform.Channels.Length, "a UV transform exports a scale + an offset channel");
+            Assert.AreEqual(1, item.TextureTransform.Channels.Length,
+                "the scale never leaves its authored value, so only the offset channel is listed");
 
-            // The referenced channels are KHR_animation_pointer channels into this material's texture transform.
+            // The listed channel is a KHR_animation_pointer channel into this material's texture transform; the
+            // constant scale channel is not written at all, which leaves the duration unchanged.
             var anim = gltf.Animations[item.Animation];
-            AnimationChannel scaleCh = null, offsetCh = null;
-            foreach (var ci in item.TextureTransform.Channels)
-            {
-                var ch = anim.Channels[ci];
-                Assert.AreEqual("pointer", ch.Target.Path, "texture channels are exported via KHR_animation_pointer");
-                var path = PointerPath(ch);
-                Assert.IsNotNull(path, "texture channel must carry a KHR_animation_pointer path");
-                StringAssert.StartsWith("/materials/", path);
-                StringAssert.Contains("/pbrMetallicRoughness/baseColorTexture/", path);
-                if (path.EndsWith("/extensions/KHR_texture_transform/scale")) scaleCh = ch;
-                else if (path.EndsWith("/extensions/KHR_texture_transform/offset")) offsetCh = ch;
-            }
-            Assert.IsNotNull(scaleCh, "a KHR_texture_transform 'scale' pointer channel should be present");
-            Assert.IsNotNull(offsetCh, "a KHR_texture_transform 'offset' pointer channel should be present");
+            Assert.AreEqual(1, anim.Channels.Count);
+            var offsetCh = anim.Channels[item.TextureTransform.Channels[0]];
+            Assert.AreEqual("pointer", offsetCh.Target.Path, "texture channels are exported via KHR_animation_pointer");
+            var path = PointerPath(offsetCh);
+            Assert.IsNotNull(path, "texture channel must carry a KHR_animation_pointer path");
+            StringAssert.StartsWith("/materials/", path);
+            StringAssert.Contains("/pbrMetallicRoughness/baseColorTexture/", path);
+            StringAssert.EndsWith("/extensions/KHR_texture_transform/offset", path);
 
-            var pointerParts = PointerPath(scaleCh).Split('/');
+            var pointerParts = path.Split('/');
             int materialIndex = int.Parse(pointerParts[2]);
             var textureInfo = gltf.Materials[materialIndex].PbrMetallicRoughness.BaseColorTexture;
             Assert.IsNotNull(textureInfo, "the pointer must resolve through an existing TextureInfo");
@@ -485,12 +489,6 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsNotNull(offAcc.Max);
             Assert.AreEqual(0f, (float)offAcc.Min[0], 1e-4f, "frame-0 offset.x is 0");
             Assert.AreEqual(1f, (float)offAcc.Max[0], 1e-4f, "offset.x scrolls to 1");
-
-            // Scale output: VEC2, base scale (1,1) unchanged across the two keys.
-            var scaleAcc = OutputAccessor(gltf, anim, scaleCh);
-            Assert.AreEqual(GLTFAccessorAttributeType.VEC2, scaleAcc.Type);
-            Assert.AreEqual(1f, (float)scaleAcc.Min[0], 1e-4f);
-            Assert.AreEqual(1f, (float)scaleAcc.Max[0], 1e-4f);
         }
 
         [Test]
@@ -696,11 +694,11 @@ namespace UnityGLTF.KhrCharacter.Tests
                 {
                     new ExpressionTrack // index 0: the lip-sync phoneme being suppressed
                     {
-                        Name = "aa", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
+                        Name = "aa", Domains = ExpressionDomain.Joint, JointDrivers = new[] { TranslationDriver(ctrl) },
                     },
                     new ExpressionTrack // index 1: blend-suppresses "aa" by 0.5; its authored threshold is not written
                     {
-                        Name = "happy", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
+                        Name = "happy", Domains = ExpressionDomain.Joint, JointDrivers = new[] { TranslationDriver(ctrl) },
                         Suppressions = new[]
                         {
                             new SuppressionEntry
@@ -712,7 +710,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                     },
                     new ExpressionTrack // index 2: block-suppresses "aa" above threshold 0.2
                     {
-                        Name = "angry", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
+                        Name = "angry", Domains = ExpressionDomain.Joint, JointDrivers = new[] { TranslationDriver(ctrl) },
                         Suppressions = new[]
                         {
                             new SuppressionEntry
@@ -724,7 +722,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                     },
                     new ExpressionTrack // index 3: application-defined type, factor 1 at runtime
                     {
-                        Name = "soft", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
+                        Name = "soft", Domains = ExpressionDomain.Joint, JointDrivers = new[] { TranslationDriver(ctrl) },
                         Suppressions = new[]
                         {
                             new SuppressionEntry
@@ -736,7 +734,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                     },
                     new ExpressionTrack // index 4: amount and threshold not authored
                     {
-                        Name = "plain", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
+                        Name = "plain", Domains = ExpressionDomain.Joint, JointDrivers = new[] { TranslationDriver(ctrl) },
                         Suppressions = new[] { new SuppressionEntry { TargetIndex = 0, Type = SuppressionType.Block } },
                     },
                 },
@@ -833,11 +831,11 @@ namespace UnityGLTF.KhrCharacter.Tests
                 {
                     new ExpressionTrack
                     {
-                        Name = "aa", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
+                        Name = "aa", Domains = ExpressionDomain.Joint, JointDrivers = new[] { TranslationDriver(ctrl) },
                     },
                     new ExpressionTrack
                     {
-                        Name = "angry", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
+                        Name = "angry", Domains = ExpressionDomain.Joint, JointDrivers = new[] { TranslationDriver(ctrl) },
                         Suppressions = new[]
                         {
                             new SuppressionEntry
@@ -849,7 +847,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                     },
                     new ExpressionTrack
                     {
-                        Name = "happy", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
+                        Name = "happy", Domains = ExpressionDomain.Joint, JointDrivers = new[] { TranslationDriver(ctrl) },
                         Suppressions = new[]
                         {
                             new SuppressionEntry
@@ -899,13 +897,13 @@ namespace UnityGLTF.KhrCharacter.Tests
                     {
                         Name = "target",
                         Domains = ExpressionDomain.Joint,
-                        JointDrivers = new[] { RotationDriver(root.transform) },
+                        JointDrivers = new[] { TranslationDriver(root.transform) },
                     },
                     new ExpressionTrack
                     {
                         Name = "suppressing",
                         Domains = ExpressionDomain.Joint,
-                        JointDrivers = new[] { RotationDriver(root.transform) },
+                        JointDrivers = new[] { TranslationDriver(root.transform) },
                         Suppressions = new[]
                         {
                             new SuppressionEntry
@@ -938,8 +936,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             {
                 Expressions = new[]
                 {
-                    new ExpressionTrack { Name = "smileLeft", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) } },
-                    new ExpressionTrack { Name = "smileRight", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) } },
+                    new ExpressionTrack { Name = "smileLeft", Domains = ExpressionDomain.Joint, JointDrivers = new[] { TranslationDriver(ctrl) } },
+                    new ExpressionTrack { Name = "smileRight", Domains = ExpressionDomain.Joint, JointDrivers = new[] { TranslationDriver(ctrl) } },
                 },
                 MappingSets = new[]
                 {
@@ -1357,6 +1355,166 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
+        public void ConstantJointAndTextureScaleChannelsAreNotListed()
+        {
+            var shader = TextureShaderOrFail();
+            var root = MakeUvCharacter(shader, out var renderer);
+            var jaw = new GameObject("jaw").transform;
+            jaw.SetParent(root.transform, false);
+            root.AddComponent<ExpressionController>().Initialize(new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack
+                    {
+                        Name = "smile",
+                        Domains = ExpressionDomain.Joint | ExpressionDomain.Texture,
+                        JointDrivers = new[]
+                        {
+                            new JointDriver
+                            {
+                                Target = jaw,
+                                Channel = TrsChannel.Rotation,
+                                BaseQuat = Quaternion.identity,
+                                Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Linear },
+                                DeltaQuat = new[] { Quaternion.identity, Quaternion.identity },
+                            },
+                            TranslationDriver(jaw),
+                        },
+                        TextureDrivers = new[]
+                        {
+                            new TextureDriver
+                            {
+                                Renderer = renderer,
+                                SubmeshSlot = 0,
+                                PropertyId = Shader.PropertyToID("_MainTex_ST"),
+                                PropertyName = "_MainTex",
+                                GltfTextureSlot = "pbrMetallicRoughness/baseColorTexture",
+                                BaseSt = new Vector4(1f, 1f, 0f, 0f),
+                                Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Linear },
+                                StValues = new[] { Vector4.zero, new Vector4(0f, 0f, 0.5f, 0f) },
+                            },
+                        },
+                    },
+                },
+            });
+
+            var gltf = ExportToGltfRoot(root);
+            var item = (gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression)
+                .Expressions[0];
+            var animation = gltf.Animations[item.Animation];
+
+            Assert.AreEqual(2, animation.Channels.Count, "constant channels are omitted; every channel ends at 1");
+            Assert.AreEqual(1, item.Joint.Channels.Length);
+            Assert.AreEqual("translation", animation.Channels[item.Joint.Channels[0]].Target.Path);
+            Assert.AreEqual(1, item.TextureTransform.Channels.Length);
+            StringAssert.EndsWith(
+                "/KHR_texture_transform/offset",
+                PointerPath(animation.Channels[item.TextureTransform.Channels[0]]));
+        }
+
+        [Test]
+        public void TrackThatChangesNothingKeepsOneUnlistedChannel()
+        {
+            var root = new GameObject("char");
+            _created.Add(root);
+            var jaw = new GameObject("jaw").transform;
+            jaw.SetParent(root.transform, false);
+            root.AddComponent<ExpressionController>().Initialize(new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack
+                    {
+                        Name = "idle",
+                        Domains = ExpressionDomain.Joint,
+                        JointDrivers = new[]
+                        {
+                            new JointDriver
+                            {
+                                Target = jaw,
+                                Channel = TrsChannel.Rotation,
+                                BaseQuat = Quaternion.identity,
+                                Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Linear },
+                                DeltaQuat = new[] { Quaternion.identity, Quaternion.identity },
+                            },
+                        },
+                    },
+                },
+            });
+
+            LogAssert.Expect(LogType.Warning, new Regex("Expression 'idle' changes no property"));
+            var gltf = ExportToGltfRoot(root);
+            var item = (gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression)
+                .Expressions[0];
+
+            Assert.IsNull(item.Joint, "a constant channel is never listed");
+            Assert.AreEqual(1, gltf.Animations[item.Animation].Channels.Count,
+                "the animation keeps one channel so the entry still has a duration");
+        }
+
+        [Test]
+        public void TwoTracksRotatingOneBoneAbortWithHelperNodeMessage()
+        {
+            var root = new GameObject("char");
+            _created.Add(root);
+            var eye = new GameObject("eye").transform;
+            eye.SetParent(root.transform, false);
+            root.AddComponent<ExpressionController>().Initialize(new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack { Name = "lookLeft", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(eye) } },
+                    new ExpressionTrack { Name = "lookRight", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(eye) } },
+                },
+            });
+
+            var exception = Assert.Catch<System.InvalidOperationException>(() => ExportToGltfRoot(root));
+            StringAssert.Contains("'lookLeft'", exception.Message);
+            StringAssert.Contains("'lookRight'", exception.Message);
+            StringAssert.Contains("/rotation', which only one expression may write", exception.Message);
+            StringAssert.Contains("helper node", exception.Message);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void TextureScaleConflictsOnlyWhenTwoTracksAnimateIt(bool animateScale)
+        {
+            var shader = TextureShaderOrFail();
+            var root = MakeUvCharacter(shader, out var renderer);
+            TextureDriver Driver(Vector4 end) => new TextureDriver
+            {
+                Renderer = renderer,
+                SubmeshSlot = 0,
+                PropertyId = Shader.PropertyToID("_MainTex_ST"),
+                PropertyName = "_MainTex",
+                GltfTextureSlot = "pbrMetallicRoughness/baseColorTexture",
+                BaseSt = new Vector4(1f, 1f, 0f, 0f),
+                Sampler = new Sampler { Times = new[] { 0f, 1f }, Interp = Interp.Linear },
+                StValues = new[] { Vector4.zero, end },
+            };
+            var first = animateScale ? new Vector4(1f, 1f, 0f, -1f) : new Vector4(0f, 0f, 0.25f, 0f);
+            var second = animateScale ? new Vector4(2f, 2f, 0f, -2f) : new Vector4(0f, 0f, 0.5f, 0f);
+            root.AddComponent<ExpressionController>().Initialize(new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack { Name = "first", Domains = ExpressionDomain.Texture, TextureDrivers = new[] { Driver(first) } },
+                    new ExpressionTrack { Name = "second", Domains = ExpressionDomain.Texture, TextureDrivers = new[] { Driver(second) } },
+                },
+            });
+
+            if (!animateScale)
+            {
+                Assert.DoesNotThrow(() => ExportToGltfRoot(root),
+                    "constant scale channels are not listed, so two offset expressions do not conflict");
+                return;
+            }
+            var exception = Assert.Catch<System.InvalidOperationException>(() => ExportToGltfRoot(root));
+            StringAssert.Contains("/KHR_texture_transform/scale', which only one expression may write", exception.Message);
+        }
+
+        [Test]
         public void TextureExpressionRequiresExistingTextureInfo()
         {
             var shader = TextureShaderOrFail();
@@ -1466,13 +1624,13 @@ namespace UnityGLTF.KhrCharacter.Tests
                     {
                         Name = "target",
                         Domains = ExpressionDomain.Joint,
-                        JointDrivers = new[] { RotationDriver(root.transform) },
+                        JointDrivers = new[] { TranslationDriver(root.transform) },
                     },
                     new ExpressionTrack
                     {
                         Name = "suppressing",
                         Domains = ExpressionDomain.Joint,
-                        JointDrivers = new[] { RotationDriver(root.transform) },
+                        JointDrivers = new[] { TranslationDriver(root.transform) },
                         Suppressions = new[]
                         {
                             new SuppressionEntry
@@ -1505,13 +1663,13 @@ namespace UnityGLTF.KhrCharacter.Tests
                     {
                         Name = "target",
                         Domains = ExpressionDomain.Joint,
-                        JointDrivers = new[] { RotationDriver(root.transform) },
+                        JointDrivers = new[] { TranslationDriver(root.transform) },
                     },
                     new ExpressionTrack
                     {
                         Name = "suppressing",
                         Domains = ExpressionDomain.Joint,
-                        JointDrivers = new[] { RotationDriver(root.transform) },
+                        JointDrivers = new[] { TranslationDriver(root.transform) },
                         Suppressions = new[]
                         {
                             new SuppressionEntry { TargetIndex = 0, Type = SuppressionType.Blend, Amount = 1, HasAmount = true },
@@ -1540,13 +1698,13 @@ namespace UnityGLTF.KhrCharacter.Tests
                     {
                         Name = "target",
                         Domains = ExpressionDomain.Joint,
-                        JointDrivers = new[] { RotationDriver(ctrl) },
+                        JointDrivers = new[] { TranslationDriver(ctrl) },
                     },
                     new ExpressionTrack
                     {
                         Name = "source",
                         Domains = ExpressionDomain.Joint,
-                        JointDrivers = new[] { RotationDriver(ctrl) },
+                        JointDrivers = new[] { TranslationDriver(ctrl) },
                         SuppressionExtensionsJson =
                             "{\"ACME_suppression_root\":{\"value\":1},\"ACME_optional\":{\"value\":2}}",
                         SuppressionExtrasJson = "[\"root-suppression\",3]",
@@ -1695,14 +1853,14 @@ namespace UnityGLTF.KhrCharacter.Tests
                     {
                         Name = "source",
                         Domains = ExpressionDomain.Joint,
-                        JointDrivers = new[] { RotationDriver(ctrl) },
+                        JointDrivers = new[] { TranslationDriver(ctrl) },
                         Suppressions = new[] { new SuppressionEntry { TargetIndex = 2, Type = SuppressionType.Blend } },
                     },
                     new ExpressionTrack
                     {
                         Name = "target",
                         Domains = ExpressionDomain.Joint,
-                        JointDrivers = new[] { RotationDriver(ctrl) },
+                        JointDrivers = new[] { TranslationDriver(ctrl) },
                     },
                 },
                 MappingSets = new[]
@@ -1793,11 +1951,11 @@ namespace UnityGLTF.KhrCharacter.Tests
                     },
                     new ExpressionTrack // 3: the suppressed target (joint so its item is emitted)
                     {
-                        Name = "aa", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
+                        Name = "aa", Domains = ExpressionDomain.Joint, JointDrivers = new[] { TranslationDriver(ctrl) },
                     },
                     new ExpressionTrack // 4: joint + a blend suppression on "aa" (emits both _joint and _suppression)
                     {
-                        Name = "happy", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
+                        Name = "happy", Domains = ExpressionDomain.Joint, JointDrivers = new[] { TranslationDriver(ctrl) },
                         Suppressions = new[]
                         {
                             new SuppressionEntry { TargetIndex = 3, Type = SuppressionType.Blend, Amount = 0.5, HasAmount = true },
@@ -2368,7 +2526,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             return root;
         }
 
-        // Finds the KHR_texture_transform scale/offset pointer channels for the single texture expression "scroll".
+        // Finds the KHR_texture_transform scale/offset pointer channels listed by the texture expression "scroll".
+        // A channel that never leaves the authored material value is not listed, so its accessor is null.
         private static void FindUvChannels(GLTFRoot gltf, out Accessor scaleAcc, out Accessor offsetAcc)
         {
             var ext = gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
@@ -2387,10 +2546,17 @@ namespace UnityGLTF.KhrCharacter.Tests
                 if (path.EndsWith("/extensions/KHR_texture_transform/scale")) scaleCh = ch;
                 else if (path.EndsWith("/extensions/KHR_texture_transform/offset")) offsetCh = ch;
             }
-            Assert.IsNotNull(scaleCh, "a KHR_texture_transform 'scale' pointer channel should be present");
             Assert.IsNotNull(offsetCh, "a KHR_texture_transform 'offset' pointer channel should be present");
-            scaleAcc = OutputAccessor(gltf, anim, scaleCh);
+            scaleAcc = scaleCh != null ? OutputAccessor(gltf, anim, scaleCh) : null;
             offsetAcc = OutputAccessor(gltf, anim, offsetCh);
+        }
+
+        private static ExtTextureTransformExtension StaticBaseColorTransform(GLTFRoot gltf)
+        {
+            var material = gltf.Materials.Find(m => m.PbrMetallicRoughness?.BaseColorTexture != null);
+            Assert.IsNotNull(material);
+            return material.PbrMetallicRoughness.BaseColorTexture.Extensions[
+                ExtTextureTransformExtensionFactory.EXTENSION_NAME] as ExtTextureTransformExtension;
         }
 
         [Test]
@@ -2436,9 +2602,11 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(0.5f, (float)offsetAcc.Max[0], 1e-4f,
                 "the legacy frame-relative curve is rebased onto the authored material rest");
 
-            // Scale comes from the authored material rest.
-            Assert.AreEqual(1f, (float)scaleAcc.Min[0], 1e-4f);
-            Assert.AreEqual(1f, (float)scaleAcc.Min[1], 1e-4f);
+            // Scale stays at the authored material rest, so it is not listed.
+            Assert.IsNull(scaleAcc);
+            var transform = StaticBaseColorTransform(gltf);
+            Assert.AreEqual(1f, transform.Scale.X, 1e-4f);
+            Assert.AreEqual(1f, transform.Scale.Y, 1e-4f);
         }
 
         [Test]
@@ -2481,7 +2649,8 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             Assert.AreEqual(0f, (float)offsetAcc.Min[0], 1e-4f, "no captured frame0 -> offset.x anchors at BaseSt.z (0)");
             Assert.AreEqual(0.5f, (float)offsetAcc.Max[0], 1e-4f, "offset.x scrolls from the BaseSt baseline (0 -> 0.5)");
-            Assert.AreEqual(1f, (float)scaleAcc.Min[0], 1e-4f, "scale comes from BaseSt.xy (1,1)");
+            Assert.IsNull(scaleAcc, "a scale that stays at BaseSt.xy (1,1) is not listed");
+            Assert.AreEqual(1f, StaticBaseColorTransform(gltf).Scale.X, 1e-4f, "scale comes from BaseSt.xy (1,1)");
         }
 
         [Test]
