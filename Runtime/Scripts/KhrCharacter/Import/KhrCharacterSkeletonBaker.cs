@@ -100,9 +100,13 @@ namespace UnityGLTF.KhrCharacter
         }
 
         /// <summary>Resolves the first valid animation tagged with <c>KHR_character_reference_pose</c>, or null.</summary>
-        public static ReferencePose BakeReferencePose(GLTFRoot root, GLTFSceneImporter importer, IReadOnlyDictionary<int, GameObject> nodeIndexToGo)
+        public static ReferencePose BakeReferencePose(
+            GLTFRoot root,
+            GLTFSceneImporter importer,
+            IReadOnlyDictionary<int, GameObject> nodeIndexToGo,
+            float translationScale = 1f)
         {
-            foreach (var pose in BakeReferencePoses(root, importer, nodeIndexToGo))
+            foreach (var pose in BakeReferencePoses(root, importer, nodeIndexToGo, translationScale))
                 if (pose.IsValid) return pose;
             return null;
         }
@@ -111,11 +115,18 @@ namespace UnityGLTF.KhrCharacter
         /// Resolves every animation tagged with <c>KHR_character_reference_pose</c>, in animation order. An invalid
         /// tagged animation is returned with <see cref="ReferencePose.IsValid"/> false and its errors, not dropped.
         /// </summary>
+        /// <param name="translationScale">
+        /// Factor applied to every resolved translation so it is in the imported scene's units, matching the scale
+        /// factor the editor importer applies to node positions.
+        /// </param>
         public static ReferencePose[] BakeReferencePoses(
-            GLTFRoot root, GLTFSceneImporter importer, IReadOnlyDictionary<int, GameObject> nodeIndexToGo)
+            GLTFRoot root,
+            GLTFSceneImporter importer,
+            IReadOnlyDictionary<int, GameObject> nodeIndexToGo,
+            float translationScale = 1f)
         {
             if (importer == null) return Array.Empty<ReferencePose>();
-            return BakeReferencePoses(root, ReadBufferView, nodeIndexToGo);
+            return BakeReferencePoses(root, ReadBufferView, nodeIndexToGo, translationScale);
 
             byte[] ReadBufferView(BufferView bufferView)
             {
@@ -125,7 +136,10 @@ namespace UnityGLTF.KhrCharacter
         }
 
         internal static ReferencePose[] BakeReferencePoses(
-            GLTFRoot root, Func<BufferView, byte[]> readBufferView, IReadOnlyDictionary<int, GameObject> nodeIndexToGo)
+            GLTFRoot root,
+            Func<BufferView, byte[]> readBufferView,
+            IReadOnlyDictionary<int, GameObject> nodeIndexToGo,
+            float translationScale = 1f)
         {
             var poses = new List<ReferencePose>();
             if (root?.Animations == null || readBufferView == null || nodeIndexToGo == null) return poses.ToArray();
@@ -136,7 +150,7 @@ namespace UnityGLTF.KhrCharacter
                 if (animation?.Extensions == null
                     || !animation.Extensions.TryGetValue(KHR_character_reference_pose.EXTENSION_NAME, out var extension))
                     continue;
-                if (layout == null) layout = NodeLayout.Build(root, nodeIndexToGo);
+                if (layout == null) layout = NodeLayout.Build(root, nodeIndexToGo, translationScale);
                 var pose = BakeReferencePoseAnimation(
                     root, readBufferView, layout, animation, animationIndex,
                     ExtractPoseType(root, extension) ?? ReferencePoseLabels.TPose);
@@ -333,7 +347,7 @@ namespace UnityGLTF.KhrCharacter
             else
             {
                 var vector = new float3(value[0], value[1], value[2]);
-                if (path == "translation") pose.Translation = vector.ToUnityVector3Convert();
+                if (path == "translation") pose.Translation = vector.ToUnityVector3Convert() * layout.TranslationScale;
                 else pose.Scale = vector.ToUnityVector3Raw();
             }
             targeted[nodeIndex] = pose;
@@ -380,6 +394,7 @@ namespace UnityGLTF.KhrCharacter
         private sealed class NodeLayout
         {
             public int Count;
+            public float TranslationScale;
             public Vector3[] Positions;
             public Quaternion[] Rotations;
             public Vector3[] Scales;
@@ -388,13 +403,15 @@ namespace UnityGLTF.KhrCharacter
             public Transform[] Transforms;
             public bool[] ForwardAxisConversion;
 
-            public static NodeLayout Build(GLTFRoot root, IReadOnlyDictionary<int, GameObject> nodeIndexToGo)
+            public static NodeLayout Build(
+                GLTFRoot root, IReadOnlyDictionary<int, GameObject> nodeIndexToGo, float translationScale)
             {
                 var nodes = root.Nodes;
                 int count = nodes?.Count ?? 0;
                 var layout = new NodeLayout
                 {
                     Count = count,
+                    TranslationScale = translationScale,
                     Positions = new Vector3[count],
                     Rotations = new Quaternion[count],
                     Scales = new Vector3[count],
@@ -414,7 +431,7 @@ namespace UnityGLTF.KhrCharacter
                         continue;
                     }
                     node.GetUnityTRSProperties(out var position, out var rotation, out var scale);
-                    layout.Positions[i] = position;
+                    layout.Positions[i] = position * translationScale;
                     layout.Rotations[i] = rotation;
                     layout.Scales[i] = scale;
                     layout.HasMatrix[i] = node.HasMatrix;

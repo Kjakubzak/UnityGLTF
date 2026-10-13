@@ -484,8 +484,8 @@ namespace UnityGLTF.KhrCharacter.Tests
                 return animation;
             }
 
-            public ReferencePose[] Bake()
-                => KhrCharacterSkeletonBaker.BakeReferencePoses(Root, view => _data[view], Objects);
+            public ReferencePose[] Bake(float translationScale = 1f)
+                => KhrCharacterSkeletonBaker.BakeReferencePoses(Root, view => _data[view], Objects, translationScale);
         }
 
         private static Vector3 UnityPosition(float x, float y, float z) => new Vector3(-x, y, z);
@@ -606,6 +606,33 @@ namespace UnityGLTF.KhrCharacter.Tests
                 "the global reference pose composes the resolved locals along the glTF parents");
             Assert.IsFalse(skeleton.TryGetGlobalReferencePose(0, 99, out _));
             Assert.IsFalse(skeleton.TryGetGlobalReferencePose(7, 3, out _));
+        }
+
+        [Test]
+        public void ReferencePose_TranslationsAreInTheImportedSceneUnits()
+        {
+            const float scaleFactor = 0.01f;
+            var fixture = BuildHierarchy(out var scene, out var spine, out var head, out var prop);
+            fixture.AddPose(ReferencePoseLabels.TPose,
+                (1, "rotation", fixture.Rotation(0f, 0.70710677f, 0f, 0.70710677f)),
+                (3, "translation", fixture.Translation(0f, 0.3f, 0.05f)));
+            // The editor importer scales every node position after the import plugins have run.
+            foreach (var node in scene.GetComponentsInChildren<Transform>()) node.localPosition *= scaleFactor;
+            var propPosition = prop.localPosition;
+            var skeleton = BindPoses(scene, fixture.Bake(scaleFactor));
+
+            prop.localPosition = new Vector3(-3f, 2f, 9f);
+            spine.localPosition = Vector3.zero;
+            head.localPosition = Vector3.zero;
+            skeleton.ApplyReferencePose();
+
+            Assert.Less(Vector3.Distance(propPosition, prop.localPosition), 1e-6f,
+                "an untargeted node returns to its scaled imported position");
+            Assert.Less(Vector3.Distance(UnityPosition(0.1f, 0.5f, 0f) * scaleFactor, spine.localPosition), 1e-6f);
+            Assert.Less(Vector3.Distance(UnityPosition(0f, 0.3f, 0.05f) * scaleFactor, head.localPosition), 1e-6f,
+                "a targeted translation is scaled too");
+            Assert.IsTrue(skeleton.TryGetGlobalReferencePose(0, 3, out var global));
+            Assert.Less(Vector3.Distance(head.position, (Vector3)global.GetColumn(3)), 1e-6f);
         }
 
         [Test]

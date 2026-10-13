@@ -74,6 +74,7 @@ namespace UnityGLTF.KhrCharacter
         {
             public Transform Node;
             public int NodeIndex;
+            public bool NodeUnnamed;
             public KHR_node_camera_hint Hint;
             public bool NodeTransformHasForwardAxisConversion;
         }
@@ -192,6 +193,7 @@ namespace UnityGLTF.KhrCharacter
                         {
                             Node = transform,
                             NodeIndex = nodeIndex,
+                            NodeUnnamed = string.IsNullOrEmpty(node.Name),
                             Hint = hint,
                             NodeTransformHasForwardAxisConversion = HasForwardAxisConversion(node, nodeObject),
                         });
@@ -483,6 +485,7 @@ namespace UnityGLTF.KhrCharacter
                         Label = raw.Label,
                         Node = record.Node,
                         NodeIndex = record.NodeIndex,
+                        NodeUnnamed = record.NodeUnnamed,
                         Projection = projection,
                         Target = target,
                         NodeTransformHasForwardAxisConversion = record.NodeTransformHasForwardAxisConversion,
@@ -549,7 +552,7 @@ namespace UnityGLTF.KhrCharacter
             if (ext != null) result = KhrCharacterSkeletonBaker.BakeSkeleton(root, _nodeIndexToGo, ext);
 
             var referencePoses = importer != null
-                ? KhrCharacterSkeletonBaker.BakeReferencePoses(root, importer, _nodeIndexToGo)
+                ? KhrCharacterSkeletonBaker.BakeReferencePoses(root, importer, _nodeIndexToGo, TranslationScale)
                 : System.Array.Empty<ReferencePose>();
             if (result == null && referencePoses.Length == 0) return;
 
@@ -567,6 +570,20 @@ namespace UnityGLTF.KhrCharacter
             if (ShouldBuildHumanoid(_rigMode, result))
                 skeleton.BuildHumanoidOnAwake = true;
             hub.Skeleton = skeleton;
+        }
+
+        // UnityGLTF applies its import scale factor only in the editor: the asset importer scales every node position
+        // after this plugin has run, and translation curves are scaled as they are built.
+        private float TranslationScale
+        {
+            get
+            {
+#if UNITY_EDITOR
+                return _context?.ImportScaleFactor ?? 1f;
+#else
+                return 1f;
+#endif
+            }
         }
 
         private KHR_character_skeleton_mapping GetSkeletonMappingExtension(GLTFRoot root)

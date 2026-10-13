@@ -1096,9 +1096,160 @@ namespace UnityGLTF.KhrCharacter.Tests
             clone.SetActive(true);
             yield return null; // clone Awake rehydrates via BindRuntimeState
 
-            var cloneOrder = clone.GetComponent<SkeletonMap>().SerializedJointOrderForTests();
+            var cloneSkeleton = clone.GetComponent<SkeletonMap>();
+            var cloneOrder = cloneSkeleton.SerializedJointOrderForTests();
             CollectionAssert.AreEqual(srcOrder, cloneOrder,
                 "rehydrate must preserve the persisted bone order (no FromResult rebuild)");
+            Assert.AreEqual(0, cloneSkeleton.ReferencePoses.Count,
+                "Unity's empty stand-in for the unassigned reference pose is not a tagged animation");
+            Assert.IsNull(cloneSkeleton.Result.ReferencePose);
+        }
+
+        [UnityTest]
+        public IEnumerator SkeletonMap_Rehydrate_KeepsResolvedPosesErrorsAndNodeIndices()
+        {
+            var src = NewGo("char");
+            src.SetActive(false);
+            var hips = new GameObject("Hips").transform; hips.SetParent(src.transform, false);
+            var lamp = new GameObject("Lamp").transform; lamp.SetParent(hips, false);
+            lamp.gameObject.AddComponent<Light>();
+            var lampRotation = Quaternion.Euler(30f, 0f, 0f);
+            var valid = new ReferencePose
+            {
+                AnimationIndex = 2,
+                PoseType = ReferencePoseLabels.APose,
+                Errors = new string[0],
+                Bones = new[] { hips },
+                LocalPositions = new[] { new Vector3(0f, 1f, 0f) },
+                LocalRotations = new[] { Quaternion.identity },
+                LocalScales = new[] { Vector3.one },
+                // Node 2 is outside the imported scene; node 1 carries a punctual light.
+                ResolvedNodeIndices = new[] { 0, 1, 2 },
+                ResolvedNodes = new[] { hips, lamp, null },
+                ResolvedLocalPositions = new[] { new Vector3(0f, 1f, 0f), new Vector3(0f, 0.5f, 0.2f), Vector3.right },
+                ResolvedLocalRotations = new[] { Quaternion.identity, lampRotation, Quaternion.identity },
+                ResolvedLocalScales = new[] { Vector3.one, Vector3.one, Vector3.one },
+                ParentIndices = new[] { -1, 0, -1 },
+                ResolvedNodeHasForwardAxisConversion = new[] { false, true, false },
+            };
+            var invalid = new ReferencePose
+            {
+                AnimationIndex = 5,
+                PoseType = "ACME_relaxed_pose",
+                IsValid = false,
+                Errors = new[] { "Sampler 0 rotation for node 0 is not a unit quaternion." },
+                Bones = new Transform[0],
+                LocalPositions = new Vector3[0],
+                LocalRotations = new Quaternion[0],
+                LocalScales = new Vector3[0],
+            };
+            var skeleton = src.AddComponent<SkeletonMap>();
+            skeleton.Bind(new SkeletonMappingResult
+            {
+                MappingSets = new[]
+                {
+                    new SkeletonMappingSetResult
+                    {
+                        Identifier = Vocab,
+                        Associations = new Dictionary<string, Transform> { { "hips", hips } },
+                        NodeIndices = new Dictionary<string, int> { { "hips", 0 }, { "head", 3 } },
+                    },
+                },
+                Bones = new Dictionary<string, Transform> { { "hips", hips } },
+                SelectedRig = Vocab,
+                ReferencePoses = new[] { valid, invalid },
+                ReferencePose = valid,
+            });
+
+            var clone = Object.Instantiate(src);
+            _created.Add(clone);
+            clone.SetActive(true);
+            yield return null; // SkeletonMap.Awake rehydrates the serialized mapping
+
+            var cloneSkeleton = clone.GetComponent<SkeletonMap>();
+            var cloneHips = clone.transform.Find("Hips");
+            var cloneLamp = cloneHips.Find("Lamp");
+            Assert.AreEqual(2, cloneSkeleton.ReferencePoses.Count);
+            var clonedValid = cloneSkeleton.ReferencePoses[0];
+            var clonedInvalid = cloneSkeleton.ReferencePoses[1];
+            Assert.IsTrue(clonedValid.IsValid);
+            Assert.AreSame(cloneHips, clonedValid.ResolvedNodes[0], "resolved transforms follow the clone");
+            Assert.AreSame(cloneLamp, clonedValid.ResolvedNodes[1]);
+            Assert.IsTrue(clonedValid.ResolvedNodes[2] == null, "a node outside the imported scene stays unbound");
+            CollectionAssert.AreEqual(new[] { -1, 0, -1 }, clonedValid.ParentIndices);
+            Assert.IsFalse(clonedInvalid.IsValid);
+            Assert.AreEqual("ACME_relaxed_pose", clonedInvalid.PoseType);
+            CollectionAssert.AreEqual(invalid.Errors, clonedInvalid.Errors);
+            Assert.IsFalse(cloneSkeleton.ApplyReferencePose(5), "an invalid pose stays unusable after rehydrate");
+
+            cloneHips.localPosition = Vector3.zero;
+            cloneLamp.localPosition = Vector3.zero;
+            cloneLamp.localRotation = Quaternion.identity;
+            Assert.IsTrue(cloneSkeleton.ApplyReferencePose(2));
+            Assert.Less(Vector3.Distance(new Vector3(0f, 1f, 0f), cloneHips.localPosition), 1e-6f);
+            Assert.Less(Vector3.Distance(new Vector3(0f, 0.5f, 0.2f), cloneLamp.localPosition), 1e-6f);
+            Assert.Less(Quaternion.Angle(lampRotation * new Quaternion(0f, -1f, 0f, 0f), cloneLamp.localRotation), 0.01f,
+                "the light node keeps UnityGLTF's forward-axis turn after rehydrate");
+            Assert.IsTrue(cloneSkeleton.TryGetGlobalReferencePose(2, 1, out var global));
+            Assert.Less(Vector3.Distance(new Vector3(0f, 1.5f, 0.2f), (Vector3)global.GetColumn(3)), 1e-6f);
+
+            Assert.IsTrue(cloneSkeleton.TryGetAssociationNodeIndex(Vocab, "head", out var headIndex));
+            Assert.AreEqual(3, headIndex, "an association to an uninstantiated node keeps its index");
+            Assert.IsFalse(cloneSkeleton.TryGetAssociation(Vocab, "head", out _));
+            Assert.IsTrue(cloneSkeleton.TryGetAssociation(Vocab, "hips", out var clonedHips));
+            Assert.AreSame(cloneHips, clonedHips);
+        }
+
+        [UnityTest]
+        public IEnumerator CameraHintSet_Rehydrate_KeepsAuthoredMatricesNodeIndicesAndNames()
+        {
+            var src = NewGo("scene");
+            src.SetActive(false);
+            var flat = new GameObject("GLTFNode4"); flat.transform.SetParent(src.transform, false);
+            var late = new GameObject("Late"); late.transform.SetParent(src.transform, false);
+            var early = new GameObject("Early"); early.transform.SetParent(src.transform, false);
+            // Unity's decomposition of a matrix with a zero column loses the sign of the other scale components.
+            flat.transform.localScale = new Vector3(1f, 1f, 0f);
+            var rotation = Quaternion.Euler(20f, 30f, 0f);
+            var set = src.AddComponent<CameraHintSet>();
+            set.Bind(
+                new List<CameraHint>
+                {
+                    new CameraHint { Role = "detail", Node = flat.transform, NodeIndex = 4, NodeUnnamed = true },
+                    new CameraHint { Role = "default_view", Node = late.transform, NodeIndex = 7 },
+                    new CameraHint { Role = "default_view", Node = early.transform, NodeIndex = 2 },
+                },
+                new List<AuthoredNodeMatrix>
+                {
+                    new AuthoredNodeMatrix
+                    {
+                        Node = flat.transform,
+                        LocalMatrix = Matrix4x4.TRS(Vector3.zero, rotation, new Vector3(-1f, 1f, 0f)),
+                    },
+                });
+            var sourceRotation = set.ComputeAuthoredRotation(set.Hints[0], src.transform);
+            Assert.IsTrue(set.TrySelectDefaultView(out var sourceDefault));
+            Assert.AreEqual(2, sourceDefault.NodeIndex);
+
+            var clone = Object.Instantiate(src);
+            _created.Add(clone);
+            clone.SetActive(true);
+            yield return null; // CameraHintSet.Awake rehydrates the serialized hints
+
+            var cloneSet = clone.GetComponent<CameraHintSet>();
+            var cloneFlat = clone.transform.Find("GLTFNode4");
+            Assert.AreEqual(3, cloneSet.Hints.Count);
+            Assert.AreEqual(1, cloneSet.AuthoredMatrices.Count);
+            Assert.AreSame(cloneFlat, cloneSet.AuthoredMatrices[0].Node);
+            var cloneRotation = cloneSet.ComputeAuthoredRotation(cloneSet.Hints[0], clone.transform);
+            Assert.Less(Quaternion.Angle(sourceRotation, cloneRotation), 0.01f);
+            Assert.Less(Quaternion.Angle(rotation * Quaternion.Euler(0f, 180f, 0f), cloneRotation), 0.01f,
+                "the authored matrix keeps the scale sign that the clone's decomposed transform lost");
+            Assert.IsTrue(cloneSet.TrySelectDefaultView(out var cloneDefault));
+            Assert.AreEqual(2, cloneDefault.NodeIndex, "node indices survive, so the lowest index still wins");
+            Assert.AreSame(clone.transform.Find("Early"), cloneDefault.Node);
+            Assert.AreEqual("detail", cloneSet.GetDisplayName(cloneSet.Hints[0]),
+                "an unnamed imported node stays unnamed after rehydrate");
         }
 
         // Builds a minimal valid T-pose covering the 15 required humanoid bones (+ chest/neck) and returns the

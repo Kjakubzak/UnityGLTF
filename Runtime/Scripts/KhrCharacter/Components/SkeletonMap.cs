@@ -224,9 +224,9 @@ namespace UnityGLTF.KhrCharacter
 
         /// <summary>
         /// Composes the resolved local values along the glTF parent chain into a node's global reference-pose
-        /// transform, relative to the imported scene root in Unity coordinates. The matrix excludes UnityGLTF's
-        /// 180° turn on camera and light GameObjects. Returns false when no valid pose has that animation index or
-        /// the node does not exist.
+        /// transform, relative to the imported scene root in Unity coordinates and units. The matrix excludes
+        /// UnityGLTF's 180° turn on camera and light GameObjects. Returns false when no valid pose has that animation
+        /// index or the node does not exist.
         /// </summary>
         public bool TryGetGlobalReferencePose(int animationIndex, int nodeIndex, out Matrix4x4 global)
         {

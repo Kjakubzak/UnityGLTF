@@ -42,7 +42,11 @@ namespace UnityGLTF.VisibilityHints.Editor
                         GUILayout.FlexibleSpace();
                         if (GUILayout.Button("Remove", GUILayout.Width(70))) removeAt = i;
                     }
+                    EditorGUI.BeginChangeCheck();
                     EditorGUILayout.PropertyField(element.FindPropertyRelative("Node"), new GUIContent("Node"));
+                    // The imported node's missing name says nothing about a node picked here.
+                    if (EditorGUI.EndChangeCheck())
+                        element.FindPropertyRelative("NodeUnnamed").boolValue = false;
                     DrawRolePopup(element.FindPropertyRelative("Role"));
                     EditorGUILayout.PropertyField(element.FindPropertyRelative("Label"), new GUIContent("Label"));
                 }
@@ -70,6 +74,7 @@ namespace UnityGLTF.VisibilityHints.Editor
             => NodeVisibilityHintSet.GetDisplayName(new NodeVisibilityHintSet.NodeVisibilityEntry
             {
                 Node = element.FindPropertyRelative("Node").objectReferenceValue as Transform,
+                NodeUnnamed = element.FindPropertyRelative("NodeUnnamed").boolValue,
                 Role = element.FindPropertyRelative("Role").stringValue,
                 Label = element.FindPropertyRelative("Label").stringValue,
             });
@@ -80,6 +85,7 @@ namespace UnityGLTF.VisibilityHints.Editor
             entriesProp.arraySize++; // appends a duplicate of the last element, so reset every field explicitly
             var el = entriesProp.GetArrayElementAtIndex(idx);
             el.FindPropertyRelative("Node").objectReferenceValue = null;
+            el.FindPropertyRelative("NodeUnnamed").boolValue = false;
             el.FindPropertyRelative("Role").stringValue = VisibilityHintExtensionNames.RoleAlways;
             el.FindPropertyRelative("Label").stringValue = string.Empty;
             ResetPayload(el);

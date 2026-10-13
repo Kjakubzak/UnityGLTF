@@ -50,6 +50,7 @@ namespace UnityGLTF.KhrCharacter.Editor
                         Role = role,
                         Label = hint.FindPropertyRelative("Label")?.stringValue,
                         Node = node,
+                        NodeUnnamed = hint.FindPropertyRelative("NodeUnnamed")?.boolValue ?? false,
                     });
                     string roleText = set.IsRecognizedRole(role)
                         ? StringOrNone(role)

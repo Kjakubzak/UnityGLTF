@@ -1,9 +1,13 @@
+using System.Collections;
 using System.Collections.Generic;
+using System.IO;
+using System.Text;
 using GLTF.Schema;
 using GLTF.Schema.KHR_lights_punctual;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.TestTools;
 using UnityGLTF.Plugins;
 
 namespace UnityGLTF.KhrCharacter.Tests
@@ -150,6 +154,54 @@ namespace UnityGLTF.KhrCharacter.Tests
             set.RegisteredCustomRoles.Add("ACME_inspection_view");
             CollectionAssert.AreEqual(
                 new[] { "portrait", "ACME_inspection_view" }, RolesOf(set.GetPresentableHints()));
+        }
+
+        [UnityTest]
+        public IEnumerator UnnamedHintNodes_ArePresentedByTheirRoleAfterImport()
+        {
+            const string json = @"{
+                ""asset"": { ""version"": ""2.0"" },
+                ""extensionsUsed"": [ ""KHR_node_camera_hint"" ],
+                ""scene"": 0,
+                ""scenes"": [ { ""nodes"": [ 0, 1, 2 ] } ],
+                ""nodes"": [
+                    { ""extensions"": { ""KHR_node_camera_hint"": { ""role"": ""portrait"" } } },
+                    { ""name"": """", ""extensions"": { ""KHR_node_camera_hint"": { ""role"": ""ACME_inspection_view"" } } },
+                    { ""name"": ""Entrance"", ""extensions"": { ""KHR_node_camera_hint"": { ""role"": ""detail"" } } }
+                ]
+            }";
+            var settings = GLTFSettings.GetDefaultSettings();
+            foreach (var plugin in settings.ImportPlugins)
+                if (plugin is KhrCharacterImportPlugin) plugin.Enabled = true;
+            var options = new ImportOptions
+            {
+                AnimationMethod = AnimationMethod.None,
+                ThrowOnLowMemory = false,
+                ImportContext = new GLTFImportContext(settings),
+            };
+            var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
+            var importer = new GLTFSceneImporter(stream, options);
+            var load = importer.LoadSceneAsync();
+            while (!load.IsCompleted) yield return null;
+            Assert.IsFalse(load.IsFaulted, load.Exception?.Flatten().ToString());
+            _created.Add(importer.LastLoadedScene);
+
+            var set = importer.LastLoadedScene.GetComponent<CameraHintSet>();
+            Assert.IsNotNull(set);
+            string Localize(string role) => role == "portrait" ? "Bildnis" : null;
+            Assert.IsTrue(set.TryGetByRole("portrait", out var unnamed));
+            Assert.AreEqual("GLTFNode0", unnamed.Node.name, "UnityGLTF names the GameObject of an unnamed node");
+            Assert.IsTrue(unnamed.NodeUnnamed);
+            Assert.AreEqual("portrait", set.GetDisplayName(unnamed));
+            Assert.AreEqual("Bildnis", set.GetDisplayName(unnamed, Localize));
+            Assert.IsTrue(set.TryGetByRole("ACME_inspection_view", out var emptyName));
+            Assert.AreEqual("ACME_inspection_view", set.GetDisplayName(emptyName), "an empty name counts as absent");
+            Assert.IsTrue(set.TryGetByRole("detail", out var named));
+            Assert.IsFalse(named.NodeUnnamed);
+            Assert.AreEqual("Entrance", set.GetDisplayName(named, Localize));
+
+            importer.Dispose();
+            stream.Dispose();
         }
 
         [Test]

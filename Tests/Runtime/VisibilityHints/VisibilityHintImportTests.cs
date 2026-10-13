@@ -95,6 +95,37 @@ namespace UnityGLTF.VisibilityHints.Tests
         }
 
         [Test]
+        public void NodeHint_Import_UnnamedNodeIsPresentedByItsRole()
+        {
+            var scene = NewGo("scene");
+            // UnityGLTF names the GameObject of a node without a nonempty name GLTFNode<index>.
+            var unnamed = NewChild(scene, "GLTFNode3");
+            var emptyName = NewChild(scene, "GLTFNode4");
+            var named = NewChild(scene, "Visor");
+            Node HintNode(string name, string role)
+            {
+                var node = new Node { Name = name };
+                node.AddExtension(KHR_node_visibility_hint.EXTENSION_NAME, new KHR_node_visibility_hint { Role = role });
+                return node;
+            }
+
+            var ctx = new VisibilityHintImportContext(null);
+            ctx.OnAfterImportNode(HintNode(null, "first_person"), 3, unnamed);
+            ctx.OnAfterImportNode(HintNode(string.Empty, "ACME_mirror_only"), 4, emptyName);
+            ctx.OnAfterImportNode(HintNode("Visor", "third_person"), 5, named);
+            ctx.OnAfterImportScene(null, 0, scene);
+
+            var entries = scene.GetComponent<NodeVisibilityHintSet>().Entries;
+            Assert.AreEqual(3, entries.Count);
+            Assert.IsTrue(entries[0].NodeUnnamed);
+            Assert.AreEqual("first_person", NodeVisibilityHintSet.GetDisplayName(entries[0]));
+            Assert.AreEqual("ACME_mirror_only", NodeVisibilityHintSet.GetDisplayName(entries[1]),
+                "an empty name counts as absent");
+            Assert.IsFalse(entries[2].NodeUnnamed);
+            Assert.AreEqual("Visor", NodeVisibilityHintSet.GetDisplayName(entries[2]));
+        }
+
+        [Test]
         public void PrimitiveHint_Import_AddsSetAndExposesPurePredicate()
         {
             var scene = NewGo("scene");

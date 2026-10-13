@@ -222,10 +222,11 @@ namespace UnityGLTF.KhrCharacter
     // ── Skeleton / reference pose ────────────────────────────────────────────
     /// <summary>
     /// One animation tagged with <c>KHR_character_reference_pose</c>. Values are local transforms in Unity
-    /// coordinates. <see cref="Bones"/> and the <c>Local*</c> arrays cover the instantiated nodes the animation
-    /// targets, which is what export writes. The <c>Resolved*</c> arrays cover every node of the asset: targeted TRS
-    /// properties come from the animation and everything else from the node's authored <c>matrix</c> or TRS with the
-    /// core defaults, never from live transforms. An invalid tagged animation keeps its index, label and
+    /// coordinates and in the imported scene's units: translations include the scale factor that the editor importer
+    /// applies to node positions. <see cref="Bones"/> and the <c>Local*</c> arrays cover the instantiated nodes the
+    /// animation targets, which is what export writes. The <c>Resolved*</c> arrays cover every node of the asset:
+    /// targeted TRS properties come from the animation and everything else from the node's authored <c>matrix</c> or
+    /// TRS with the core defaults, never from live transforms. An invalid tagged animation keeps its index, label and
     /// <see cref="Errors"/> but carries no values.
     /// </summary>
     [Serializable]
@@ -380,12 +381,21 @@ namespace UnityGLTF.KhrCharacter
             {
                 Bones = bones,
                 SelectedRig = SelectedRig,
-                ReferencePose = ReferencePose,
+                ReferencePose = NullIfEmpty(ReferencePose),
                 MappingSets = mappingSets.ToArray(),
                 ReferencePoses = ReferencePoses,
                 Report = Report ?? new ValidationReport(),
             };
         }
+
+        // Unity rehydrates a null ReferencePose as an empty instance, which must not be listed as a tagged animation.
+        private static ReferencePose NullIfEmpty(ReferencePose pose)
+            => pose == null
+               || ((pose.Bones == null || pose.Bones.Length == 0)
+                   && !pose.HasResolvedValues
+                   && (pose.Errors == null || pose.Errors.Length == 0))
+                ? null
+                : pose;
 
         private static SerializableBoneEntry[] ToEntries(Dictionary<string, Transform> associations)
         {
@@ -436,6 +446,12 @@ namespace UnityGLTF.KhrCharacter
 
         /// <summary>Index of the hint node in the glTF <c>nodes</c> array, or -1 when the hint was not imported.</summary>
         public int NodeIndex = -1;
+
+        /// <summary>
+        /// True when the hint was imported from a glTF node without a nonempty <c>name</c>. UnityGLTF names such a
+        /// node's GameObject <c>GLTFNode&lt;index&gt;</c>, which is not a node name, so presentation skips it.
+        /// </summary>
+        public bool NodeUnnamed;
 
         public Camera Projection;   // optional host-bound representation of the advisory camera definition
         public Transform Target;    // optional targetNode; set only when it names a different node that resolves

@@ -107,15 +107,16 @@ namespace UnityGLTF.KhrCharacter
         }
 
         /// <summary>
-        /// Presentation name for a hint: its label, else its node's nonempty name, else its role. For a recognized
-        /// role, <paramref name="roleDisplayName"/> may supply a display name, such as a localized one, in place of
-        /// the raw role string.
+        /// Presentation name for a hint: its label, else its node's nonempty name, else its role. The node name is the
+        /// GameObject's name, except for a hint imported from an unnamed glTF node
+        /// (<see cref="CameraHint.NodeUnnamed"/>). For a recognized role, <paramref name="roleDisplayName"/> may supply
+        /// a display name, such as a localized one, in place of the raw role string.
         /// </summary>
         public string GetDisplayName(CameraHint hint, Func<string, string> roleDisplayName = null)
         {
             if (hint == null) return null;
             if (!string.IsNullOrEmpty(hint.Label)) return hint.Label;
-            if (hint.Node != null && !string.IsNullOrEmpty(hint.Node.name)) return hint.Node.name;
+            if (!hint.NodeUnnamed && hint.Node != null && !string.IsNullOrEmpty(hint.Node.name)) return hint.Node.name;
             if (roleDisplayName != null && IsRecognizedRole(hint.Role))
             {
                 var provided = roleDisplayName(hint.Role);

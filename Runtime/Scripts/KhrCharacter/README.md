@@ -277,7 +277,8 @@ node's authored `matrix` (decomposed as the importer does) or its TRS with the c
 never read, so a node moved at runtime still resolves to its authored value. The values are on `ReferencePose`
 (`ResolvedNodeIndices`, `ResolvedNodes` (null for a node outside the imported scene), `ResolvedLocalPositions`,
 `ResolvedLocalRotations`, `ResolvedLocalScales`, `ParentIndices`). `Bones` and the `Local*` arrays keep the
-instantiated targeted nodes, which is what export writes.
+instantiated targeted nodes, which is what export writes. Translations are in the imported scene's units: like node
+positions, they include the scale factor of the editor importer.
 
 Import checks each tagged animation: at least one channel, ordinary node TRS targets only (no matrix nodes), one
 key per input, `LINEAR` or `STEP`, the core output type, count, and component type, decoded outputs (sparse
@@ -318,7 +319,8 @@ role, label, projection, and target.
   with the lowest index. Otherwise list order, node order, and role imply no priority; `TryGetByRole` returns the
   first match without ranking.
 - **Names.** `GetDisplayName(hint)` uses the label, else a nonempty node name, else the role, and accepts an optional
-  provider of display names (for example localized ones) for recognized roles.
+  provider of display names (for example localized ones) for recognized roles. A hint imported from an unnamed node
+  has `NodeUnnamed` set, so the `GLTFNode<index>` name UnityGLTF gives its GameObject is never shown as a node name.
 
 Assets must not require `KHR_node_camera_hint`, so the plugin never claims it for required use.
 

@@ -124,7 +124,8 @@ namespace UnityGLTF.VisibilityHints.Tests
             var child = NewChild(parent, "child");
             root.AddComponent<NodeVisibilityHintSet>().Bind(new[]
             {
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = parent.transform, Role = "third_person" },
+                new NodeVisibilityHintSet.NodeVisibilityEntry
+                    { Node = parent.transform, NodeUnnamed = true, Role = "third_person" },
             });
 
             var clone = Object.Instantiate(root);
@@ -133,6 +134,8 @@ namespace UnityGLTF.VisibilityHints.Tests
             var cloneChild = FindTransform(clone, "child");
 
             Assert.IsNotNull(cloneSet);
+            Assert.AreEqual("third_person", NodeVisibilityHintSet.GetDisplayName(cloneSet.Entries[0]),
+                "an unnamed imported node stays unnamed after Instantiate");
             Assert.AreEqual("third_person", cloneSet.ResolveRole(cloneChild));
             Assert.IsFalse(cloneSet.ShouldRenderVisualContent(cloneChild, FirstPerson, true));
             Assert.IsFalse(cloneSet.ShouldRenderVisualContent(cloneChild, Untagged, true));
