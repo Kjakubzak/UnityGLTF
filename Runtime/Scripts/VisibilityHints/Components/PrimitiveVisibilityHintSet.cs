@@ -69,10 +69,20 @@ namespace UnityGLTF.VisibilityHints
             Renderer renderer,
             int subMesh,
             string resolvedNodeRole,
-            string activeContext,
-            bool ancestorInclusiveCoreVisible)
+            IReadOnlyCollection<string> viewTags,
+            bool ancestorInclusiveCoreVisible,
+            IVisibilityRoleResolver resolver = null,
+            bool renderUnsupportedRoles = false)
             => VisibilityHintEvaluator.ShouldRenderPrimitiveInstance(
-                resolvedNodeRole, ResolveRole(renderer, subMesh), activeContext, ancestorInclusiveCoreVisible);
+                resolvedNodeRole, ResolveRole(renderer, subMesh), viewTags, ancestorInclusiveCoreVisible,
+                resolver, renderUnsupportedRoles);
+
+        /// <summary>Presentation name for an entry: its label, else its role.</summary>
+        public static string GetDisplayName(PrimitiveVisibilityEntry entry)
+        {
+            if (entry == null) return null;
+            return !string.IsNullOrEmpty(entry.Label) ? entry.Label : entry.Role;
+        }
 
         private static Mesh GetRendererMesh(Renderer renderer)
         {

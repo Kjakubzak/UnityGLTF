@@ -5,8 +5,9 @@ using UnityEngine;
 namespace UnityGLTF.KhrCharacter.Editor
 {
     /// <summary>
-    /// Inspector for <see cref="CameraHintSet"/>: a read-only table of the authored hints (Role / Label /
-    /// Node / Target), read from the serialized hints so it shows at edit time.
+    /// Inspector for <see cref="CameraHintSet"/>: a read-only table of the authored hints, read from the serialized
+    /// hints so it shows at edit time. Rows are named by label, node name, then role; hints with roles the host does
+    /// not recognize are marked custom but still listed, because this is a diagnostic view.
     /// </summary>
     [CustomEditor(typeof(CameraHintSet))]
     public class CameraHintSetEditor : UnityEditor.Editor
@@ -17,9 +18,11 @@ namespace UnityGLTF.KhrCharacter.Editor
         {
             serializedObject.Update();
             EditorGUILayout.HelpBox(
-                "Passive descriptors. Applying a hint to a camera is optional host policy.",
+                "Passive descriptors. Applying a hint to a camera is optional host policy; a target node supplies " +
+                "only a subject point and never aims the camera.",
                 MessageType.Info);
 
+            var set = (CameraHintSet)target;
             var hintsProp = serializedObject.FindProperty("_serializedHints");
             int count = hintsProp != null ? hintsProp.arraySize : 0;
 
@@ -39,12 +42,20 @@ namespace UnityGLTF.KhrCharacter.Editor
                 {
                     var hint = hintsProp.GetArrayElementAtIndex(i);
                     var role = hint.FindPropertyRelative("Role")?.stringValue;
-                    var label = hint.FindPropertyRelative("Label")?.stringValue;
-                    var node = hint.FindPropertyRelative("Node")?.objectReferenceValue;
+                    var node = hint.FindPropertyRelative("Node")?.objectReferenceValue as Transform;
                     var tgt = hint.FindPropertyRelative("Target")?.objectReferenceValue;
                     var projection = hint.FindPropertyRelative("Projection")?.objectReferenceValue;
+                    var displayName = set.GetDisplayName(new CameraHint
+                    {
+                        Role = role,
+                        Label = hint.FindPropertyRelative("Label")?.stringValue,
+                        Node = node,
+                    });
+                    string roleText = set.IsRecognizedRole(role)
+                        ? StringOrNone(role)
+                        : $"{StringOrNone(role)}, custom";
 
-                    EditorGUILayout.LabelField($"#{i}  {StringOrNone(role)} / {StringOrNone(label)}", EditorStyles.miniBoldLabel);
+                    EditorGUILayout.LabelField($"#{i}  {StringOrNone(displayName)}  ({roleText})", EditorStyles.miniBoldLabel);
                     EditorGUI.indentLevel++;
                     EditorGUILayout.ObjectField("Node", node, typeof(Transform), true);
                     EditorGUILayout.ObjectField("Target", tgt, typeof(Transform), true);

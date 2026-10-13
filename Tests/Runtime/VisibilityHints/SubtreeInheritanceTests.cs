@@ -6,6 +6,10 @@ namespace UnityGLTF.VisibilityHints.Tests
 {
     public class SubtreeInheritanceTests
     {
+        private static readonly string[] FirstPerson = { "first_person" };
+        private static readonly string[] ThirdPerson = { "third_person" };
+        private static readonly string[] Untagged = new string[0];
+
         private readonly List<Object> _created = new List<Object>();
 
         [TearDown]
@@ -54,9 +58,9 @@ namespace UnityGLTF.VisibilityHints.Tests
             Assert.AreEqual("third_person", set.ResolveRole(a.transform));
             Assert.AreEqual("third_person", set.ResolveRole(b.transform));
             Assert.AreEqual("first_person", set.ResolveRole(c.transform));
-            Assert.IsFalse(set.ShouldRenderVisualContent(a.transform, "first_person", true));
-            Assert.IsFalse(set.ShouldRenderVisualContent(b.transform, "first_person", true));
-            Assert.IsTrue(set.ShouldRenderVisualContent(c.transform, "first_person", true));
+            Assert.IsFalse(set.ShouldRenderVisualContent(a.transform, FirstPerson, true));
+            Assert.IsFalse(set.ShouldRenderVisualContent(b.transform, FirstPerson, true));
+            Assert.IsTrue(set.ShouldRenderVisualContent(c.transform, FirstPerson, true));
         }
 
         [Test]
@@ -72,8 +76,8 @@ namespace UnityGLTF.VisibilityHints.Tests
                 new NodeVisibilityHintSet.NodeVisibilityEntry { Node = child.transform, Role = "always" },
             });
 
-            Assert.IsFalse(set.ShouldRenderVisualContent(parent.transform, "first_person", true));
-            Assert.IsTrue(set.ShouldRenderVisualContent(child.transform, "first_person", true));
+            Assert.IsFalse(set.ShouldRenderVisualContent(parent.transform, FirstPerson, true));
+            Assert.IsTrue(set.ShouldRenderVisualContent(child.transform, FirstPerson, true));
         }
 
         [Test]
@@ -91,8 +95,8 @@ namespace UnityGLTF.VisibilityHints.Tests
             });
 
             Assert.AreEqual("first_person", set.ResolveRole(node.transform));
-            Assert.IsTrue(set.ShouldRenderVisualContent(node.transform, "first_person", true));
-            Assert.IsFalse(set.ShouldRenderVisualContent(node.transform, "third_person", true));
+            Assert.IsTrue(set.ShouldRenderVisualContent(node.transform, FirstPerson, true));
+            Assert.IsFalse(set.ShouldRenderVisualContent(node.transform, ThirdPerson, true));
         }
 
         [Test]
@@ -109,7 +113,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             });
 
             Assert.IsNull(set.ResolveRole(plain.transform));
-            Assert.IsTrue(set.ShouldRenderVisualContent(plain.transform, "first_person", true));
+            Assert.IsTrue(set.ShouldRenderVisualContent(plain.transform, FirstPerson, true));
         }
 
         [Test]
@@ -130,8 +134,9 @@ namespace UnityGLTF.VisibilityHints.Tests
 
             Assert.IsNotNull(cloneSet);
             Assert.AreEqual("third_person", cloneSet.ResolveRole(cloneChild));
-            Assert.IsFalse(cloneSet.ShouldRenderVisualContent(cloneChild, "first_person", true));
-            Assert.IsTrue(cloneSet.ShouldRenderVisualContent(cloneChild, null, true));
+            Assert.IsFalse(cloneSet.ShouldRenderVisualContent(cloneChild, FirstPerson, true));
+            Assert.IsFalse(cloneSet.ShouldRenderVisualContent(cloneChild, Untagged, true));
+            Assert.IsTrue(cloneSet.ShouldRenderVisualContent(cloneChild, ThirdPerson, true));
             Assert.AreSame(child.transform, FindTransform(root, "child"));
         }
     }

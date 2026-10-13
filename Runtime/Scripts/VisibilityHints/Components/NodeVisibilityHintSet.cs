@@ -66,8 +66,24 @@ namespace UnityGLTF.VisibilityHints
         }
 
         public bool ShouldRenderVisualContent(
-            Transform node, string activeContext, bool ancestorInclusiveCoreVisible)
+            Transform node,
+            IReadOnlyCollection<string> viewTags,
+            bool ancestorInclusiveCoreVisible,
+            IVisibilityRoleResolver resolver = null,
+            bool renderUnsupportedRoles = false)
             => VisibilityHintEvaluator.ShouldRenderNodeVisualContent(
-                ResolveRole(node), activeContext, ancestorInclusiveCoreVisible);
+                ResolveRole(node), viewTags, ancestorInclusiveCoreVisible, resolver, renderUnsupportedRoles);
+
+        /// <summary>
+        /// Presentation name for an entry: its label, else the node's nonempty name, else its role. UnityGLTF names
+        /// the GameObject of an unnamed glTF node <c>GLTFNode&lt;index&gt;</c>, and export writes that name back.
+        /// </summary>
+        public static string GetDisplayName(NodeVisibilityEntry entry)
+        {
+            if (entry == null) return null;
+            if (!string.IsNullOrEmpty(entry.Label)) return entry.Label;
+            if (entry.Node != null && !string.IsNullOrEmpty(entry.Node.name)) return entry.Node.name;
+            return entry.Role;
+        }
     }
 }

@@ -6,7 +6,7 @@ using UnityEngine;
 namespace UnityGLTF.VisibilityHints.Editor
 {
     /// <summary>
-    /// Editor menu that builds a small sample hierarchy exercising both view-context visibility-hint extensions
+    /// Editor menu that builds a small sample hierarchy exercising both visibility-hint extensions
     /// and exports it to a <c>.glb</c> (with the VisibilityHints export plugin enabled on a fresh, isolated
     /// default-settings instance). The hierarchy is left in the scene so its authored entries and predicate-query
     /// component can be inspected, and the exported file re-imports with the metadata restored.
@@ -25,15 +25,16 @@ namespace UnityGLTF.VisibilityHints.Editor
             var root = new GameObject("VisibilityHintsSample");
             Undo.RegisterCreatedObjectUndo(root, "Generate Visibility Hints Sample");
 
-            // Head: a single-sub-mesh node, hinted third_person (hidden when the view context is first person).
+            // Head: a single-sub-mesh node, hinted third_person (visible only in views tagged third_person).
             var head = MakeMeshChild(root, "Head", SingleTriangleMesh("HeadMesh"), NewMaterial("HeadMat"));
             head.transform.localPosition = new Vector3(0f, 1f, 0f);
 
-            // Body: two sub-meshes; sub-mesh 1 is hinted first_person (e.g. arms visible only in first person).
+            // Body: two sub-meshes; sub-mesh 1 is hinted first_person (e.g. arms visible only in first-person views).
             var bodyMesh = TwoSubMeshMesh("BodyMesh");
             MakeMeshChild(root, "Body", bodyMesh, NewMaterial("BodyMat0"), NewMaterial("BodyMat1"));
 
-            root.AddComponent<ViewContextController>();
+            root.AddComponent<ViewContextController>().SetDefaultViewTags(
+                new[] { VisibilityHintExtensionNames.ViewTagThirdPerson });
 
             root.AddComponent<NodeVisibilityHintSet>().Bind(new List<NodeVisibilityHintSet.NodeVisibilityEntry>
             {

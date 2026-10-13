@@ -7,7 +7,7 @@ using UnityGLTF.Plugins;
 namespace UnityGLTF.VisibilityHints
 {
     /// <summary>
-    /// Per-import instance that reads view-context visibility hints into queryable metadata components. The shared
+    /// Per-import instance that reads visibility hints into queryable metadata components. The shared
     /// <see cref="ViewContextController"/> exposes pure per-view and per-instance predicates; it does not mutate
     /// scene or rendering state.
     /// </summary>

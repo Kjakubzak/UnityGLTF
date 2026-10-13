@@ -86,9 +86,11 @@ namespace UnityGLTF.VisibilityHints.Tests
 
             var view = scene.GetComponent<ViewContextController>();
             Assert.IsNotNull(view, "import should add a ViewContextController");
-            Assert.IsTrue(view.ShouldRenderNodeForContext(head.transform, null, true),
-                "no supplied context never suppresses content");
-            Assert.IsFalse(view.ShouldRenderNodeForContext(head.transform, "first_person", true));
+            CollectionAssert.IsEmpty(view.DefaultViewTags, "import starts with an untagged default view");
+            Assert.IsFalse(view.ShouldRenderNode(head.transform, true),
+                "an untagged view hides third_person content");
+            Assert.IsTrue(view.ShouldRenderNodeForView(head.transform, new[] { "third_person" }, true));
+            Assert.IsFalse(view.ShouldRenderNodeForView(head.transform, new[] { "first_person" }, true));
             Assert.IsTrue(headRenderer.enabled, "predicate queries do not mutate renderer state");
         }
 
@@ -125,9 +127,9 @@ namespace UnityGLTF.VisibilityHints.Tests
 
             var view = scene.GetComponent<ViewContextController>();
             Assert.IsNotNull(view);
-            Assert.IsTrue(view.ShouldRenderPrimitiveForContext(renderer, 0, null, true));
-            Assert.IsTrue(view.ShouldRenderPrimitiveForContext(renderer, 0, "first_person", true));
-            Assert.IsFalse(view.ShouldRenderPrimitiveForContext(renderer, 0, "third_person", true));
+            Assert.IsFalse(view.ShouldRenderPrimitiveForView(renderer, 0, new string[0], true));
+            Assert.IsTrue(view.ShouldRenderPrimitiveForView(renderer, 0, new[] { "first_person" }, true));
+            Assert.IsFalse(view.ShouldRenderPrimitiveForView(renderer, 0, new[] { "third_person" }, true));
             Assert.AreSame(original, renderer.sharedMaterials[0], "predicate queries preserve authored materials");
         }
 
@@ -186,10 +188,10 @@ namespace UnityGLTF.VisibilityHints.Tests
             Assert.AreEqual(1, controllers.Length, "both sets must share a single ViewContextController");
 
             var view = controllers[0];
-            Assert.IsFalse(view.ShouldRenderNodeForContext(head.transform, "first_person", true));
-            Assert.IsFalse(view.ShouldRenderPrimitiveForContext(bodyRenderer, 0, "first_person", true));
-            Assert.IsTrue(view.ShouldRenderNodeForContext(head.transform, "third_person", true));
-            Assert.IsTrue(view.ShouldRenderPrimitiveForContext(bodyRenderer, 0, "third_person", true));
+            Assert.IsFalse(view.ShouldRenderNodeForView(head.transform, new[] { "first_person" }, true));
+            Assert.IsFalse(view.ShouldRenderPrimitiveForView(bodyRenderer, 0, new[] { "first_person" }, true));
+            Assert.IsTrue(view.ShouldRenderNodeForView(head.transform, new[] { "third_person" }, true));
+            Assert.IsTrue(view.ShouldRenderPrimitiveForView(bodyRenderer, 0, new[] { "third_person" }, true));
             Assert.IsTrue(headRenderer.enabled);
             Assert.AreSame(original, bodyRenderer.sharedMaterials[0],
                 "evaluating either extension does not mutate shared scene state");

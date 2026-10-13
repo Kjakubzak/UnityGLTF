@@ -1,20 +1,24 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace UnityGLTF.VisibilityHints
 {
     /// <summary>
-    /// Optional renderer-only adapter that realizes predicate-hidden mesh primitives with a host-supplied no-draw
-    /// material for the lifetime of an explicit render scope. The material must contribute to no visual pass for
-    /// the active pipeline; an alpha-zero surface shader is not sufficient. This adapter does not cover non-renderer
-    /// node features and does not by itself constitute support for required use of either extension.
+    /// Optional renderer and light adapter that realizes predicate-hidden content for the lifetime of an explicit
+    /// render scope. Hidden mesh primitives get a host-supplied no-draw material, which must contribute to no visual
+    /// pass for the active pipeline (an alpha-zero surface shader is not sufficient). A renderer whose node is hidden
+    /// also stops casting shadows, and <see cref="ApplyLightsForView"/> turns off lights on hidden nodes. The adapter
+    /// does not cover other node features and does not by itself constitute support for required use of either
+    /// extension.
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class ScopedMaterialVisibilityAdapter : MonoBehaviour
     {
         [SerializeField] private Material _noDrawMaterial;
         private readonly HashSet<Renderer> _activeRenderers = new HashSet<Renderer>();
+        private readonly HashSet<Light> _activeLights = new HashSet<Light>();
 
         public Material NoDrawMaterial
         {
@@ -23,12 +27,12 @@ namespace UnityGLTF.VisibilityHints
         }
 
         /// <summary>
-        /// Applies one renderer instance's node and primitive predicates for one view. Dispose the returned scope in
-        /// a <c>finally</c> block immediately after that view renders. Call this independently for every descendant
-        /// renderer so a nearer node hint can override an inherited hint.
+        /// Applies one renderer instance's node and primitive predicates for one view with the given view tags.
+        /// Dispose the returned scope in a <c>finally</c> block immediately after that view renders. Call this
+        /// independently for every descendant renderer so a nearer node hint can override an inherited hint.
         /// </summary>
         public IDisposable ApplyForView(
-            Renderer renderer, string context, bool ancestorInclusiveCoreVisible)
+            Renderer renderer, IReadOnlyCollection<string> viewTags, bool ancestorInclusiveCoreVisible)
         {
             if (renderer == null) throw new ArgumentNullException(nameof(renderer));
             var controller = GetComponent<ViewContextController>();
@@ -48,8 +52,8 @@ namespace UnityGLTF.VisibilityHints
                 var replacedSlots = new List<int>();
                 for (int subMesh = 0; subMesh < replacement.Length; subMesh++)
                 {
-                    if (controller.ShouldRenderPrimitiveForContext(
-                            renderer, subMesh, context, ancestorInclusiveCoreVisible))
+                    if (controller.ShouldRenderPrimitiveForView(
+                            renderer, subMesh, viewTags, ancestorInclusiveCoreVisible))
                         continue;
                     if (_noDrawMaterial == null)
                         throw new InvalidOperationException(
@@ -59,14 +63,22 @@ namespace UnityGLTF.VisibilityHints
                     replacedSlots.Add(subMesh);
                 }
 
-                if (replacedSlots.Count == 0)
+                bool disableShadows = renderer.shadowCastingMode != ShadowCastingMode.Off
+                    && !controller.ShouldRenderNodeForView(
+                        renderer.transform, viewTags, ancestorInclusiveCoreVisible);
+                if (replacedSlots.Count == 0 && !disableShadows)
                     return new EmptyScope(() => _activeRenderers.Remove(renderer));
-                renderer.sharedMaterials = replacement;
+
+                var originalShadows = renderer.shadowCastingMode;
+                if (replacedSlots.Count > 0) renderer.sharedMaterials = replacement;
+                if (disableShadows) renderer.shadowCastingMode = ShadowCastingMode.Off;
                 return new MaterialScope(
                     renderer,
                     original,
                     _noDrawMaterial,
                     replacedSlots,
+                    disableShadows,
+                    originalShadows,
                     () => _activeRenderers.Remove(renderer));
             }
             catch
@@ -79,7 +91,7 @@ namespace UnityGLTF.VisibilityHints
         /// <summary>Scopes every supplied renderer for one view and restores them in reverse order.</summary>
         public IDisposable ApplyForView(
             IReadOnlyList<Renderer> renderers,
-            string context,
+            IReadOnlyCollection<string> viewTags,
             Func<Transform, bool> ancestorInclusiveCoreVisibility)
         {
             if (renderers == null) throw new ArgumentNullException(nameof(renderers));
@@ -92,21 +104,75 @@ namespace UnityGLTF.VisibilityHints
                 {
                     if (renderer == null) continue;
                     scopes.Add(ApplyForView(
-                        renderer, context, ancestorInclusiveCoreVisibility(renderer.transform)));
+                        renderer, viewTags, ancestorInclusiveCoreVisibility(renderer.transform)));
                 }
                 return new CompositeScope(scopes);
             }
             catch
             {
-                try
-                {
-                    new CompositeScope(scopes).Dispose();
-                }
-                catch
-                {
-                    // Preserve the failure that prevented the render scope from being created.
-                }
+                DisposeAfterFailure(scopes);
                 throw;
+            }
+        }
+
+        /// <summary>
+        /// Turns off, for one view, every supplied light whose node's visual-content predicate is false, and restores
+        /// them when the returned scope is disposed. Roles resolve through <see cref="NodeVisibilityHintSet"/>, so a
+        /// light that must reach every view needs <c>role: always</c> on its own node. Cameras and camera hints are
+        /// never touched.
+        /// </summary>
+        public IDisposable ApplyLightsForView(
+            IReadOnlyList<Light> lights,
+            IReadOnlyCollection<string> viewTags,
+            Func<Transform, bool> ancestorInclusiveCoreVisibility)
+        {
+            if (lights == null) throw new ArgumentNullException(nameof(lights));
+            if (ancestorInclusiveCoreVisibility == null)
+                throw new ArgumentNullException(nameof(ancestorInclusiveCoreVisibility));
+            var controller = GetComponent<ViewContextController>();
+            if (controller == null) return EmptyScope.Instance;
+
+            var scopes = new List<IDisposable>();
+            try
+            {
+                foreach (var light in lights)
+                {
+                    if (light == null) continue;
+                    if (_activeLights.Contains(light))
+                        throw new InvalidOperationException(
+                            "Overlapping visibility-light scopes for one light are unsupported.");
+                    bool keep = !light.enabled
+                        || controller.ShouldRenderNodeForView(
+                            light.transform, viewTags, ancestorInclusiveCoreVisibility(light.transform));
+                    var activeLight = light;
+                    _activeLights.Add(activeLight);
+                    void Release() => _activeLights.Remove(activeLight);
+                    if (keep)
+                    {
+                        scopes.Add(new EmptyScope(Release));
+                        continue;
+                    }
+                    light.enabled = false;
+                    scopes.Add(new LightScope(light, Release));
+                }
+                return new CompositeScope(scopes);
+            }
+            catch
+            {
+                DisposeAfterFailure(scopes);
+                throw;
+            }
+        }
+
+        private static void DisposeAfterFailure(List<IDisposable> scopes)
+        {
+            try
+            {
+                new CompositeScope(scopes).Dispose();
+            }
+            catch
+            {
+                // Preserve the failure that prevented the render scope from being created.
             }
         }
 
@@ -116,6 +182,8 @@ namespace UnityGLTF.VisibilityHints
             private readonly Material[] _original;
             private readonly Material _noDrawMaterial;
             private readonly List<int> _replacedSlots;
+            private readonly bool _restoreShadows;
+            private readonly ShadowCastingMode _originalShadows;
             private readonly Action _onDispose;
             private bool _disposed;
 
@@ -124,12 +192,16 @@ namespace UnityGLTF.VisibilityHints
                 Material[] original,
                 Material noDrawMaterial,
                 List<int> replacedSlots,
+                bool restoreShadows,
+                ShadowCastingMode originalShadows,
                 Action onDispose)
             {
                 _renderer = renderer;
                 _original = original;
                 _noDrawMaterial = noDrawMaterial;
                 _replacedSlots = replacedSlots;
+                _restoreShadows = restoreShadows;
+                _originalShadows = originalShadows;
                 _onDispose = onDispose;
             }
 
@@ -140,21 +212,54 @@ namespace UnityGLTF.VisibilityHints
                 try
                 {
                     if (_renderer == null) return;
-                    var current = _renderer.sharedMaterials;
-                    bool changed = false;
-                    foreach (int subMesh in _replacedSlots)
+                    if (_replacedSlots.Count > 0)
                     {
-                        if (subMesh >= current.Length || subMesh >= _original.Length
-                            || current[subMesh] != _noDrawMaterial)
-                            continue;
-                        current[subMesh] = _original[subMesh];
-                        changed = true;
+                        var current = _renderer.sharedMaterials;
+                        bool changed = false;
+                        foreach (int subMesh in _replacedSlots)
+                        {
+                            if (subMesh >= current.Length || subMesh >= _original.Length
+                                || current[subMesh] != _noDrawMaterial)
+                                continue;
+                            current[subMesh] = _original[subMesh];
+                            changed = true;
+                        }
+                        if (changed) _renderer.sharedMaterials = current;
                     }
-                    if (changed) _renderer.sharedMaterials = current;
+                    if (_restoreShadows && _renderer.shadowCastingMode == ShadowCastingMode.Off)
+                        _renderer.shadowCastingMode = _originalShadows;
                 }
                 finally
                 {
                     _renderer = null;
+                    _onDispose?.Invoke();
+                }
+            }
+        }
+
+        private sealed class LightScope : IDisposable
+        {
+            private Light _light;
+            private readonly Action _onDispose;
+            private bool _disposed;
+
+            public LightScope(Light light, Action onDispose)
+            {
+                _light = light;
+                _onDispose = onDispose;
+            }
+
+            public void Dispose()
+            {
+                if (_disposed) return;
+                _disposed = true;
+                try
+                {
+                    if (_light != null && !_light.enabled) _light.enabled = true;
+                }
+                finally
+                {
+                    _light = null;
                     _onDispose?.Invoke();
                 }
             }

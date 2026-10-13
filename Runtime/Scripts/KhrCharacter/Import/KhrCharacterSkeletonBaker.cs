@@ -8,10 +8,10 @@ using UnityGLTF.Extensions;
 namespace UnityGLTF.KhrCharacter
 {
     /// <summary>
-    /// Resolves <c>KHR_character_skeleton_mapping</c> associations to concrete transforms and bakes every
-    /// <c>KHR_character_reference_pose</c> animation into a static local-space pose. Mapping-set identifiers and
-    /// role identifiers remain generic; recognized role names are interpreted only by the optional Unity Humanoid
-    /// adapter.
+    /// Resolves <c>KHR_character_skeleton_mapping</c> associations to node indices and concrete transforms, and
+    /// resolves every <c>KHR_character_reference_pose</c> animation into reference-pose values for all nodes.
+    /// Mapping-set identifiers and role identifiers remain generic; recognized role names are interpreted only by the
+    /// optional Unity Humanoid adapter.
     /// </summary>
     internal static class KhrCharacterSkeletonBaker
     {
@@ -54,7 +54,7 @@ namespace UnityGLTF.KhrCharacter
             SkeletonMappingSetResult adapterSelection = null;
             foreach (var mapping in ext.SkeletalRigMappings)
             {
-                var result = ResolveMappingSet(mapping.Key, mapping.Value, nodeIndexToGo);
+                var result = ResolveMappingSet(root, mapping.Key, mapping.Value, nodeIndexToGo);
                 if (result == null) continue;
                 mappingSets.Add(result);
                 if (adapterSelection == null
@@ -99,112 +99,273 @@ namespace UnityGLTF.KhrCharacter
             }
         }
 
-        /// <summary>
-        /// Reads the single sample of the first animation tagged with <c>KHR_character_reference_pose</c> into a
-        /// <see cref="ReferencePose"/> (Unity-space local TRS per targeted node). Returns null when absent.
-        /// </summary>
+        /// <summary>Resolves the first valid animation tagged with <c>KHR_character_reference_pose</c>, or null.</summary>
         public static ReferencePose BakeReferencePose(GLTFRoot root, GLTFSceneImporter importer, IReadOnlyDictionary<int, GameObject> nodeIndexToGo)
         {
-            var poses = BakeReferencePoses(root, importer, nodeIndexToGo);
-            return poses.Length > 0 ? poses[0] : null;
+            foreach (var pose in BakeReferencePoses(root, importer, nodeIndexToGo))
+                if (pose.IsValid) return pose;
+            return null;
         }
 
+        /// <summary>
+        /// Resolves every animation tagged with <c>KHR_character_reference_pose</c>, in animation order. An invalid
+        /// tagged animation is returned with <see cref="ReferencePose.IsValid"/> false and its errors, not dropped.
+        /// </summary>
         public static ReferencePose[] BakeReferencePoses(
             GLTFRoot root, GLTFSceneImporter importer, IReadOnlyDictionary<int, GameObject> nodeIndexToGo)
         {
+            if (importer == null) return Array.Empty<ReferencePose>();
+            return BakeReferencePoses(root, ReadBufferView, nodeIndexToGo);
+
+            byte[] ReadBufferView(BufferView bufferView)
+            {
+                var native = importer.GetBufferViewData(bufferView);
+                return native.IsCreated ? native.ToArray() : Array.Empty<byte>();
+            }
+        }
+
+        internal static ReferencePose[] BakeReferencePoses(
+            GLTFRoot root, Func<BufferView, byte[]> readBufferView, IReadOnlyDictionary<int, GameObject> nodeIndexToGo)
+        {
             var poses = new List<ReferencePose>();
-            if (root?.Animations == null || importer == null || nodeIndexToGo == null) return poses.ToArray();
+            if (root?.Animations == null || readBufferView == null || nodeIndexToGo == null) return poses.ToArray();
+            NodeLayout layout = null;
             for (int animationIndex = 0; animationIndex < root.Animations.Count; animationIndex++)
             {
                 var animation = root.Animations[animationIndex];
                 if (animation?.Extensions == null
                     || !animation.Extensions.TryGetValue(KHR_character_reference_pose.EXTENSION_NAME, out var extension))
                     continue;
+                if (layout == null) layout = NodeLayout.Build(root, nodeIndexToGo);
                 var pose = BakeReferencePoseAnimation(
-                    root, importer, nodeIndexToGo, animation, animationIndex, ExtractPoseType(root, extension) ?? ReferencePoseLabels.TPose);
-                if (pose != null) poses.Add(pose);
+                    root, readBufferView, layout, animation, animationIndex,
+                    ExtractPoseType(root, extension) ?? ReferencePoseLabels.TPose);
+                if (!pose.IsValid)
+                    Debug.LogWarning(
+                        $"[KHR_character] Reference-pose animation {animationIndex} is invalid: {string.Join(" ", pose.Errors)}");
+                poses.Add(pose);
             }
             return poses.ToArray();
         }
 
         private static ReferencePose BakeReferencePoseAnimation(
             GLTFRoot root,
-            GLTFSceneImporter importer,
-            IReadOnlyDictionary<int, GameObject> nodeIndexToGo,
-            GLTFAnimation refAnim,
+            Func<BufferView, byte[]> readBufferView,
+            NodeLayout layout,
+            GLTFAnimation animation,
             int animationIndex,
             string poseType)
         {
-            if (refAnim?.Channels == null || refAnim.Channels.Count == 0) return null;
+            var errors = new List<string>();
+            if (poseType.Length == 0) errors.Add("poseType is empty; it must be a nonempty label when present.");
+            var used = root.ExtensionsUsed;
+            if (used == null || !used.Contains(KhrCharacterExtensionNames.ReferencePose))
+                errors.Add($"extensionsUsed does not list {KhrCharacterExtensionNames.ReferencePose}.");
+            if (used == null || !used.Contains(KhrCharacterExtensionNames.Character))
+                errors.Add($"extensionsUsed does not list {KhrCharacterExtensionNames.Character}.");
 
-            var perNode = new Dictionary<int, NodePose>();
-            foreach (var channel in refAnim.Channels)
+            var targeted = new Dictionary<int, NodePose>();
+            var targetOrder = new List<int>();
+            var seenTargets = new HashSet<(int node, string path)>();
+            if (animation.Channels == null || animation.Channels.Count == 0)
+                errors.Add("The animation contains no channels.");
+            else
+                for (int channelIndex = 0; channelIndex < animation.Channels.Count; channelIndex++)
+                    ReadChannel(root, readBufferView, layout, animation, channelIndex, targeted, targetOrder,
+                        seenTargets, errors);
+
+            var pose = new ReferencePose
             {
-                try
-                {
-                    if (channel?.Target?.Node == null) return null;
-                    var path = channel.Target.Path;
-                    if (path != "translation" && path != "rotation" && path != "scale") return null;
+                AnimationIndex = animationIndex,
+                PoseType = poseType,
+                IsValid = errors.Count == 0,
+                Errors = errors.ToArray(),
+                Bones = Array.Empty<Transform>(),
+                LocalPositions = Array.Empty<Vector3>(),
+                LocalRotations = Array.Empty<Quaternion>(),
+                LocalScales = Array.Empty<Vector3>(),
+            };
+            if (!pose.IsValid) return pose;
 
-                    int samplerIndex = channel.Sampler?.Id ?? -1;
-                    if (samplerIndex < 0 || samplerIndex >= refAnim.Samplers.Count) return null;
-                    var sampler = refAnim.Samplers[samplerIndex];
-                    var input = GetAccessor(root, sampler.Input);
-                    if (input == null || input.Count != 1 || sampler.Interpolation == InterpolationType.CUBICSPLINE)
-                        return null;
-                    var output = GetAccessor(root, sampler.Output);
-                    if (output == null || output.Count != 1) return null;
-
-                    int nodeIndex = channel.Target.Node.Id;
-                    perNode.TryGetValue(nodeIndex, out var pose);
-                    if (path == "rotation")
-                    {
-                        var q = DecodeVec4(importer, output, 0);
-                        if (!q.HasValue) return null;
-                        pose.Rotation = q.Value.ToUnityQuaternionConvert();
-                    }
-                    else
-                    {
-                        var v = DecodeVec3(importer, output, 0);
-                        if (!v.HasValue) return null;
-                        if (path == "translation") pose.Translation = v.Value.ToUnityVector3Convert();
-                        else pose.Scale = v.Value.ToUnityVector3Raw();
-                    }
-                    perNode[nodeIndex] = pose;
-                }
-                catch (Exception e)
+            int count = layout.Count;
+            pose.ResolvedNodeIndices = new int[count];
+            pose.ResolvedNodes = new Transform[count];
+            pose.ResolvedLocalPositions = new Vector3[count];
+            pose.ResolvedLocalRotations = new Quaternion[count];
+            pose.ResolvedLocalScales = new Vector3[count];
+            pose.ParentIndices = new int[count];
+            pose.ResolvedNodeHasForwardAxisConversion = new bool[count];
+            for (int nodeIndex = 0; nodeIndex < count; nodeIndex++)
+            {
+                var position = layout.Positions[nodeIndex];
+                var rotation = layout.Rotations[nodeIndex];
+                var scale = layout.Scales[nodeIndex];
+                if (targeted.TryGetValue(nodeIndex, out var values))
                 {
-                    Debug.LogWarning($"[KHR_character] Invalid reference-pose animation {animationIndex}: {e.Message}");
-                    return null;
+                    position = values.Translation ?? position;
+                    rotation = values.Rotation ?? rotation;
+                    scale = values.Scale ?? scale;
                 }
+                pose.ResolvedNodeIndices[nodeIndex] = nodeIndex;
+                pose.ResolvedNodes[nodeIndex] = layout.Transforms[nodeIndex];
+                pose.ResolvedLocalPositions[nodeIndex] = position;
+                pose.ResolvedLocalRotations[nodeIndex] = rotation;
+                pose.ResolvedLocalScales[nodeIndex] = scale;
+                pose.ParentIndices[nodeIndex] = layout.Parents[nodeIndex];
+                pose.ResolvedNodeHasForwardAxisConversion[nodeIndex] = layout.ForwardAxisConversion[nodeIndex];
             }
-
-            if (perNode.Count == 0) return null;
 
             var bones = new List<Transform>();
             var positions = new List<Vector3>();
             var rotations = new List<Quaternion>();
             var scales = new List<Vector3>();
-            foreach (var kv in perNode)
+            foreach (int nodeIndex in targetOrder)
             {
-                if (!nodeIndexToGo.TryGetValue(kv.Key, out var go) || go == null) continue;
-                var t = go.transform;
-                bones.Add(t);
-                positions.Add(kv.Value.Translation ?? t.localPosition);
-                rotations.Add(kv.Value.Rotation ?? t.localRotation);
-                scales.Add(kv.Value.Scale ?? t.localScale);
+                var transform = layout.Transforms[nodeIndex];
+                if (transform == null) continue;
+                bones.Add(transform);
+                positions.Add(pose.ResolvedLocalPositions[nodeIndex]);
+                rotations.Add(pose.ResolvedLocalRotations[nodeIndex]);
+                scales.Add(pose.ResolvedLocalScales[nodeIndex]);
             }
-            if (bones.Count == 0) return null;
+            pose.Bones = bones.ToArray();
+            pose.LocalPositions = positions.ToArray();
+            pose.LocalRotations = rotations.ToArray();
+            pose.LocalScales = scales.ToArray();
+            return pose;
+        }
 
-            return new ReferencePose
+        private static void ReadChannel(
+            GLTFRoot root,
+            Func<BufferView, byte[]> readBufferView,
+            NodeLayout layout,
+            GLTFAnimation animation,
+            int channelIndex,
+            Dictionary<int, NodePose> targeted,
+            List<int> targetOrder,
+            HashSet<(int node, string path)> seenTargets,
+            List<string> errors)
+        {
+            var channel = animation.Channels[channelIndex];
+            var path = channel?.Target?.Path;
+            if (channel?.Target?.Node == null || (path != "translation" && path != "rotation" && path != "scale"))
             {
-                AnimationIndex = animationIndex,
-                PoseType = poseType,
-                Bones = bones.ToArray(),
-                LocalPositions = positions.ToArray(),
-                LocalRotations = rotations.ToArray(),
-                LocalScales = scales.ToArray(),
-            };
+                errors.Add($"Channel {channelIndex} does not target an ordinary node translation, rotation, or scale.");
+                return;
+            }
+            int nodeIndex = channel.Target.Node.Id;
+            if (nodeIndex < 0 || nodeIndex >= layout.Count)
+            {
+                errors.Add($"Channel {channelIndex} targets node {nodeIndex}, which does not exist.");
+                return;
+            }
+            if (layout.HasMatrix[nodeIndex])
+            {
+                errors.Add($"Channel {channelIndex} targets node {nodeIndex}, which is defined by a matrix.");
+                return;
+            }
+            if (!seenTargets.Add((nodeIndex, path)))
+            {
+                errors.Add($"Channel {channelIndex} targets node {nodeIndex} {path} a second time.");
+                return;
+            }
+
+            int samplerIndex = channel.Sampler?.Id ?? -1;
+            if (animation.Samplers == null || samplerIndex < 0 || samplerIndex >= animation.Samplers.Count)
+            {
+                errors.Add($"Channel {channelIndex} references invalid sampler {samplerIndex}.");
+                return;
+            }
+            var sampler = animation.Samplers[samplerIndex];
+            if (sampler.Interpolation != InterpolationType.LINEAR && sampler.Interpolation != InterpolationType.STEP)
+            {
+                errors.Add($"Sampler {samplerIndex} uses {sampler.Interpolation} interpolation; only LINEAR or STEP is allowed.");
+                return;
+            }
+            var input = GetAccessor(root, sampler.Input);
+            if (input == null || input.Count != 1 || input.Type != GLTFAccessorAttributeType.SCALAR
+                || input.ComponentType != GLTFComponentType.Float || input.Normalized)
+            {
+                errors.Add($"Sampler {samplerIndex} input must be one FLOAT SCALAR key.");
+                return;
+            }
+            var output = GetAccessor(root, sampler.Output);
+            bool isRotation = path == "rotation";
+            if (output == null || output.Count != 1 || !IsValidOutputFormat(output, isRotation))
+            {
+                errors.Add(
+                    $"Sampler {samplerIndex} output must be one {(isRotation ? "VEC4 rotation" : "FLOAT VEC3")} value " +
+                    $"for node {nodeIndex} {path}.");
+                return;
+            }
+
+            GltfAccessorDecoder.DecodedAccessor decoded;
+            try
+            {
+                decoded = GltfAccessorDecoder.DecodeAccessor(output, readBufferView);
+            }
+            catch (Exception exception)
+            {
+                errors.Add($"Sampler {samplerIndex} output could not be decoded: {exception.Message}");
+                return;
+            }
+            var value = decoded.Values[0];
+            foreach (float component in value)
+            {
+                if (float.IsNaN(component) || float.IsInfinity(component))
+                {
+                    errors.Add($"Sampler {samplerIndex} output for node {nodeIndex} {path} is not finite.");
+                    return;
+                }
+            }
+            if (isRotation
+                && !IsUnitQuaternion(value, ExpressionInitialValueValidation.AccessorAllowance(decoded.Encoding)))
+            {
+                errors.Add($"Sampler {samplerIndex} rotation for node {nodeIndex} is not a unit quaternion.");
+                return;
+            }
+
+            if (!targeted.TryGetValue(nodeIndex, out var pose)) targetOrder.Add(nodeIndex);
+            if (isRotation)
+            {
+                pose.Rotation = new float4(value[0], value[1], value[2], value[3]).ToUnityQuaternionConvert().normalized;
+            }
+            else
+            {
+                var vector = new float3(value[0], value[1], value[2]);
+                if (path == "translation") pose.Translation = vector.ToUnityVector3Convert();
+                else pose.Scale = vector.ToUnityVector3Raw();
+            }
+            targeted[nodeIndex] = pose;
+        }
+
+        private static bool IsValidOutputFormat(Accessor output, bool isRotation)
+        {
+            if (!isRotation)
+                return output.Type == GLTFAccessorAttributeType.VEC3
+                       && output.ComponentType == GLTFComponentType.Float && !output.Normalized;
+            if (output.Type != GLTFAccessorAttributeType.VEC4) return false;
+            switch (output.ComponentType)
+            {
+                case GLTFComponentType.Float:
+                    return !output.Normalized;
+                case GLTFComponentType.Byte:
+                case GLTFComponentType.UnsignedByte:
+                case GLTFComponentType.Short:
+                case GLTFComponentType.UnsignedShort:
+                    return output.Normalized;
+                default:
+                    return false;
+            }
+        }
+
+        // Same unit tolerance as the expression response baker, widened by the per-component quantization of a
+        // normalized-integer output: |q|^2 can move by at most 4h + 4h^2 when each component moves by h.
+        private static bool IsUnitQuaternion(float[] value, double allowance)
+        {
+            double lengthSquared = 0d;
+            foreach (float component in value) lengthSquared += (double)component * component;
+            return Math.Abs(lengthSquared - 1d) <= 1e-5d + 4d * allowance + 4d * allowance * allowance;
         }
 
         private struct NodePose
@@ -214,11 +375,69 @@ namespace UnityGLTF.KhrCharacter
             public Vector3? Scale;
         }
 
+        // Authored local transform of every node (decomposed matrix, else TRS with core defaults), its glTF parent,
+        // and its instantiated transform. Shared by every tagged animation of one asset.
+        private sealed class NodeLayout
+        {
+            public int Count;
+            public Vector3[] Positions;
+            public Quaternion[] Rotations;
+            public Vector3[] Scales;
+            public int[] Parents;
+            public bool[] HasMatrix;
+            public Transform[] Transforms;
+            public bool[] ForwardAxisConversion;
+
+            public static NodeLayout Build(GLTFRoot root, IReadOnlyDictionary<int, GameObject> nodeIndexToGo)
+            {
+                var nodes = root.Nodes;
+                int count = nodes?.Count ?? 0;
+                var layout = new NodeLayout
+                {
+                    Count = count,
+                    Positions = new Vector3[count],
+                    Rotations = new Quaternion[count],
+                    Scales = new Vector3[count],
+                    Parents = new int[count],
+                    HasMatrix = new bool[count],
+                    Transforms = new Transform[count],
+                    ForwardAxisConversion = new bool[count],
+                };
+                for (int i = 0; i < count; i++) layout.Parents[i] = -1;
+                for (int i = 0; i < count; i++)
+                {
+                    var node = nodes[i];
+                    if (node == null)
+                    {
+                        layout.Rotations[i] = Quaternion.identity;
+                        layout.Scales[i] = Vector3.one;
+                        continue;
+                    }
+                    node.GetUnityTRSProperties(out var position, out var rotation, out var scale);
+                    layout.Positions[i] = position;
+                    layout.Rotations[i] = rotation;
+                    layout.Scales[i] = scale;
+                    layout.HasMatrix[i] = node.HasMatrix;
+                    if (node.Children != null)
+                        foreach (var child in node.Children)
+                            if (child != null && child.Id >= 0 && child.Id < count && layout.Parents[child.Id] < 0)
+                                layout.Parents[child.Id] = i;
+                    if (nodeIndexToGo.TryGetValue(i, out var go) && go != null)
+                    {
+                        layout.Transforms[i] = go.transform;
+                        layout.ForwardAxisConversion[i] = KhrCharacterImportContext.HasForwardAxisConversion(node, go);
+                    }
+                }
+                return layout;
+            }
+        }
+
         // The mapping is identifier -> { role identifier -> association }. Each association is
         // unambiguous: its node is a glTF index into the document's global nodes[] array.
         // Resolve each via a direct node-index -> GameObject lookup (the map the importer builds in
         // OnAfterImportNode), so there is no name coupling and no direction to detect.
         private static SkeletonMappingSetResult ResolveMappingSet(
+            GLTFRoot root,
             string identifier,
             Dictionary<string, KHR_character_skeleton_mapping.JointAssociation> mapping,
             IReadOnlyDictionary<int, GameObject> nodeIndexToGo)
@@ -226,6 +445,7 @@ namespace UnityGLTF.KhrCharacter
             if (mapping == null || mapping.Count == 0) return null;
 
             var bones = new Dictionary<string, Transform>();
+            var nodeIndices = new Dictionary<string, int>();
             var report = new ValidationReport();
             foreach (var kv in mapping)
             {
@@ -235,7 +455,15 @@ namespace UnityGLTF.KhrCharacter
                 int nodeIndex = association.Node;
                 if (string.IsNullOrEmpty(vocab)) continue;
 
-                if (nodeIndex >= 0 && nodeIndexToGo.TryGetValue(nodeIndex, out var go) && go != null)
+                if (nodeIndex < 0 || (root?.Nodes != null && nodeIndex >= root.Nodes.Count))
+                {
+                    report.Warnings.Add($"[KHR_character] skeleton joint '{vocab}' -> node index {nodeIndex} does not exist.");
+                    report.IsValid = false;
+                    continue;
+                }
+
+                nodeIndices[vocab] = nodeIndex;
+                if (nodeIndexToGo.TryGetValue(nodeIndex, out var go) && go != null)
                 {
                     bones[vocab] = go.transform;
                     if (association.Name != null && association.Name != go.name)
@@ -243,14 +471,16 @@ namespace UnityGLTF.KhrCharacter
                 }
                 else
                 {
-                    report.Warnings.Add($"[KHR_character] skeleton joint '{vocab}' -> node index {nodeIndex} was not found.");
-                    report.IsValid = false;
+                    report.Warnings.Add(
+                        $"[KHR_character] skeleton joint '{vocab}' -> node index {nodeIndex} was not instantiated; " +
+                        "the association keeps its node index.");
                 }
             }
 
             return new SkeletonMappingSetResult
             {
                 Associations = bones,
+                NodeIndices = nodeIndices,
                 Identifier = identifier,
                 Report = report,
             };
@@ -272,24 +502,6 @@ namespace UnityGLTF.KhrCharacter
         {
             if (id == null || root?.Accessors == null) return null;
             return (id.Id >= 0 && id.Id < root.Accessors.Count) ? root.Accessors[id.Id] : null;
-        }
-
-        private static float3? DecodeVec3(GLTFSceneImporter importer, Accessor accessor, int index)
-        {
-            if (accessor?.BufferView == null) return null;
-            var data = importer.GetBufferViewData(accessor.BufferView.Value);
-            var numeric = new NumericArray();
-            var arr = accessor.AsFloat3Array(ref numeric, data, 0);
-            return (arr != null && index >= 0 && index < arr.Length) ? arr[index] : (float3?)null;
-        }
-
-        private static float4? DecodeVec4(GLTFSceneImporter importer, Accessor accessor, int index)
-        {
-            if (accessor?.BufferView == null) return null;
-            var data = importer.GetBufferViewData(accessor.BufferView.Value);
-            var numeric = new NumericArray();
-            var arr = accessor.AsFloat4Array(ref numeric, data, 0);
-            return (arr != null && index >= 0 && index < arr.Length) ? arr[index] : (float4?)null;
         }
     }
 }

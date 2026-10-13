@@ -30,7 +30,7 @@ namespace UnityGLTF.VisibilityHints.Editor
                 {
                     using (new EditorGUILayout.HorizontalScope())
                     {
-                        EditorGUILayout.LabelField($"#{i}", GUILayout.Width(30));
+                        EditorGUILayout.LabelField($"#{i}  {DisplayName(element)}", EditorStyles.miniBoldLabel);
                         GUILayout.FlexibleSpace();
                         if (GUILayout.Button("Remove", GUILayout.Width(70))) removeAt = i;
                     }
@@ -57,10 +57,18 @@ namespace UnityGLTF.VisibilityHints.Editor
             EditorGUILayout.HelpBox(
                 "A primitive hint targets a shared Mesh + sub-mesh index, so it applies to every renderer that uses " +
                 "that mesh. \"Collect child renderers\" appends any missing (mesh, sub-mesh) slots as role \"always\"; " +
-                "set the ones you want to first_person / third_person. Enable the \"KHR Visibility Hints " +
-                "(View Context)\" export plugin to write these hints to glTF.",
+                "set the ones you want to first_person / third_person. Custom roles are hidden unless the host " +
+                "supports them through a resolver. Enable the \"KHR Visibility Hints (View Context)\" export plugin " +
+                "to write these hints to glTF.",
                 MessageType.Info);
         }
+
+        private static string DisplayName(SerializedProperty element)
+            => PrimitiveVisibilityHintSet.GetDisplayName(new PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry
+            {
+                Role = element.FindPropertyRelative("Role").stringValue,
+                Label = element.FindPropertyRelative("Label").stringValue,
+            });
 
         private static void AppendEntry(SerializedProperty entriesProp)
         {

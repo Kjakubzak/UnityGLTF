@@ -188,7 +188,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             });
 
             var controller = root.AddComponent<ViewContextController>();
-            controller.SetActiveContext("third_person");
+            controller.SetDefaultViewTags(new[] { "third_person" });
             Assert.IsFalse(controller.ShouldRenderPrimitive(
                 root.GetComponentInChildren<MeshRenderer>(), 0, true));
 

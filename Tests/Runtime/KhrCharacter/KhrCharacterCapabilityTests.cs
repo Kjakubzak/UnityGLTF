@@ -147,6 +147,33 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
+        public void RequiredReferencePoseAndSkeletonMapping_AreRejectedWithoutThePluginAndAcceptedWithIt()
+        {
+            var factories = new ExtensionFactory[]
+            {
+                new KHR_character_reference_pose_Factory(),
+                new KHR_character_skeleton_mapping_Factory(),
+            };
+            foreach (var factory in factories)
+            {
+                Assert.IsTrue(factory.RequiresRuntimeSupportForRequiredUse,
+                    $"{factory.ExtensionName} recognition alone does not expose its data to host logic");
+                GLTFProperty.TryRegisterExtension(factory);
+                var root = new GLTFRoot
+                {
+                    ExtensionsRequired = new List<string> { factory.ExtensionName },
+                };
+
+                Assert.Throws<GLTFLoadException>(() => GLTFSceneImporter.ValidateRequiredExtensionSupport(root, null));
+                Assert.Throws<GLTFLoadException>(() => GLTFSceneImporter.ValidateRequiredExtensionSupport(
+                    root, new List<GLTFImportPluginContext>()));
+                Assert.IsTrue(new KhrCharacterImportContext(null).SupportsRequiredExtension(factory.ExtensionName));
+                Assert.DoesNotThrow(() => GLTFSceneImporter.ValidateRequiredExtensionSupport(
+                    root, new List<GLTFImportPluginContext> { new KhrCharacterImportContext(null) }));
+            }
+        }
+
+        [Test]
         public void RequiredExpressionFamily_IsBehaviorGatedAndConservativelyRejected()
         {
             var factories = new ExtensionFactory[]

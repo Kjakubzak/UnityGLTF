@@ -136,14 +136,18 @@ namespace UnityGLTF.KhrCharacter
                     if (Skeleton == null) return CapabilityStatus.Inert;
                     return SkeletonMappingDegraded() ? CapabilityStatus.Degraded : CapabilityStatus.Active;
                 case CharacterCapability.ReferencePose:
-                    return (Skeleton != null
-                            && ((Skeleton.Result?.ReferencePoses != null && Skeleton.Result.ReferencePoses.Length > 0)
-                                || Skeleton.Result?.ReferencePose != null))
-                        ? CapabilityStatus.Active
-                        : CapabilityStatus.Inert;
+                    return HasUsableReferencePose() ? CapabilityStatus.Active : CapabilityStatus.Inert;
                 default:
                     return CapabilityStatus.Inert;
             }
+        }
+
+        private bool HasUsableReferencePose()
+        {
+            if (Skeleton == null) return false;
+            foreach (var pose in Skeleton.ReferencePoses)
+                if (SkeletonMap.IsUsable(pose)) return true;
+            return false;
         }
 
         // A skeleton mapping is "degraded" (present but only partially driven) when it resolved no bones at all,

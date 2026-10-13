@@ -220,6 +220,14 @@ namespace UnityGLTF.KhrCharacter
     }
 
     // ── Skeleton / reference pose ────────────────────────────────────────────
+    /// <summary>
+    /// One animation tagged with <c>KHR_character_reference_pose</c>. Values are local transforms in Unity
+    /// coordinates. <see cref="Bones"/> and the <c>Local*</c> arrays cover the instantiated nodes the animation
+    /// targets, which is what export writes. The <c>Resolved*</c> arrays cover every node of the asset: targeted TRS
+    /// properties come from the animation and everything else from the node's authored <c>matrix</c> or TRS with the
+    /// core defaults, never from live transforms. An invalid tagged animation keeps its index, label and
+    /// <see cref="Errors"/> but carries no values.
+    /// </summary>
     [Serializable]
     public class ReferencePose
     {
@@ -229,13 +237,47 @@ namespace UnityGLTF.KhrCharacter
         public Vector3[] LocalPositions;
         public Quaternion[] LocalRotations;
         public Vector3[] LocalScales;
+
+        /// <summary>Whether the tagged animation satisfies the reference-pose validity rules.</summary>
+        public bool IsValid = true;
+
+        /// <summary>Validity errors; empty for a valid pose.</summary>
+        public string[] Errors;
+
+        /// <summary>glTF node indices of the resolved entries; every node in the asset.</summary>
+        public int[] ResolvedNodeIndices;
+
+        /// <summary>Instantiated transform per resolved entry, or null for a node outside the imported scene.</summary>
+        public Transform[] ResolvedNodes;
+
+        public Vector3[] ResolvedLocalPositions;
+        public Quaternion[] ResolvedLocalRotations;
+        public Vector3[] ResolvedLocalScales;
+
+        /// <summary>glTF parent node index per resolved entry, or -1 for a root node.</summary>
+        public int[] ParentIndices;
+
+        /// <summary>
+        /// Per resolved entry: UnityGLTF rotated the node's GameObject 180° about Y because it carries a core camera
+        /// or punctual light. The resolved rotation excludes that turn; applying a pose to the GameObject adds it.
+        /// </summary>
+        public bool[] ResolvedNodeHasForwardAxisConversion;
+
+        /// <summary>True when the pose carries resolved values for the asset's nodes.</summary>
+        public bool HasResolvedValues => ResolvedNodeIndices != null && ResolvedNodeIndices.Length > 0;
     }
 
     [Serializable]
     public class SkeletonMappingSetResult
     {
         public string Identifier;
+
+        /// <summary>Role → transform for associations whose node was instantiated.</summary>
         public Dictionary<string, Transform> Associations;
+
+        /// <summary>Role → glTF node index for every association, instantiated or not.</summary>
+        public Dictionary<string, int> NodeIndices = new Dictionary<string, int>();
+
         public ValidationReport Report = new ValidationReport();
     }
 
@@ -269,10 +311,18 @@ namespace UnityGLTF.KhrCharacter
     }
 
     [Serializable]
+    public struct SerializableNodeIndexEntry
+    {
+        public string Role;
+        public int Node;
+    }
+
+    [Serializable]
     public class SerializableSkeletonMappingSet
     {
         public string Identifier;
         public SerializableBoneEntry[] Associations;
+        public SerializableNodeIndexEntry[] NodeIndices;
         public ValidationReport Report = new ValidationReport();
     }
 
@@ -298,6 +348,7 @@ namespace UnityGLTF.KhrCharacter
                         {
                             Identifier = set.Identifier,
                             Associations = ToEntries(set.Associations),
+                            NodeIndices = ToNodeIndexEntries(set.NodeIndices),
                             Report = set.Report ?? new ValidationReport(),
                         });
             return new SerializableSkeletonMapping
@@ -322,6 +373,7 @@ namespace UnityGLTF.KhrCharacter
                         {
                             Identifier = set.Identifier,
                             Associations = FromEntries(set.Associations),
+                            NodeIndices = FromNodeIndexEntries(set.NodeIndices),
                             Report = set.Report ?? new ValidationReport(),
                         });
             return new SkeletonMappingResult
@@ -353,6 +405,25 @@ namespace UnityGLTF.KhrCharacter
                     if (!string.IsNullOrEmpty(entry.JointName)) associations[entry.JointName] = entry.Bone;
             return associations;
         }
+
+        private static SerializableNodeIndexEntry[] ToNodeIndexEntries(Dictionary<string, int> nodeIndices)
+        {
+            var entries = new List<SerializableNodeIndexEntry>();
+            if (nodeIndices != null)
+                foreach (var kv in nodeIndices)
+                    if (!string.IsNullOrEmpty(kv.Key))
+                        entries.Add(new SerializableNodeIndexEntry { Role = kv.Key, Node = kv.Value });
+            return entries.ToArray();
+        }
+
+        private static Dictionary<string, int> FromNodeIndexEntries(SerializableNodeIndexEntry[] entries)
+        {
+            var nodeIndices = new Dictionary<string, int>();
+            if (entries != null)
+                foreach (var entry in entries)
+                    if (!string.IsNullOrEmpty(entry.Role)) nodeIndices[entry.Role] = entry.Node;
+            return nodeIndices;
+        }
     }
 
     // ── Node-extension metadata ──────────────────────────────────────────────
@@ -362,14 +433,32 @@ namespace UnityGLTF.KhrCharacter
         public string Role;
         public string Label;
         public Transform Node;
+
+        /// <summary>Index of the hint node in the glTF <c>nodes</c> array, or -1 when the hint was not imported.</summary>
+        public int NodeIndex = -1;
+
         public Camera Projection;   // optional host-bound representation of the advisory camera definition
-        public Transform Target;    // optional targetNode
+        public Transform Target;    // optional targetNode; set only when it names a different node that resolves
         [UnityEngine.Serialization.FormerlySerializedAs("NodeUsesUnityCameraOrientation")]
         public bool NodeTransformHasForwardAxisConversion;
         public string ExtensionsJson;
         public string ExtrasJson;
         public string AdditionalPropertiesJson;
         public string[] RequiredCompanionExtensions;
+    }
+
+    /// <summary>
+    /// A glTF node defined by <c>matrix</c> on a camera hint's path, with its authored local matrix in Unity
+    /// coordinates. Animation cannot target a matrix node, so the authored matrix is also its evaluation state.
+    /// </summary>
+    [Serializable]
+    public class AuthoredNodeMatrix
+    {
+        public Transform Node;
+        public Matrix4x4 LocalMatrix;
+
+        /// <summary>The importer turned the node's GameObject 180° about Y for a core camera or punctual light.</summary>
+        public bool ForwardAxisConversion;
     }
 
     [Serializable]

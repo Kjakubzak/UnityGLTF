@@ -44,7 +44,11 @@ namespace GLTF.Schema
     public class KHR_character_reference_pose_Factory : ExtensionFactory
     {
         public const string EXTENSION_NAME = KHR_character_reference_pose.EXTENSION_NAME;
-        public KHR_character_reference_pose_Factory() { ExtensionName = EXTENSION_NAME; }
+        public KHR_character_reference_pose_Factory()
+        {
+            ExtensionName = EXTENSION_NAME;
+            RequiresRuntimeSupportForRequiredUse = true;
+        }
         public override IExtension Deserialize(GLTFRoot root, JProperty token)
         {
             var ext = new KHR_character_reference_pose { RawData = token };

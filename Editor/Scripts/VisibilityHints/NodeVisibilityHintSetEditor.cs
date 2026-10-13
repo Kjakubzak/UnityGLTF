@@ -38,7 +38,7 @@ namespace UnityGLTF.VisibilityHints.Editor
                 {
                     using (new EditorGUILayout.HorizontalScope())
                     {
-                        EditorGUILayout.LabelField($"#{i}", GUILayout.Width(30));
+                        EditorGUILayout.LabelField($"#{i}  {DisplayName(element)}", EditorStyles.miniBoldLabel);
                         GUILayout.FlexibleSpace();
                         if (GUILayout.Button("Remove", GUILayout.Width(70))) removeAt = i;
                     }
@@ -60,10 +60,19 @@ namespace UnityGLTF.VisibilityHints.Editor
             EditorGUILayout.HelpBox(
                 "A node hint applies to the node and its entire subtree (a descendant hint overrides an ancestor " +
                 "for its subtree). It composes as a logical AND with core KHR_node_visibility: an inactive node " +
-                "never renders regardless of the hint. Enable the \"KHR Visibility Hints (View Context)\" export " +
-                "plugin to write these hints to glTF.",
+                "never renders regardless of the hint. Custom roles, including differently cased standard roles " +
+                "such as \"First_Person\", are hidden unless the host supports them through a resolver. Enable the " +
+                "\"KHR Visibility Hints (View Context)\" export plugin to write these hints to glTF.",
                 MessageType.Info);
         }
+
+        private static string DisplayName(SerializedProperty element)
+            => NodeVisibilityHintSet.GetDisplayName(new NodeVisibilityHintSet.NodeVisibilityEntry
+            {
+                Node = element.FindPropertyRelative("Node").objectReferenceValue as Transform,
+                Role = element.FindPropertyRelative("Role").stringValue,
+                Label = element.FindPropertyRelative("Label").stringValue,
+            });
 
         private static void AppendEntry(SerializedProperty entriesProp)
         {

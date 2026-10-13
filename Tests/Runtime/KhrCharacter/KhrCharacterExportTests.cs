@@ -2715,7 +2715,7 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             root.AddComponent<CameraHintSet>().Bind(new List<CameraHint>
             {
-                new CameraHint { Role = "orbit", Label = "Orbit", Node = camNode, Target = faceNode },
+                new CameraHint { Role = "orbit_view", Label = "Orbit", Node = camNode, Target = faceNode },
             });
             root.AddComponent<LookAtTargetSet>().Bind(
                 new List<LookAtTarget> { new LookAtTarget { Node = faceNode, Hint = "gaze" } });
@@ -2732,7 +2732,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             // Round-trip the camera hint through serialize -> factory deserialize.
             var camReparsed = new KHR_node_camera_hint_Factory().Deserialize(gltf, camExt.Serialize()) as KHR_node_camera_hint;
             Assert.IsNotNull(camReparsed);
-            Assert.AreEqual("orbit", camReparsed.Role);
+            Assert.AreEqual("orbit_view", camReparsed.Role);
             Assert.AreEqual("Orbit", camReparsed.Label);
             Assert.IsTrue(camReparsed.TargetNode.HasValue);
             Assert.AreEqual(faceIdx, camReparsed.TargetNode.Value);
@@ -2741,6 +2741,24 @@ namespace UnityGLTF.KhrCharacter.Tests
             var lookReparsed = new KHR_node_lookat_target_Factory().Deserialize(gltf, lookExt.Serialize()) as KHR_node_lookat_target;
             Assert.IsNotNull(lookReparsed);
             Assert.AreEqual("gaze", lookReparsed.Hint);
+        }
+
+        [Test]
+        public void CameraHint_UnrecognizedCustomRole_IsStillExported()
+        {
+            var root = new GameObject("char");
+            _created.Add(root);
+            root.AddComponent<KhrCharacter>();
+            var camNode = new GameObject("camNode").transform; camNode.SetParent(root.transform, false);
+            var set = root.AddComponent<CameraHintSet>();
+            set.Bind(new List<CameraHint> { new CameraHint { Role = "ACME_inspection_view", Node = camNode } });
+            Assert.AreEqual(0, set.GetPresentableHints().Count, "the host does not recognize the custom role");
+
+            var gltf = ExportToGltfRoot(root);
+
+            var ext = NodeExtension<KHR_node_camera_hint>(gltf, FindNodeIndex(gltf, "camNode"), KHR_node_camera_hint.EXTENSION_NAME);
+            Assert.IsNotNull(ext, "presentation filtering does not restrict export");
+            Assert.AreEqual("ACME_inspection_view", ext.Role);
         }
 
         [Test]

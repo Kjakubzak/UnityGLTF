@@ -3,6 +3,7 @@ using GLTF.Schema;
 using GLTF.Schema.KHR_lights_punctual;
 using Newtonsoft.Json;
 using UnityEngine;
+using UnityGLTF.Extensions;
 using UnityGLTF.Plugins;
 
 namespace UnityGLTF.KhrCharacter
@@ -65,12 +66,14 @@ namespace UnityGLTF.KhrCharacter
         private readonly List<LookAtTargetRecord> _lookatTargets = new List<LookAtTargetRecord>();
         private readonly HashSet<Transform> _cameraHintNodes = new HashSet<Transform>();
         private readonly HashSet<Transform> _lookAtTargetNodes = new HashSet<Transform>();
+        private readonly Dictionary<Transform, AuthoredNodeMatrix> _matrixNodes = new Dictionary<Transform, AuthoredNodeMatrix>();
         private HashSet<string> _requiredExtensions = new HashSet<string>();
         private bool _lookAtRequired;
 
         private sealed class CameraHintRecord
         {
             public Transform Node;
+            public int NodeIndex;
             public KHR_node_camera_hint Hint;
             public bool NodeTransformHasForwardAxisConversion;
         }
@@ -98,6 +101,10 @@ namespace UnityGLTF.KhrCharacter
             // The hub exposes the designation to host logic, which is all KHR_character support requires.
             if (extensionName == KhrCharacterExtensionNames.Character) return true;
             if (extensionName == KhrCharacterExtensionNames.NodeLookatTarget) return true;
+            // SkeletonMap exposes every tagged animation with its resolved label and values, and every mapping set
+            // with each role's node index.
+            if (extensionName == KhrCharacterExtensionNames.ReferencePose) return true;
+            if (extensionName == KhrCharacterExtensionNames.SkeletonMapping) return true;
 
             // Parsing or baking a subset of expression data is not the complete behavior promised by required use.
             // Keep these explicit so adding a schema factory cannot silently turn recognition into a capability claim.
@@ -126,6 +133,7 @@ namespace UnityGLTF.KhrCharacter
             _lookatTargets.Clear();
             _cameraHintNodes.Clear();
             _lookAtTargetNodes.Clear();
+            _matrixNodes.Clear();
             _requiredExtensions = gltfRoot?.ExtensionsRequired != null
                 ? new HashSet<string>(gltfRoot.ExtensionsRequired)
                 : new HashSet<string>();
@@ -150,6 +158,15 @@ namespace UnityGLTF.KhrCharacter
                 var projection = nodeObject.GetComponent<Camera>();
                 if (projection != null) _cameraIndexToProjection[node.Camera.Id] = projection;
             }
+            // The importer instantiated this node from its matrix, whose decomposition can lose scale signs and
+            // zero columns; camera hints need the authored columns.
+            if (node != null && nodeObject != null && node.HasMatrix && !node.UseTRS)
+                _matrixNodes[nodeObject.transform] = new AuthoredNodeMatrix
+                {
+                    Node = nodeObject.transform,
+                    LocalMatrix = node.Matrix.ToUnityMatrix4x4Convert(),
+                    ForwardAxisConversion = HasForwardAxisConversion(node, nodeObject),
+                };
             if (node?.Extensions == null) return;
 
             // Node-level extensions (camera hint / look-at target) live on nodes; detect + record them here.
@@ -174,11 +191,9 @@ namespace UnityGLTF.KhrCharacter
                         _cameraHints.Add(new CameraHintRecord
                         {
                             Node = transform,
+                            NodeIndex = nodeIndex,
                             Hint = hint,
-                            NodeTransformHasForwardAxisConversion =
-                                (node.Camera != null && nodeObject.GetComponent<Camera>() != null)
-                                || (node.Extensions.ContainsKey(KHR_lights_punctualExtensionFactory.EXTENSION_NAME)
-                                    && nodeObject.GetComponent<Light>() != null),
+                            NodeTransformHasForwardAxisConversion = HasForwardAxisConversion(node, nodeObject),
                         });
                 }
                 else if (name == KhrCharacterExtensionNames.NodeLookatTarget)
@@ -229,7 +244,8 @@ namespace UnityGLTF.KhrCharacter
                 SuppressNonInteractiveClipAutoPlay(sceneObject, expressionExt);
 
             var capabilities = DeriveCapabilities(_presentExtensions, set);
-            if (hub.Skeleton?.Result?.ReferencePose != null) capabilities.Add(CharacterCapability.ReferencePose);
+            if (hub.Skeleton != null && hub.Skeleton.ReferencePoses.Count > 0)
+                capabilities.Add(CharacterCapability.ReferencePose);
             hub.SetCapabilities(capabilities);
 
             hub.MarkReady();
@@ -445,20 +461,28 @@ namespace UnityGLTF.KhrCharacter
             if (_cameraHints.Count > 0)
             {
                 var hints = new List<CameraHint>();
+                var authoredMatrices = new List<AuthoredNodeMatrix>();
                 foreach (var record in _cameraHints)
                 {
                     var raw = record.Hint;
                     if (record.Node == null || raw == null) continue;
+                    // A target naming the hint's own node is not usable and defines no subject point.
                     Transform target = null;
-                    if (raw.TargetNode.HasValue && _nodeIndexToGo.TryGetValue(raw.TargetNode.Value, out var tgo) && tgo != null)
+                    if (raw.TargetNode.HasValue && raw.TargetNode.Value != record.NodeIndex
+                        && _nodeIndexToGo.TryGetValue(raw.TargetNode.Value, out var tgo) && tgo != null)
                         target = tgo.transform;
+                    // Projection comes only from the hint's own camera reference, never from node.camera.
                     Camera projection = null;
                     if (raw.Camera.HasValue) _cameraIndexToProjection.TryGetValue(raw.Camera.Value, out projection);
+                    for (var pathNode = record.Node; pathNode != null && pathNode != sceneObject.transform; pathNode = pathNode.parent)
+                        if (_matrixNodes.TryGetValue(pathNode, out var matrixNode) && !authoredMatrices.Contains(matrixNode))
+                            authoredMatrices.Add(matrixNode);
                     hints.Add(new CameraHint
                     {
                         Role = raw.Role,
                         Label = raw.Label,
                         Node = record.Node,
+                        NodeIndex = record.NodeIndex,
                         Projection = projection,
                         Target = target,
                         NodeTransformHasForwardAxisConversion = record.NodeTransformHasForwardAxisConversion,
@@ -471,7 +495,7 @@ namespace UnityGLTF.KhrCharacter
                 if (hints.Count > 0)
                 {
                     var component = sceneObject.GetComponent<CameraHintSet>() ?? sceneObject.AddComponent<CameraHintSet>();
-                    component.Bind(hints);
+                    component.Bind(hints, authoredMatrices);
                     if (hub != null) hub.CameraHints = component;
                 }
             }
@@ -533,7 +557,7 @@ namespace UnityGLTF.KhrCharacter
             // are optional selections used only by the Unity humanoid adapter.
             result = result ?? new SkeletonMappingResult { Bones = new Dictionary<string, Transform>() };
             result.ReferencePoses = referencePoses;
-            result.ReferencePose = referencePoses.Length > 0 ? referencePoses[0] : null;
+            result.ReferencePose = System.Array.Find(referencePoses, pose => pose.IsValid);
 
             var skeleton = sceneObject.GetComponent<SkeletonMap>() ?? sceneObject.AddComponent<SkeletonMap>();
             skeleton.Bind(result);
@@ -581,6 +605,16 @@ namespace UnityGLTF.KhrCharacter
             if (ext is DefaultExtension raw && raw.ExtensionData != null)
                 return new KHR_character_expression_Factory().Deserialize(root, raw.ExtensionData) as KHR_character_expression;
             return null;
+        }
+
+        // UnityGLTF turns a node's GameObject 180° about Y when it instantiates a core camera or punctual light on it.
+        internal static bool HasForwardAxisConversion(Node node, GameObject nodeObject)
+        {
+            if (node == null || nodeObject == null) return false;
+            return (node.Camera != null && nodeObject.GetComponent<Camera>() != null)
+                   || (node.Extensions != null
+                       && node.Extensions.ContainsKey(KHR_lights_punctualExtensionFactory.EXTENSION_NAME)
+                       && nodeObject.GetComponent<Light>() != null);
         }
 
         // Decide whether to flag the SkeletonMap to (re)build + assign the humanoid Avatar when the prefab

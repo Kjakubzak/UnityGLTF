@@ -4,15 +4,19 @@ using UnityEngine;
 namespace UnityGLTF.KhrCharacter
 {
     /// <summary>
-    /// Consumes <c>KHR_character_skeleton_mapping</c> + <c>KHR_character_reference_pose</c>. By default it
-    /// exposes a generic rig plus this mapping metadata. A runtime Mecanim humanoid Avatar is opt-in via
-    /// <see cref="BuildHumanoidAvatar"/>; it excludes expression/gaze-driven bones (eyes/jaw), validates the
-    /// required bones and unique bone names, derives muscle config from the reference pose (applied transiently
-    /// then restored), and returns null (caller keeps the generic rig) on failure.
+    /// Consumes <c>KHR_character_skeleton_mapping</c> + <c>KHR_character_reference_pose</c>. It exposes every mapping
+    /// set with each role's node index (and transform, when the node was instantiated) and every tagged animation
+    /// with its resolved <c>poseType</c> and reference-pose values, flagging invalid ones. A runtime Mecanim humanoid
+    /// Avatar is opt-in via <see cref="BuildHumanoidAvatar"/>; it excludes expression/gaze-driven bones (eyes/jaw),
+    /// validates the required bones and unique bone names, derives muscle config from the resolved reference pose
+    /// (applied transiently then restored), and returns null (caller keeps the generic rig) on failure.
     /// </summary>
     [DisallowMultipleComponent]
     public class SkeletonMap : MonoBehaviour
     {
+        // UnityGLTF's camera/light forward-axis turn, 180° about Y (SchemaExtensions.InvertDirection).
+        private static readonly Quaternion ForwardAxisTurn = new Quaternion(0f, -1f, 0f, 0f);
+
         // Bones excluded from the humanoid so the Animator doesn't fight the gaze/expression solvers.
         private static readonly HashSet<string> ExcludedFromHumanoid = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase)
         { "leftEye", "rightEye", "jaw" };
@@ -159,6 +163,7 @@ namespace UnityGLTF.KhrCharacter
             return _result?.Bones != null && vocabularyJoint != null && _result.Bones.TryGetValue(vocabularyJoint, out bone);
         }
 
+        /// <summary>The node associated with <paramref name="role"/> in a mapping set, when it was instantiated.</summary>
         public bool TryGetAssociation(string mappingSetIdentifier, string role, out Transform node)
         {
             node = null;
@@ -169,6 +174,21 @@ namespace UnityGLTF.KhrCharacter
             return false;
         }
 
+        /// <summary>The glTF node index associated with <paramref name="role"/> in a mapping set, instantiated or not.</summary>
+        public bool TryGetAssociationNodeIndex(string mappingSetIdentifier, string role, out int nodeIndex)
+        {
+            nodeIndex = -1;
+            if (_result?.MappingSets == null || mappingSetIdentifier == null || role == null) return false;
+            foreach (var set in _result.MappingSets)
+                if (set?.Identifier == mappingSetIdentifier && set.NodeIndices != null)
+                    return set.NodeIndices.TryGetValue(role, out nodeIndex);
+            return false;
+        }
+
+        /// <summary>
+        /// Every tagged animation in animation order, including invalid ones (<see cref="ReferencePose.IsValid"/>
+        /// false, with errors and no values).
+        /// </summary>
         public IReadOnlyList<ReferencePose> ReferencePoses
         {
             get
@@ -181,29 +201,103 @@ namespace UnityGLTF.KhrCharacter
             }
         }
 
-        /// <summary>Apply the baked reference pose transiently — e.g. before building a humanoid.</summary>
+        /// <summary>
+        /// Applies the selected reference pose (the first valid tagged animation) transiently — e.g. before building a
+        /// humanoid. Every instantiated node, ancestors included, takes its resolved value.
+        /// </summary>
         public void ApplyReferencePose()
         {
-            var pose = _result?.ReferencePose;
-            if (pose == null && _result?.ReferencePoses != null && _result.ReferencePoses.Length > 0)
-                pose = _result.ReferencePoses[0];
-            ApplyReferencePoseValues(pose);
+            ApplyReferencePoseValues(SelectedReferencePose());
         }
 
+        /// <summary>
+        /// Applies the resolved values of the tagged animation <paramref name="animationIndex"/> to every
+        /// instantiated node. Returns false when no valid pose has that index.
+        /// </summary>
         public bool ApplyReferencePose(int animationIndex)
         {
-            foreach (var pose in ReferencePoses)
+            var pose = FindReferencePose(animationIndex);
+            if (pose == null) return false;
+            ApplyReferencePoseValues(pose);
+            return true;
+        }
+
+        /// <summary>
+        /// Composes the resolved local values along the glTF parent chain into a node's global reference-pose
+        /// transform, relative to the imported scene root in Unity coordinates. The matrix excludes UnityGLTF's
+        /// 180° turn on camera and light GameObjects. Returns false when no valid pose has that animation index or
+        /// the node does not exist.
+        /// </summary>
+        public bool TryGetGlobalReferencePose(int animationIndex, int nodeIndex, out Matrix4x4 global)
+        {
+            global = Matrix4x4.identity;
+            var pose = FindReferencePose(animationIndex);
+            if (pose == null || !pose.HasResolvedValues) return false;
+            int entry = IndexOfResolvedNode(pose, nodeIndex);
+            if (entry < 0) return false;
+            for (int steps = 0; entry >= 0 && steps <= pose.ResolvedNodeIndices.Length; steps++)
             {
-                if (pose == null || pose.AnimationIndex != animationIndex) continue;
-                ApplyReferencePoseValues(pose);
-                return true;
+                global = Matrix4x4.TRS(
+                    pose.ResolvedLocalPositions[entry],
+                    pose.ResolvedLocalRotations[entry],
+                    pose.ResolvedLocalScales[entry]) * global;
+                entry = IndexOfResolvedNode(pose, pose.ParentIndices[entry]);
             }
-            return false;
+            return true;
+        }
+
+        private ReferencePose SelectedReferencePose()
+        {
+            var selected = _result?.ReferencePose;
+            if (IsUsable(selected)) return selected;
+            foreach (var pose in ReferencePoses)
+                if (IsUsable(pose)) return pose;
+            return null;
+        }
+
+        private ReferencePose FindReferencePose(int animationIndex)
+        {
+            foreach (var pose in ReferencePoses)
+                if (IsUsable(pose) && pose.AnimationIndex == animationIndex) return pose;
+            return null;
+        }
+
+        // Unity rehydrates an unassigned serialized pose as an empty instance, which must not shadow real poses.
+        internal static bool IsUsable(ReferencePose pose)
+            => pose != null && pose.IsValid
+               && (pose.HasResolvedValues || (pose.Bones != null && pose.Bones.Length > 0));
+
+        private static int IndexOfResolvedNode(ReferencePose pose, int nodeIndex)
+        {
+            var indices = pose.ResolvedNodeIndices;
+            if (nodeIndex < 0) return -1;
+            if (nodeIndex < indices.Length && indices[nodeIndex] == nodeIndex) return nodeIndex;
+            return System.Array.IndexOf(indices, nodeIndex);
         }
 
         private static void ApplyReferencePoseValues(ReferencePose pose)
         {
-            if (pose?.Bones == null) return;
+            if (pose == null) return;
+            if (pose.HasResolvedValues)
+            {
+                for (int i = 0; i < pose.ResolvedNodeIndices.Length; i++)
+                {
+                    var node = pose.ResolvedNodes != null && i < pose.ResolvedNodes.Length ? pose.ResolvedNodes[i] : null;
+                    if (node == null) continue;
+                    var rotation = pose.ResolvedLocalRotations[i];
+                    if (pose.ResolvedNodeHasForwardAxisConversion != null
+                        && i < pose.ResolvedNodeHasForwardAxisConversion.Length
+                        && pose.ResolvedNodeHasForwardAxisConversion[i])
+                        rotation *= ForwardAxisTurn;
+                    node.localPosition = pose.ResolvedLocalPositions[i];
+                    node.localRotation = rotation;
+                    node.localScale = pose.ResolvedLocalScales[i];
+                }
+                return;
+            }
+
+            // Authored poses carry only the targeted bones.
+            if (pose.Bones == null) return;
             for (int i = 0; i < pose.Bones.Length; i++)
             {
                 var bone = pose.Bones[i];
@@ -217,8 +311,8 @@ namespace UnityGLTF.KhrCharacter
         /// <summary>
         /// Opt-in: build a runtime Mecanim humanoid Avatar via <see cref="AvatarBuilder.BuildHumanAvatar"/>.
         /// Returns null (generic fallback) when required bones are missing, a bound bone name is not unique, or
-        /// Unity rejects the description. When a reference pose was baked it is applied transiently for the
-        /// build and restored afterwards.
+        /// Unity rejects the description. When a valid reference pose exists, its resolved values are applied
+        /// transiently for the build and restored afterwards.
         /// </summary>
         public Avatar BuildHumanoidAvatar()
         {
@@ -250,12 +344,13 @@ namespace UnityGLTF.KhrCharacter
                 return null;
             }
 
-            bool applyReference = _result.ReferencePose?.Bones != null && _result.ReferencePose.Bones.Length > 0;
+            var referencePose = SelectedReferencePose();
+            bool applyReference = referencePose != null;
             var snapshot = applyReference ? CapturePose(transforms) : null;
 
             try
             {
-                if (applyReference) ApplyReferencePose();
+                if (applyReference) ApplyReferencePoseValues(referencePose);
 
                 // SkeletonBone[] (local TRS) is captured AFTER the reference pose is applied.
                 var skeleton = new SkeletonBone[transforms.Length];

@@ -6,6 +6,8 @@ namespace UnityGLTF.KhrCharacter
     /// <summary>
     /// Passive <c>KHR_node_lookat_target</c> metadata. Each entry exposes the evaluated node instance and its
     /// current global-space point without selecting a consumer or causing gaze, camera, IK, or animation behavior.
+    /// A marker node that was not instantiated has no entry. Neither list order nor node order implies priority
+    /// among markers; hints are exact, case-sensitive labels.
     /// </summary>
     [DisallowMultipleComponent]
     public class LookAtTargetSet : MonoBehaviour
@@ -34,6 +36,19 @@ namespace UnityGLTF.KhrCharacter
                 Bind(_serializedTargets, _requiredOnImport);
         }
 
+        /// <summary>Every marker whose hint is exactly <paramref name="hint"/>, in list order, which implies no priority.</summary>
+        public IReadOnlyList<LookAtTarget> GetByHint(string hint)
+        {
+            var matches = new List<LookAtTarget>();
+            foreach (var candidate in Targets)
+                if (candidate != null && candidate.Hint == hint) matches.Add(candidate);
+            return matches;
+        }
+
+        /// <summary>
+        /// Returns the first marker whose hint is exactly <paramref name="hint"/> in list order. Other markers may share
+        /// the hint, and list order implies no priority; use <see cref="GetByHint"/> to see all of them.
+        /// </summary>
         public bool TryGetByHint(string hint, out LookAtTarget target)
         {
             foreach (var candidate in Targets)

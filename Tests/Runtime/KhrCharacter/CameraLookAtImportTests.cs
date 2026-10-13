@@ -64,7 +64,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             targetNode.AddExtension(KHR_node_lookat_target.EXTENSION_NAME,
                 new KHR_node_lookat_target
                 {
-                    Hint = "eye_target",
+                    Hint = "ACME_eye_target",
                     Extensions = JObject.Parse("{\"ACME_marker_payload\":{\"version\":1}}"),
                     Extras = JObject.Parse("{\"tag\":\"hero\"}"),
                     AdditionalProperties = JObject.Parse("{\"futureMarkerField\":true}"),
@@ -93,10 +93,146 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsTrue(targets.RequiredOnImport);
             Assert.AreEqual(1, targets.Targets.Count);
             Assert.AreSame(targetNodeObject.transform, targets.Targets[0].Node);
-            Assert.AreEqual("eye_target", targets.Targets[0].Hint);
+            Assert.AreEqual("ACME_eye_target", targets.Targets[0].Hint);
             CollectionAssert.AreEqual(
                 new[] { "ACME_marker_payload" }, targets.Targets[0].RequiredCompanionExtensions);
             StringAssert.Contains("futureMarkerField", targets.Targets[0].AdditionalPropertiesJson);
+        }
+
+        private static Node CameraHintNode(string role, int? targetNode = null, int? camera = null)
+        {
+            var node = new Node();
+            node.AddExtension(KHR_node_camera_hint.EXTENSION_NAME,
+                new KHR_node_camera_hint { Role = role, TargetNode = targetNode, Camera = camera });
+            return node;
+        }
+
+        [Test]
+        public void DefaultView_LowestNodeIndexWinsRegardlessOfTraversalOrder()
+        {
+            var scene = NewGo("scene");
+            var late = NewChild(scene, "late");
+            var early = NewChild(scene, "early");
+            var cased = NewChild(scene, "cased");
+            var context = new KhrCharacterImportContext(null);
+            context.OnAfterImportRoot(new GLTFRoot());
+            context.OnAfterImportNode(CameraHintNode("default_view"), 5, late);
+            context.OnAfterImportNode(CameraHintNode("default_view"), 2, early);
+            context.OnAfterImportNode(CameraHintNode("Default_View"), 1, cased);
+            context.OnAfterImportScene(null, 0, scene);
+
+            var set = scene.GetComponent<CameraHintSet>();
+            Assert.AreEqual(5, set.Hints[0].NodeIndex, "hints keep import traversal order");
+            Assert.IsTrue(set.TrySelectDefaultView(out var selected));
+            Assert.AreSame(early.transform, selected.Node);
+            Assert.AreEqual(2, selected.NodeIndex);
+        }
+
+        [Test]
+        public void UnrecognizedCustomRoles_AreImportedButNotPresented()
+        {
+            var scene = NewGo("scene");
+            var portrait = NewChild(scene, "portrait");
+            var inspection = NewChild(scene, "inspection");
+            var legacy = NewChild(scene, "legacy");
+            var context = new KhrCharacterImportContext(null);
+            context.OnAfterImportRoot(new GLTFRoot());
+            context.OnAfterImportNode(CameraHintNode("portrait"), 0, portrait);
+            context.OnAfterImportNode(CameraHintNode("ACME_inspection_view"), 1, inspection);
+            context.OnAfterImportNode(CameraHintNode("framing_target"), 2, legacy);
+            context.OnAfterImportScene(null, 0, scene);
+
+            var set = scene.GetComponent<CameraHintSet>();
+            Assert.AreEqual(3, set.Hints.Count, "every hint is imported");
+            CollectionAssert.AreEqual(new[] { "portrait" }, RolesOf(set.GetPresentableHints()));
+            Assert.IsFalse(set.IsRecognizedRole("framing_target"), "a former draft role is a custom role");
+
+            set.RegisteredCustomRoles.Add("ACME_inspection_view");
+            CollectionAssert.AreEqual(
+                new[] { "portrait", "ACME_inspection_view" }, RolesOf(set.GetPresentableHints()));
+        }
+
+        [Test]
+        public void ProjectionComesOnlyFromTheHintCamera()
+        {
+            var scene = NewGo("scene");
+            var cameraNodeObject = NewChild(scene, "coreCamera");
+            var coreCamera = cameraNodeObject.AddComponent<Camera>();
+            var referencing = NewChild(scene, "referencing");
+            var root = new GLTFRoot();
+            var cameraNode = CameraHintNode("detail");
+            cameraNode.Camera = new CameraId { Id = 0, Root = root };
+
+            var context = new KhrCharacterImportContext(null);
+            context.OnAfterImportRoot(root);
+            context.OnAfterImportNode(cameraNode, 0, cameraNodeObject);
+            context.OnAfterImportNode(CameraHintNode("portrait", camera: 0), 1, referencing);
+            context.OnAfterImportScene(null, 0, scene);
+
+            var set = scene.GetComponent<CameraHintSet>();
+            Assert.IsTrue(set.TryGetByRole("detail", out var withoutCamera));
+            Assert.IsNull(withoutCamera.Projection, "node.camera on the hint node does not supply projection data");
+            Assert.IsTrue(set.TryGetByRole("portrait", out var withCamera));
+            Assert.AreSame(coreCamera, withCamera.Projection);
+        }
+
+        [Test]
+        public void TargetNode_IsKeptOnlyWhenItNamesAnotherResolvedNode()
+        {
+            var scene = NewGo("scene");
+            var self = NewChild(scene, "self");
+            var dangling = NewChild(scene, "dangling");
+            var context = new KhrCharacterImportContext(null);
+            context.OnAfterImportRoot(new GLTFRoot());
+            context.OnAfterImportNode(CameraHintNode("orbit_view", targetNode: 3), 3, self);
+            context.OnAfterImportNode(CameraHintNode("framing_view", targetNode: 40), 4, dangling);
+            context.OnAfterImportScene(null, 0, scene);
+
+            var set = scene.GetComponent<CameraHintSet>();
+            Assert.IsTrue(set.TryGetByRole("orbit_view", out var selfTargeted));
+            Assert.AreEqual(3, selfTargeted.NodeIndex);
+            Assert.IsNull(selfTargeted.Target, "a hint's own node is not a usable target");
+            Assert.IsFalse(CameraHintSet.TryGetSubjectPoint(selfTargeted, out _));
+            Assert.IsTrue(set.TryGetByRole("framing_view", out var unresolved));
+            Assert.IsNull(unresolved.Target);
+        }
+
+        [Test]
+        public void LookAtHints_AreExactAndSharedHintsAreAllReturned()
+        {
+            var scene = NewGo("scene");
+            var left = NewChild(scene, "left");
+            var right = NewChild(scene, "right");
+            var lower = NewChild(scene, "lower");
+            Node Marker(string hint)
+            {
+                var node = new Node();
+                node.AddExtension(KHR_node_lookat_target.EXTENSION_NAME, new KHR_node_lookat_target { Hint = hint });
+                return node;
+            }
+
+            var context = new KhrCharacterImportContext(null);
+            context.OnAfterImportRoot(new GLTFRoot());
+            context.OnAfterImportNode(Marker("ACME_eye_target"), 0, left);
+            context.OnAfterImportNode(Marker("ACME_eye_target"), 1, right);
+            context.OnAfterImportNode(Marker("acme_eye_target"), 2, lower);
+            context.OnAfterImportScene(null, 0, scene);
+
+            var set = scene.GetComponent<LookAtTargetSet>();
+            var shared = set.GetByHint("ACME_eye_target");
+            Assert.AreEqual(2, shared.Count);
+            Assert.AreSame(left.transform, shared[0].Node);
+            Assert.AreSame(right.transform, shared[1].Node);
+            Assert.IsTrue(set.TryGetByHint("acme_eye_target", out var other));
+            Assert.AreSame(lower.transform, other.Node, "hints are compared exactly");
+            Assert.AreEqual(0, set.GetByHint("Acme_Eye_Target").Count);
+        }
+
+        private static string[] RolesOf(IReadOnlyList<CameraHint> hints)
+        {
+            var roles = new string[hints.Count];
+            for (int i = 0; i < roles.Length; i++) roles[i] = hints[i].Role;
+            return roles;
         }
 
         [Test]

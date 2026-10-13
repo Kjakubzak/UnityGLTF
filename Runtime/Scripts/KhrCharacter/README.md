@@ -19,9 +19,9 @@ look-at-target node extensions also import on ordinary glTF assets without the m
 | `KhrCharacter` | Hub: its presence means "this asset contains a character". Capability list, readiness, references to the components below. |
 | `ExpressionResponseSet` | Passive, stateless wire evaluator returning absolute response records by authoritative expression index. It never writes scene targets. |
 | `ExpressionController` | Optional Unity host adapter for the legacy additive/override morph, joint, and material application policy. |
-| `SkeletonMap` | Holds the resolved vocabulary→bone mapping + reference pose; can (re)build a Unity humanoid Avatar. |
-| `LookAtTargetSet` | Passive live `Transform` markers for `KHR_node_lookat_target`; never selects or drives a consumer. |
-| `CameraHintSet` | Passive advisory camera descriptors (never creates, owns, selects, or activates a camera). |
+| `SkeletonMap` | Every skeleton mapping set (role → node index and transform) and every tagged reference pose with its resolved values; can (re)build a Unity humanoid Avatar. |
+| `LookAtTargetSet` | Passive live `Transform` markers for `KHR_node_lookat_target`; never selects, ranks, or drives a consumer. |
+| `CameraHintSet` | Passive advisory camera descriptors: initial camera pose, subject point, projection, default-view and presentation helpers (never creates, owns, or activates a camera). |
 | `GazeSolver` | Optional Unity host adapter with an application-configured target, expression vocabulary, and response curve. It is never auto-created by import. |
 | `ViewModeController` | First/third-person view utility (no extension required). |
 
@@ -237,8 +237,15 @@ not the skin bind pose.
 mapping-set key, the role is a vocabulary role (`hips`, `head`, …), and `node` is a glTF node index (a `glTFid` into
 the document's global `nodes[]`). The optional `name` is a diagnostic copy of the referenced node name. The baker
 (`KhrCharacterSkeletonBaker`) resolves each role via the node index and reports mismatched names without changing
-resolution. When more than one mapping set is present, the Unity humanoid adapter selects the one that resolves the
-most bones.
+resolution.
+
+Every mapping set is exposed on `SkeletonMap.Result.MappingSets`. Each set's `NodeIndices` maps every role to its node
+index; `Associations` maps the roles whose node was instantiated to its `Transform` (`TryGetAssociation`,
+`TryGetAssociationNodeIndex`). An association to a node outside the imported scene keeps its index and only warns; an
+index outside the `nodes` array makes the set's report invalid. Choosing a set and applying it to a skin is host
+logic: when more than one mapping set is present, the Unity humanoid adapter selects the one that resolves the most
+bones. With the plugin enabled, `KHR_character_skeleton_mapping` in `extensionsRequired` is supported; without it the
+asset is rejected.
 
 Building a Unity **humanoid Avatar** is opt-in (`SkeletonMap.BuildHumanoidOnAwake`); it self-validates
 required bones and falls back to the generic rig.
@@ -260,6 +267,60 @@ at pure edit time (no need to enter Play). At runtime, `SkeletonMap` treats an a
 `Animator.avatar` as authoritative: the runtime build path only runs when the slot is empty, so a manually-
 or importer-assigned Avatar wins. Runtime `GLTFSceneImporter` loads (no editor import context) fall through
 to the existing runtime build path unchanged.
+
+## Reference poses
+
+`SkeletonMap.ReferencePoses` lists every animation tagged with `KHR_character_reference_pose`, in animation order,
+with its exact `poseType` (`t_pose` when omitted). Each node of the asset has a resolved value per tagged animation:
+the properties the animation targets come from its single key, and every other node and property comes from the
+node's authored `matrix` (decomposed as the importer does) or its TRS with the core defaults. Live transforms are
+never read, so a node moved at runtime still resolves to its authored value. The values are on `ReferencePose`
+(`ResolvedNodeIndices`, `ResolvedNodes` (null for a node outside the imported scene), `ResolvedLocalPositions`,
+`ResolvedLocalRotations`, `ResolvedLocalScales`, `ParentIndices`). `Bones` and the `Local*` arrays keep the
+instantiated targeted nodes, which is what export writes.
+
+Import checks each tagged animation: at least one channel, ordinary node TRS targets only (no matrix nodes), one
+key per input, `LINEAR` or `STEP`, the core output type, count, and component type, decoded outputs (sparse
+included) that are finite with unit rotations, and `extensionsUsed` listing both `KHR_character_reference_pose`
+and `KHR_character`. An invalid animation stays in the list with `IsValid == false` and its `Errors`, and carries no
+values.
+
+`ApplyReferencePose(animationIndex)` writes the resolved values to every instantiated node, ancestors included;
+the parameterless overload applies the first valid pose, which `BuildHumanoidAvatar` also uses.
+`TryGetGlobalReferencePose(animationIndex, nodeIndex, out Matrix4x4)` composes the resolved locals along the glTF
+parent chain, relative to the imported scene root in Unity coordinates. UnityGLTF turns camera and light GameObjects
+180° about Y; resolved rotations exclude that turn and `ApplyReferencePose` adds it back. Playing the
+`ReferencePose_<label>` clip through core animation is only a preview: it leaves untargeted properties at their live
+values. With the plugin enabled, `KHR_character_reference_pose` in `extensionsRequired` is supported; without it the
+asset is rejected.
+
+## Camera hints
+
+`CameraHintSet` exposes every imported `KHR_node_camera_hint` with its glTF node index (`CameraHint.NodeIndex`),
+role, label, projection, and target.
+
+- **Initial camera pose.** For every role, the pose is the hint node's position and the rotation `R` that
+  `ComputeAuthoredRotation(hint, hierarchyRoot)` builds along the node path: each TRS node contributes its rotation
+  times the signs of its scale (with the zero-scale rules), each matrix node its normalized authored columns (with
+  the zero-column rules), and a reflection in the product is removed by negating its first column. Matrix nodes are
+  recorded at import, because Unity's decomposition can lose their signs and zero columns. `Apply` composes `R` with
+  the imported scene root's rotation (host placement) and uses this host's camera axes: the camera looks along the
+  hint's -Z with +Y up, and the forward-axis turn UnityGLTF gives a node with a core camera or light is removed first.
+- **Subject point.** `targetNode` never aims the camera. Import keeps it only when it names a different node that
+  resolves, and `TryGetSubjectPoint` returns its position for framing, orbit, or look-at logic.
+- **Projection.** It comes only from the hint's `camera`; a `node.camera` on the hint node never supplies it.
+- **Roles.** `CameraHintRoles` lists the eight standard roles (`default_view`, `detail`, `first_person`,
+  `framing_view`, `full_body`, `orbit_view`, `portrait`, `third_person`), compared exactly. Any other string,
+  including `Default_View` or the former `framing_target` and `orbit_center`, is custom. A host recognizes a custom
+  role by adding it to `RegisteredCustomRoles`. `GetPresentableHints()` returns only hints with recognized roles,
+  for menus and other default affordances; every hint is still imported, exported, and shown in the inspector.
+- **Default view.** `TrySelectDefaultView` picks, among hints whose role is exactly `default_view`, the one on the node
+  with the lowest index. Otherwise list order, node order, and role imply no priority; `TryGetByRole` returns the
+  first match without ranking.
+- **Names.** `GetDisplayName(hint)` uses the label, else a nonempty node name, else the role, and accepts an optional
+  provider of display names (for example localized ones) for recognized roles.
+
+Assets must not require `KHR_node_camera_hint`, so the plugin never claims it for required use.
 
 ## Runtime rig switching
 
@@ -291,7 +352,9 @@ the character stays in Generic mode and `HumanoidAvailable` remains false.
 `KHR_node_lookat_target` is implemented by `LookAtTargetSet`, a passive collection that exposes each evaluated
 marker instance and reads its current global position. Importing a marker never creates `GazeSolver`, assigns a
 consumer, or writes expression weights. Parent transforms and host-selected animation state naturally affect the
-reported point through the live Unity `Transform`.
+reported point through the live Unity `Transform`. A marker node that was not instantiated has no entry. Hints are
+exact, case-sensitive labels (`ACME_eye_target` and `acme_eye_target` differ); `GetByHint` returns every marker
+with a hint, and list or node order implies no priority among them.
 
 `GazeSolver` is a separate, explicitly configured Unity host adapter. It maps the angle between a host-selected
 origin and target onto four configured expression names, using this adapter's 90° saturation response. The marker
@@ -347,7 +410,8 @@ The baked data is import-time only, but the components survive being saved as a 
 - `SkeletonMap` persists a `SerializableSkeletonMapping` (Unity cannot serialize the
   `Dictionary<string,Transform>`) and converts back to the runtime `SkeletonMappingResult` on load.
 - `CameraHintSet` and `LookAtTargetSet` persist passive descriptors and intra-hierarchy `Transform` references;
-  `KhrCharacter` rehydrates both hub links without creating a gaze consumer.
+  `CameraHintSet` also persists the authored matrices on its hints' paths. `KhrCharacter` rehydrates both hub links
+  without creating a gaze consumer.
 
 ## Key files
 
