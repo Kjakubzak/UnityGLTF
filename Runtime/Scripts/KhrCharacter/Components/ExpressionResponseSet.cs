@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace UnityGLTF.KhrCharacter
 {
@@ -8,20 +9,21 @@ namespace UnityGLTF.KhrCharacter
     public sealed class ExpressionResponseSetEntry
     {
         internal ExpressionResponseSetEntry(
-            string label,
+            string name,
             int animationIndex,
             ExpressionResponseAnimation animation,
             string extensionsJson,
             string extrasJson)
         {
-            Label = label;
+            Name = name;
             AnimationIndex = animationIndex;
             Animation = animation ?? throw new ArgumentNullException(nameof(animation));
             ExtensionsJson = extensionsJson;
             ExtrasJson = extrasJson;
         }
 
-        public string Label { get; }
+        /// <summary>The entry's descriptive <c>name</c>. Names are not unique; the array index identifies the entry.</summary>
+        public string Name { get; }
         public int AnimationIndex { get; }
         public ExpressionResponseAnimation Animation { get; }
         public string ExtensionsJson { get; }
@@ -71,7 +73,7 @@ namespace UnityGLTF.KhrCharacter
         [Serializable]
         private sealed class SerializedEntry
         {
-            public string Label;
+            [FormerlySerializedAs("Label")] public string Name;
             public int AnimationIndex;
             public string ExtensionsJson;
             public string ExtrasJson;
@@ -162,7 +164,7 @@ namespace UnityGLTF.KhrCharacter
                     serializedChannels[channelIndex] = SerializeChannel(channels[channelIndex]);
                 serialized[entryIndex] = new SerializedEntry
                 {
-                    Label = entry.Label,
+                    Name = entry.Name,
                     AnimationIndex = entry.AnimationIndex,
                     ExtensionsJson = entry.ExtensionsJson,
                     ExtrasJson = entry.ExtrasJson,
@@ -246,7 +248,7 @@ namespace UnityGLTF.KhrCharacter
                 for (int channelIndex = 0; channelIndex < channels.Length; channelIndex++)
                     channels[channelIndex] = DeserializeChannel(serializedChannels[channelIndex]);
                 entries[entryIndex] = new ExpressionResponseSetEntry(
-                    entry.Label,
+                    entry.Name,
                     entry.AnimationIndex,
                     new ExpressionResponseAnimation { Samplers = samplers, Channels = channels },
                     entry.ExtensionsJson,

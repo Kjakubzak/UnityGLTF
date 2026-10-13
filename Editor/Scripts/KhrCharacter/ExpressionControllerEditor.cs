@@ -6,8 +6,9 @@ namespace UnityGLTF.KhrCharacter.Editor
 {
     /// <summary>
     /// Inspector for <see cref="ExpressionController"/>. At edit time it lists the baked expressions and
-    /// vocabulary sets (read from the serialized set). In Play mode it shows a live control per expression —
-    /// a slider, or a toggle for binary expressions — wired to GetWeight/SetWeight, plus a Reset All button.
+    /// vocabulary sets (read from the serialized set). In Play mode it shows a live control per expression entry —
+    /// a slider, or a toggle for binary expressions — wired to GetWeight/SetWeight by entry index (expression
+    /// names are not unique), plus a Reset All button.
     /// </summary>
     [CustomEditor(typeof(ExpressionController))]
     public class ExpressionControllerEditor : UnityEditor.Editor
@@ -47,13 +48,13 @@ namespace UnityGLTF.KhrCharacter.Editor
             for (int i = 0; i < handles.Count; i++)
             {
                 var handle = handles[i];
-                if (string.IsNullOrEmpty(handle.Name)) continue;
-                float current = controller.GetWeight(handle.Name);
-                float raw = EditorGUILayout.Slider(handle.Name, current, 0f, 1f);
+                string label = string.IsNullOrEmpty(handle.Name) ? $"(expression {i})" : $"{i}: {handle.Name}";
+                float current = controller.GetWeight(i);
+                float raw = EditorGUILayout.Slider(label, current, 0f, 1f);
                 // Explicit host-authored binary metadata opts this control into 0/1 snapping.
                 float next = handle.IsBinary ? Mathf.Round(raw) : raw;
                 if (!Mathf.Approximately(next, current))
-                    controller.SetWeight(handle.Name, next);
+                    controller.SetWeight(i, next);
             }
 
             Repaint();

@@ -1,8 +1,8 @@
 # KHR Character / Avatar Extensions (UnityGLTF)
 
 Runtime, import, and export support for the Khronos Character/Avatar extension set (glTF **PR #2512**):
-`KHR_character`, `KHR_character_expression` (+ `_morphtarget` / `_joint` / `_texture` / `_mapping` /
-`_mask`), `KHR_character_reference_pose`, `KHR_character_skeleton_mapping`, `KHR_node_camera_hint`, and
+`KHR_character`, `KHR_character_expression` (+ `_morphtarget` / `_joint` / `_texture_transform` / `_mapping` /
+`_suppression`), `KHR_character_reference_pose`, `KHR_character_skeleton_mapping`, `KHR_node_camera_hint`, and
 `KHR_node_lookat_target`.
 
 > **Status: non-ratified.** The extension set is still a PR, so this layer is **disabled by default** and
@@ -10,13 +10,13 @@ Runtime, import, and export support for the Khronos Character/Avatar extension s
 
 ## What it does
 
-On import of a glTF whose root carries `KHR_character`, the plugin attaches a small set of components under
-a single `KhrCharacter` hub component. The independent camera-hint and look-at-target node extensions also
-import on ordinary glTF assets without a character root.
+On import of a glTF whose top-level object carries the `KHR_character` marker, the plugin attaches a small set of
+components under a single `KhrCharacter` hub component on the imported scene root. The independent camera-hint and
+look-at-target node extensions also import on ordinary glTF assets without the marker.
 
 | Component | Responsibility |
 |---|---|
-| `KhrCharacter` | Hub: capability list, readiness, references to the components below. |
+| `KhrCharacter` | Hub: its presence means "this asset contains a character". Capability list, readiness, references to the components below. |
 | `ExpressionResponseSet` | Passive, stateless wire evaluator returning absolute response records by authoritative expression index. It never writes scene targets. |
 | `ExpressionController` | Optional Unity host adapter for the legacy additive/override morph, joint, and material application policy. |
 | `SkeletonMap` | Holds the resolved vocabulary→bone mapping + reference pose; can (re)build a Unity humanoid Avatar. |
@@ -27,6 +27,45 @@ import on ordinary glTF assets without a character root.
 
 Capabilities distinguish passive response data from optional scene-writing adapters. Schema recognition alone does
 not satisfy an extension's required-use support contract.
+
+## Character designation
+
+`KHR_character` is a marker: `{}`. It designates the asset as containing at most one character and names no root,
+member, or owned nodes, so the hub never resolves or stores a node for it. Unknown members, including a legacy
+`rootNode`, are kept verbatim and carry no meaning; any such asset still opens the character gate. The marker is
+valid only on the top-level glTF object: a node-level `KHR_character` logs a placement warning and adds no
+capability. With the import plugin enabled, `KHR_character` in `extensionsRequired` is supported, because the hub
+exposes the designation to host logic; without the plugin it is rejected.
+
+The exporter always writes `"KHR_character": {}` and lists it in `extensionsUsed`. When an export set contains
+several character roots, the first one supplies the exported character components; the others are exported as
+ordinary content, because additional characters are out of scope for one asset.
+
+## Names and identifiers
+
+- **Extension names are exact.** Only the current names are recognized. Former or alternate spellings
+  (`KHR_character_expression_mask`, `KHR_character_expression_texture`, the plural `_masks` / `_morphtargets` /
+  `_joints`, `KHR_avatar_expression_*`, `KHR_character_bindpose`, `KHR_character_skeleton_bindpose`) import as
+  unknown extensions: they are preserved where the containing object round-trips, and their channels are not animated.
+- **Expression entries use `name`.** The label is required and nonempty, but not unique; the array index identifies
+  an entry. An entry is a glTF property, so unknown members (including a legacy `expression` label) are preserved
+  verbatim and never populate `name`. An entry without `name` is invalid expression data.
+- **Mapping-set identifiers are opaque.** `KHR_character_expression_mapping` and `KHR_character_skeleton_mapping`
+  accept any nonempty identifier and compare it by code point; nothing parses or dereferences it. Exporters should
+  still prefer a version-pinned identifier, such as the commit-pinned VRM 1.0 URLs. Only an empty identifier is
+  rejected.
+- **Diagnostic names** on mapping contributions are compared with the referenced entry's `name` by code point
+  (`Smile` and `smile` differ). On import a mismatch only warns, because the index stays authoritative; export
+  rejects a mismatch.
+
+## Suppressions
+
+`KHR_character_expression_suppression` objects carry `target`, `type`, `amount` and `threshold`. Import keeps the
+authored `amount` and `threshold` as JSON doubles together with whether each was present
+(`SuppressionEntry.HasAmount` / `HasThreshold`); an omitted value reads as `1` or `0`. Export writes back exactly what
+was authored: `amount` only when present, and `threshold` only when present on a `block` or custom type. A threshold is
+never written on a `blend` or omitted type. A custom type keeps its token and its uninterpreted `amount` and
+`threshold`. A legacy suppression `name` is an unknown member: preserved, never compared with the target.
 
 ## Enabling the import plugin
 
@@ -59,14 +98,19 @@ exporting character assets:
 
 When enabled, the plugin writes the following extensions from a Unity character with a `KhrCharacter` hub:
 
-- **`KHR_character_expression`** (+ sub-extensions): Expression metadata (names, drivers, masks, mappings).
-  - `KHR_character_expression_morphtarget`: Morph target (blendshape) drivers.
-  - `KHR_character_expression_joint`: Joint (TRS) animation drivers.
-  - `KHR_character_expression_texture`: Texture UV-transform drivers.
-  - `KHR_character_expression_mask`: Mask entries for attenuating other expressions.
+- **`KHR_character`**: Always the empty marker `{}`.
+- **`KHR_character_expression`** (+ entry extensions): Expression entries (`name`, `animation`) and their listings.
+  - `KHR_character_expression_morphtarget`: Morph target (blendshape) channels.
+  - `KHR_character_expression_joint`: Joint (TRS) channels.
+  - `KHR_character_expression_texture_transform`: `KHR_texture_transform` channels.
+  - `KHR_character_expression_suppression`: Suppressions that attenuate other expressions' drivers.
   - `KHR_character_expression_mapping`: Vocabulary mapping sets.
-- **`KHR_character_skeleton_mapping`**: Rig vocabulary → glTF node association dictionary (`{ vocabularyJoint: { node, name? } }`).
-- **`KHR_character_reference_pose`**: Reference pose animation (e.g., T-Pose) with bone TRS channels.
+- **`KHR_character_skeleton_mapping`**: Mapping-set identifier → role → glTF node association dictionary
+  (`{ role: { node, name? } }`).
+- **`KHR_character_reference_pose`**: Reference pose animation with bone TRS channels. `poseType` is always written
+  explicitly; an unset label resolves to `t_pose`. The standard labels are `t_pose`, `a_pose` and `i_pose`; any other
+  label, including a legacy `TPose`, is a custom label written verbatim. The animation is named
+  `ReferencePose_<label>`.
 - **`KHR_node_camera_hint` / `KHR_node_lookat_target`**: Independent passive node annotations. They export
   from all matching sets under the selected export roots and do not synthesize `KHR_character`.
 
@@ -114,7 +158,7 @@ loading in a third-party viewer; they are documented so consumers know what is a
 - **`blendMode` / per-driver `priority` are not exported.**
   import baker reconstructs `Additive` + priority `0` regardless, so the exporter writes **no** vendor `extras`
   at all — the expression wire is fully Khronos-neutral. They may return later via a ratified representation. Each
-  sub-extension lists its animation channels under the `channels` (plural) key.
+  derived expression extension lists its animation channels under the `channels` key.
 - **Camera hints / look-at targets preserve passive descriptor payloads.** `CameraHintSet` and
   `LookAtTargetSet` preserve their known fields, `extensions`, `extras`, unknown same-object properties, and
   required companion-extension provenance. Imported required look-at use is preserved; newly authored markers
@@ -122,10 +166,11 @@ loading in a third-party viewer; they are documented so consumers know what is a
   the referenced camera definition is also instantiated by an ordinary exported core-camera node. A projection
   definition with no instantiated Unity `Camera` cannot currently be force-exported because
   `GLTFSceneExporter.ExportCamera` is private, so that optional reference is omitted.
-- **One `KHR_character` root designation per glTF asset.** `rootNode` identifies the author-selected character
-  root; it does not assert scene membership, skin ownership, skeleton membership, descendant coverage, or that
-  the asset contains only one character-like object. If an export set contains multiple character components,
-  the exporter deterministically designates the first and leaves the others as ordinary glTF content.
+- **One character per asset.** `KHR_character` is an asset-level marker; it does not assert scene membership, skin
+  ownership, skeleton membership, or descendant coverage. If an export set contains multiple character components,
+  the exporter deterministically exports the first one's character data and the others as ordinary glTF content.
+- **Reference-pose labels are exact.** Import keeps every `poseType` verbatim, so a legacy `TPose` stays a custom
+  label rather than being mapped to `t_pose`.
 
 ## Optional Unity compositing policy (additive vs. override)
 
@@ -169,7 +214,8 @@ These are honest, documented gaps (raised in the glTF PR #2512 discussion):
 
 1. **The optional controller is not the passive wire evaluator.** Its baked tracks are an older delta-oriented
    Unity representation and typed classifiers select the subset it can apply. Required expression-family use is
-   conservatively rejected until every required target, classifier, mapping, mask, and provenance rule is supported.
+   conservatively rejected until every required target, classifier, mapping, suppression, and provenance rule is
+   supported.
 2. **Joint / texture absolute-pose expressions assume additive-authored deltas.** Two *absolute-pose*
    expressions on one bone composed additively will **over-rotate**. Author conflicting absolute poses as
    `Override` (with priorities), or keep deltas additive. The spec carries no `blendMode` yet, so the baker
@@ -185,11 +231,12 @@ not the skin bind pose.
 
 ## Skeleton mapping
 
-`KHR_character_skeleton_mapping` is `rigName -> { vocabularyJoint -> { node, name? } }`: the key is a known
-vocabulary joint (`hips`, `head`, …), and `node` is a glTF node index (a `glTFid` into the document's global
-`nodes[]`), exactly like `KHR_character.rootNode`. The optional `name` must exactly match the referenced node
-name. The baker (`KhrCharacterSkeletonBaker`) resolves each joint via the node index and reports mismatched
-labels without changing resolution. When more than one rig is present, it keeps the rig that resolves the most bones.
+`KHR_character_skeleton_mapping` is `identifier -> { role -> { node, name? } }`: the identifier is any nonempty
+mapping-set key, the role is a vocabulary role (`hips`, `head`, …), and `node` is a glTF node index (a `glTFid` into
+the document's global `nodes[]`). The optional `name` is a diagnostic copy of the referenced node name. The baker
+(`KhrCharacterSkeletonBaker`) resolves each role via the node index and reports mismatched names without changing
+resolution. When more than one mapping set is present, the Unity humanoid adapter selects the one that resolves the
+most bones.
 
 Building a Unity **humanoid Avatar** is opt-in (`SkeletonMap.BuildHumanoidOnAwake`); it self-validates
 required bones and falls back to the generic rig.
@@ -272,7 +319,7 @@ expression set as **scene-independent bindings** (`Authoring/CharacterExpression
 root)` to convert the baked `CharacterExpressionSet` into an `ExpressionBindingSet`: each driver's live scene
 reference (SkinnedMeshRenderer / Transform / Renderer) becomes a stable hierarchy path, each morph's blendshape
 index becomes its name, and the sampler/curve/base/priority data plus per-expression metadata (name, `BlendMode`,
-domains, masks, mapping sets) are carried verbatim. Because the asset holds no live scene refs and no `Quaternion[]`
+domains, suppressions with their presence flags, mapping sets) are carried verbatim. Because the asset holds no live scene refs and no `Quaternion[]`
 rotation curves on live drivers, it serializes cleanly into a project asset (the eye joint-rotation drivers that
 previously broke extraction now round-trip). `CharacterExpressionSetAsset.Resolve(bindings, root)` is the inverse:
 it re-resolves each path/name under a character root back into live runtime drivers (unresolved paths/names are
@@ -314,5 +361,5 @@ The baked data is import-time only, but the components survive being saved as a 
   `Components/EyeAimConstraint.cs` (non-spec, opt-in eye aiming)
 - Authoring: `Authoring/CharacterExpressionSetAsset.cs`
 - Evaluation policy: `Evaluation/AdditiveExpressionSemantics.cs`
-- Schema + name aliasing: `Schema/` (`KhrCharacterExtensionNames.cs` holds the closed alias table)
+- Schema: `Schema/` (`KhrCharacterExtensionNames.cs` holds the exact extension names)
 - Tests: `Tests/Runtime/KhrCharacter/`

@@ -3,9 +3,8 @@ using Newtonsoft.Json.Linq;
 namespace GLTF.Schema
 {
     /// <summary>
-    /// <c>KHR_character_expression_joint</c> sub-extension of <c>KHR_character_expression</c>.
-    /// Classifies ordinary core channels targeting node <c>rotation</c>, <c>translation</c>, or <c>scale</c>.
-    /// Classification adds validity rules but never selects or filters the base evaluator's channel set.
+    /// <c>KHR_character_expression_joint</c> derived expression extension of <c>KHR_character_expression</c>.
+    /// Lists the entry's channels that target node <c>rotation</c>, <c>translation</c>, or <c>scale</c>.
     /// </summary>
     public class KHR_character_expression_joint : IExtension
     {

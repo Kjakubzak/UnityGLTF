@@ -82,7 +82,7 @@ namespace UnityGLTF.KhrCharacter
 
         private float[] _weights;   // user-set driver per expression
         private float[] _rawInputs; // scratch (post-map)
-        private float[] _d;         // scratch (post-mask + clamp)
+        private float[] _d;         // scratch (post-suppression + clamp)
         private readonly List<MorphTarget> _morphTargets = new List<MorphTarget>();
         private readonly List<JointTarget> _jointTargets = new List<JointTarget>();
         private readonly List<TextureRenderTarget> _textureTargets = new List<TextureRenderTarget>();
@@ -338,9 +338,9 @@ namespace UnityGLTF.KhrCharacter
             else
                 for (int i = 0; i < n; i++) _rawInputs[i] = _weights[i];
 
-            // MASK + CLAMP.
+            // SUPPRESSION + CLAMP.
             for (int i = 0; i < n; i++)
-                _d[i] = _semantics.Clamp01(_semantics.ResolveMaskedInput(i, _rawInputs, _set.Expressions));
+                _d[i] = _semantics.Clamp01(_semantics.ResolveSuppressedInput(i, _rawInputs, _set.Expressions));
 
             EvaluateMorphTargets();
             EvaluateJointTargets();

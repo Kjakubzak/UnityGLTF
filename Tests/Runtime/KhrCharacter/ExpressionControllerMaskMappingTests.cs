@@ -7,7 +7,7 @@ using UnityEngine.TestTools;
 namespace UnityGLTF.KhrCharacter.Tests
 {
     /// <summary>
-    /// End-to-end play-mode tests for masking (one expression attenuating another) and vocabulary mapping
+    /// End-to-end play-mode tests for suppression (one expression attenuating another) and vocabulary mapping
     /// (a common-vocabulary weight distributed onto model expressions), observed through morph output.
     /// </summary>
     public class ExpressionControllerMaskMappingTests
@@ -47,10 +47,10 @@ namespace UnityGLTF.KhrCharacter.Tests
         };
 
         [UnityTest]
-        public IEnumerator Mask_Blend_AttenuatesTargetExpression()
+        public IEnumerator Suppression_Blend_AttenuatesTargetExpression()
         {
             var smr = MakeSmr(out var go);
-            // "a" drives blendshape 0; "b" blend-masks "a" fully (amount 1).
+            // "a" drives blendshape 0; "b" blend-suppresses "a" fully (amount 1).
             var set = new CharacterExpressionSet
             {
                 Expressions = new[]
@@ -59,7 +59,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                     new ExpressionTrack
                     {
                         Name = "b", Domains = ExpressionDomain.None,
-                        Masks = new[] { new MaskEntry { TargetIndex = 0, SourceIndex = 1, Type = MaskType.Blend, Amount = 1f } },
+                        Suppressions = new[] { new SuppressionEntry { TargetIndex = 0, SourceIndex = 1, Type = SuppressionType.Blend, Amount = 1 } },
                     },
                 }
             };
@@ -70,11 +70,11 @@ namespace UnityGLTF.KhrCharacter.Tests
             ec.SetWeight("a", 1f);
             ec.SetWeight("b", 1f);
             yield return null;
-            Assert.AreEqual(0f, smr.GetBlendShapeWeight(0), 1e-3f); // fully masked
+            Assert.AreEqual(0f, smr.GetBlendShapeWeight(0), 1e-3f); // fully suppressed
 
             ec.SetWeight("b", 0f);
             yield return null;
-            Assert.AreEqual(1f, smr.GetBlendShapeWeight(0), 1e-3f); // unmasked
+            Assert.AreEqual(1f, smr.GetBlendShapeWeight(0), 1e-3f); // unsuppressed
         }
 
         [UnityTest]
@@ -120,7 +120,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [UnityTest]
-        public IEnumerator Mask_Block_GatesAboveThreshold()
+        public IEnumerator Suppression_Block_GatesAboveThreshold()
         {
             var smr = MakeSmr(out var go);
             var set = new CharacterExpressionSet
@@ -131,7 +131,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                     new ExpressionTrack
                     {
                         Name = "b", Domains = ExpressionDomain.None,
-                        Masks = new[] { new MaskEntry { TargetIndex = 0, SourceIndex = 1, Type = MaskType.Block, Amount = 1f, Threshold = 0.5f } },
+                        Suppressions = new[] { new SuppressionEntry { TargetIndex = 0, SourceIndex = 1, Type = SuppressionType.Block, Amount = 1, Threshold = 0.5 } },
                     },
                 }
             };

@@ -6,7 +6,7 @@ namespace UnityGLTF.KhrCharacter.Tests
 {
     /// <summary>
     /// Golden-value tests for the additive evaluation policy: input-time phase sampling (STEP/LINEAR),
-    /// single-key legacy sampling, deterministic masks, explicitly directed mappings, and driver clamping.
+    /// single-key legacy sampling, deterministic suppressions, explicitly directed mappings, and driver clamping.
     /// </summary>
     public class AdditiveExpressionSemanticsTests
     {
@@ -70,38 +70,38 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void Mask_Blend_ReducesProportionally()
+        public void Suppression_Blend_ReducesProportionally()
         {
             var tracks = new[]
             {
-                new ExpressionTrack { Name = "src", Masks = new[] { new MaskEntry { TargetIndex = 1, SourceIndex = 0, Type = MaskType.Blend, Amount = 1f } } },
+                new ExpressionTrack { Name = "src", Suppressions = new[] { new SuppressionEntry { TargetIndex = 1, SourceIndex = 0, Type = SuppressionType.Blend, Amount = 1 } } },
                 new ExpressionTrack { Name = "tgt" },
             };
-            Assert.AreEqual(0f, _s.ResolveMaskedInput(1, new[] { 1f, 1f }, tracks), 1e-5f);   // 1*(1 - saturate(1*1))
-            Assert.AreEqual(0.5f, _s.ResolveMaskedInput(1, new[] { 0.5f, 1f }, tracks), 1e-5f); // 1*(1 - 0.5)
+            Assert.AreEqual(0f, _s.ResolveSuppressedInput(1, new[] { 1f, 1f }, tracks), 1e-5f);   // 1*(1 - saturate(1*1))
+            Assert.AreEqual(0.5f, _s.ResolveSuppressedInput(1, new[] { 0.5f, 1f }, tracks), 1e-5f); // 1*(1 - 0.5)
         }
 
         [Test]
-        public void Mask_Block_GatesOnThreshold()
+        public void Suppression_Block_GatesOnThreshold()
         {
             var tracks = new[]
             {
-                new ExpressionTrack { Name = "src", Masks = new[] { new MaskEntry { TargetIndex = 1, SourceIndex = 0, Type = MaskType.Block, Amount = 1f, Threshold = 0.5f } } },
+                new ExpressionTrack { Name = "src", Suppressions = new[] { new SuppressionEntry { TargetIndex = 1, SourceIndex = 0, Type = SuppressionType.Block, Amount = 1, Threshold = 0.5 } } },
                 new ExpressionTrack { Name = "tgt" },
             };
-            Assert.AreEqual(0f, _s.ResolveMaskedInput(1, new[] { 0.6f, 1f }, tracks), 1e-5f); // source > threshold -> 1 - amount
-            Assert.AreEqual(1f, _s.ResolveMaskedInput(1, new[] { 0.4f, 1f }, tracks), 1e-5f); // source <= threshold -> unchanged
+            Assert.AreEqual(0f, _s.ResolveSuppressedInput(1, new[] { 0.6f, 1f }, tracks), 1e-5f); // source > threshold -> 1 - amount
+            Assert.AreEqual(1f, _s.ResolveSuppressedInput(1, new[] { 0.4f, 1f }, tracks), 1e-5f); // source <= threshold -> unchanged
         }
 
         [Test]
-        public void Mask_UnsupportedCustomType_UsesIdentity()
+        public void Suppression_UnsupportedCustomType_UsesIdentity()
         {
             var tracks = new[]
             {
-                new ExpressionTrack { Masks = new[] { new MaskEntry { TargetIndex = 1, SourceIndex = 0, Type = MaskType.Identity, CustomType = "ACME_curve", Amount = 1f } } },
+                new ExpressionTrack { Suppressions = new[] { new SuppressionEntry { TargetIndex = 1, SourceIndex = 0, Type = SuppressionType.Identity, CustomType = "ACME_curve", Amount = 1 } } },
                 new ExpressionTrack(),
             };
-            Assert.AreEqual(0.8f, _s.ResolveMaskedInput(1, new[] { 1f, 0.8f }, tracks), 1e-5f);
+            Assert.AreEqual(0.8f, _s.ResolveSuppressedInput(1, new[] { 1f, 0.8f }, tracks), 1e-5f);
         }
 
         [Test]

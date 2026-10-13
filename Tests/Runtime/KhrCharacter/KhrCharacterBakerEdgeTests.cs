@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using GLTF.Schema;
+using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
@@ -106,18 +107,24 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsNull(go.GetComponent<SkeletonMap>(), "no KHR_character -> no skeleton map");
         }
 
-        [Test]
-        public void Import_WithRootCharacter_OpensGateAndAttachesHub()
+        [TestCase("{}")]
+        [TestCase("{\"rootNode\":99}")]
+        public void Import_WithRootCharacter_OpensGateAndAttachesHub(string characterJson)
         {
             // N1 (positive): when the root DOES declare KHR_character, the gate opens and the hub is attached.
             // (With a null import context, baking is skipped -- no ExpressionController -- but the gate decision
-            // itself is what N1 pins: detection keys on the KHR_character root extension.)
+            // itself is what N1 pins: detection keys on the KHR_character root extension.) A legacy rootNode is
+            // an unknown member, even when it is out of range.
             var root = new GLTFRoot
             {
                 Nodes = new List<Node> { new Node { Name = "character" } },
-                Extensions = new Dictionary<string, IExtension>
+            };
+            root.Extensions = new Dictionary<string, IExtension>
+            {
                 {
-                    { KhrCharacterExtensionNames.Character, new KHR_character { RootNode = 0 } },
+                    KhrCharacterExtensionNames.Character,
+                    new KHR_character_Factory().Deserialize(
+                        root, new JProperty(KHR_character.EXTENSION_NAME, JObject.Parse(characterJson)))
                 },
             };
             var ctx = new KhrCharacterImportContext((GLTFImportContext)null);
@@ -127,8 +134,10 @@ namespace UnityGLTF.KhrCharacter.Tests
             _created.Add(go);
             ctx.OnAfterImportScene(null, 0, go);
 
-            Assert.IsNotNull(go.GetComponent<KhrCharacter>(),
-                "the KHR_character root extension opens the gate -> the hub is attached");
+            var hub = go.GetComponent<KhrCharacter>();
+            Assert.IsNotNull(hub, "the KHR_character root extension opens the gate -> the hub is attached");
+            Assert.IsTrue(hub.Has(CharacterCapability.Character));
+            LogAssert.NoUnexpectedReceived();
         }
 
         [Test]
@@ -175,7 +184,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             root.Animations.Add(animation);
             root.Extensions = new Dictionary<string, IExtension>
             {
-                { KhrCharacterExtensionNames.Character, new KHR_character { RootNode = 0 } },
+                { KhrCharacterExtensionNames.Character, new KHR_character() },
                 {
                     KhrCharacterExtensionNames.Expression,
                     new KHR_character_expression
@@ -184,7 +193,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                         {
                             new KHR_character_expression.ExpressionItem
                             {
-                                Expression = "invalid",
+                                Name = "invalid",
                                 Animation = 0,
                             },
                         },

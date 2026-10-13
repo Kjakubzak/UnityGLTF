@@ -121,7 +121,7 @@ namespace UnityGLTF.KhrCharacter
                     || !animation.Extensions.TryGetValue(KHR_character_reference_pose.EXTENSION_NAME, out var extension))
                     continue;
                 var pose = BakeReferencePoseAnimation(
-                    root, importer, nodeIndexToGo, animation, animationIndex, ExtractPoseType(root, extension) ?? "TPose");
+                    root, importer, nodeIndexToGo, animation, animationIndex, ExtractPoseType(root, extension) ?? ReferencePoseLabels.TPose);
                 if (pose != null) poses.Add(pose);
             }
             return poses.ToArray();
@@ -214,7 +214,7 @@ namespace UnityGLTF.KhrCharacter
             public Vector3? Scale;
         }
 
-        // The mapping is absolute vocabulary URI -> { role identifier -> association }. Each association is
+        // The mapping is identifier -> { role identifier -> association }. Each association is
         // unambiguous: its node is a glTF index into the document's global nodes[] array.
         // Resolve each via a direct node-index -> GameObject lookup (the map the importer builds in
         // OnAfterImportNode), so there is no name coupling and no direction to detect.

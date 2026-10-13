@@ -45,8 +45,9 @@ namespace UnityGLTF.KhrCharacter
     }
 
     /// <summary>
-    /// Per-import instance: detects the character, builds a node-index -> GameObject map, bakes expression
-    /// tracks, and attaches the <see cref="KhrCharacter"/> hub and its controllers.
+    /// Per-import instance: detects the top-level <c>KHR_character</c> designation, builds a node-index ->
+    /// GameObject map, bakes expression tracks, and attaches the <see cref="KhrCharacter"/> hub and its
+    /// controllers.
     /// </summary>
     public class KhrCharacterImportContext : GLTFImportPluginContext
     {
@@ -55,7 +56,6 @@ namespace UnityGLTF.KhrCharacter
         private readonly bool _createExpressionController;
         private readonly bool _suppressNonInteractiveAnimationAutoPlay;
         private bool _isCharacter;
-        private int _characterRootNodeIndex = -1;
 
         // UnityGLTF doesn't expose a GameObject -> node-index map, so build our own from the node callbacks.
         private readonly Dictionary<int, GameObject> _nodeIndexToGo = new Dictionary<int, GameObject>();
@@ -95,6 +95,8 @@ namespace UnityGLTF.KhrCharacter
 
         public override bool SupportsRequiredExtension(string extensionName)
         {
+            // The hub exposes the designation to host logic, which is all KHR_character support requires.
+            if (extensionName == KhrCharacterExtensionNames.Character) return true;
             if (extensionName == KhrCharacterExtensionNames.NodeLookatTarget) return true;
 
             // Parsing or baking a subset of expression data is not the complete behavior promised by required use.
@@ -104,9 +106,9 @@ namespace UnityGLTF.KhrCharacter
                 case KhrCharacterExtensionNames.Expression:
                 case KhrCharacterExtensionNames.ExpressionMorphtarget:
                 case KhrCharacterExtensionNames.ExpressionJoint:
-                case KhrCharacterExtensionNames.ExpressionTexture:
+                case KhrCharacterExtensionNames.ExpressionTextureTransform:
                 case KhrCharacterExtensionNames.ExpressionMapping:
-                case KhrCharacterExtensionNames.ExpressionMask:
+                case KhrCharacterExtensionNames.ExpressionSuppression:
                     return false;
                 default:
                     return false;
@@ -124,7 +126,6 @@ namespace UnityGLTF.KhrCharacter
             _lookatTargets.Clear();
             _cameraHintNodes.Clear();
             _lookAtTargetNodes.Clear();
-            _characterRootNodeIndex = -1;
             _requiredExtensions = gltfRoot?.ExtensionsRequired != null
                 ? new HashSet<string>(gltfRoot.ExtensionsRequired)
                 : new HashSet<string>();
@@ -133,26 +134,12 @@ namespace UnityGLTF.KhrCharacter
             {
                 foreach (var key in gltfRoot.Extensions.Keys)
                 {
-                    var canonical = KhrCharacterExtensionNames.Canonicalize(key);
-                    if (KhrCharacterExtensionNames.IsCharacterExtension(canonical))
-                        _presentExtensions.Add(canonical);
+                    if (KhrCharacterExtensionNames.IsCharacterExtension(key))
+                        _presentExtensions.Add(key);
                 }
             }
+            // Presence alone is the designation; members such as a legacy rootNode carry no meaning.
             _isCharacter = _presentExtensions.Contains(KhrCharacterExtensionNames.Character);
-            if (_isCharacter)
-            {
-                var character = GetCharacterExtension(gltfRoot);
-                if (character?.RootNode == null
-                    || gltfRoot.Nodes == null
-                    || character.RootNode.Value < 0
-                    || character.RootNode.Value >= gltfRoot.Nodes.Count)
-                {
-                    Debug.LogError("[KHR_character] rootNode does not resolve to a top-level node index; character support is unavailable.");
-                    _isCharacter = false;
-                }
-                else
-                    _characterRootNodeIndex = character.RootNode.Value;
-            }
         }
 
         public override void OnAfterImportNode(Node node, int nodeIndex, GameObject nodeObject)
@@ -168,11 +155,18 @@ namespace UnityGLTF.KhrCharacter
             // Node-level extensions (camera hint / look-at target) live on nodes; detect + record them here.
             foreach (var kv in node.Extensions)
             {
-                var canonical = KhrCharacterExtensionNames.Canonicalize(kv.Key);
-                if (!KhrCharacterExtensionNames.IsCharacterExtension(canonical)) continue;
-                _presentExtensions.Add(canonical);
+                var name = kv.Key;
+                if (!KhrCharacterExtensionNames.IsCharacterExtension(name)) continue;
+                if (name == KhrCharacterExtensionNames.Character)
+                {
+                    Debug.LogWarning(
+                        $"[KHR_character] Node {nodeIndex} carries a KHR_character object, which is valid only on the " +
+                        "top-level glTF object; ignoring it.");
+                    continue;
+                }
+                _presentExtensions.Add(name);
 
-                if (canonical == KhrCharacterExtensionNames.NodeCameraHint)
+                if (name == KhrCharacterExtensionNames.NodeCameraHint)
                 {
                     var hint = AsCameraHint(kv.Value);
                     var transform = nodeObject != null ? nodeObject.transform : null;
@@ -187,7 +181,7 @@ namespace UnityGLTF.KhrCharacter
                                     && nodeObject.GetComponent<Light>() != null),
                         });
                 }
-                else if (canonical == KhrCharacterExtensionNames.NodeLookatTarget)
+                else if (name == KhrCharacterExtensionNames.NodeLookatTarget)
                 {
                     var target = AsLookatTarget(kv.Value);
                     var transform = nodeObject != null ? nodeObject.transform : null;
@@ -212,8 +206,6 @@ namespace UnityGLTF.KhrCharacter
 
             var hub = sceneObject.GetComponent<KhrCharacter>();
             if (hub == null) hub = sceneObject.AddComponent<KhrCharacter>();
-            _nodeIndexToGo.TryGetValue(_characterRootNodeIndex, out var designatedRootObject);
-            hub.SetDesignation(_characterRootNodeIndex, designatedRootObject != null ? designatedRootObject.transform : null);
 
             // Parse the response metadata once for the explicitly enabled Unity host adapters below. Neither the
             // controller nor clip suppression is implied by the extension, so both remain opt-in import policy.
@@ -341,9 +333,9 @@ namespace UnityGLTF.KhrCharacter
         }
 
         // Maps the animations that must not auto-play to their animation indices: every expression's referenced
-        // animation, plus ANY animation tagged KHR_character_reference_pose (alias-tolerant — a pose marker must
-        // never auto-play). Indices line up 1:1 with GLTFSceneImporter.CreatedAnimationClips, which builds one clip
-        // per entry in root.Animations order. Pure + internal so it is unit-testable without a full glTF import.
+        // animation, plus ANY animation tagged KHR_character_reference_pose (a pose marker must never auto-play).
+        // Indices line up 1:1 with GLTFSceneImporter.CreatedAnimationClips, which builds one clip per entry in
+        // root.Animations order. Pure + internal so it is unit-testable without a full glTF import.
         internal static HashSet<int> CollectSuppressedAnimationIndices(GLTFRoot root, KHR_character_expression expressionExt)
         {
             var indices = new HashSet<int>();
@@ -363,14 +355,8 @@ namespace UnityGLTF.KhrCharacter
             {
                 var anim = root.Animations[i];
                 if (anim?.Extensions == null) continue;
-                foreach (var key in anim.Extensions.Keys)
-                {
-                    if (KhrCharacterExtensionNames.Canonicalize(key) == KhrCharacterExtensionNames.ReferencePose)
-                    {
-                        indices.Add(i);
-                        break;
-                    }
-                }
+                if (anim.Extensions.ContainsKey(KhrCharacterExtensionNames.ReferencePose))
+                    indices.Add(i);
             }
             return indices;
         }
@@ -597,16 +583,6 @@ namespace UnityGLTF.KhrCharacter
             return null;
         }
 
-        private static KHR_character GetCharacterExtension(GLTFRoot root)
-        {
-            if (root?.Extensions == null) return null;
-            if (!root.Extensions.TryGetValue(KhrCharacterExtensionNames.Character, out var ext)) return null;
-            if (ext is KHR_character typed) return typed;
-            if (ext is DefaultExtension raw && raw.ExtensionData != null)
-                return new KHR_character_Factory().Deserialize(root, raw.ExtensionData) as KHR_character;
-            return null;
-        }
-
         // Decide whether to flag the SkeletonMap to (re)build + assign the humanoid Avatar when the prefab
         // rehydrates: only in Humanoid rig mode AND only when an actual bone mapping resolved. Pure function so
         // the rig-mode gating is unit-testable without a full glTF import.
@@ -629,19 +605,19 @@ namespace UnityGLTF.KhrCharacter
             // Per-domain sub-extensions are nested inside expression items, so report what was actually baked.
             if (set?.Expressions != null)
             {
-                bool morph = false, joint = false, texture = false, mask = false;
+                bool morph = false, joint = false, texture = false, suppression = false;
                 foreach (var t in set.Expressions)
                 {
                     if (t == null) continue;
                     morph |= (t.Domains & ExpressionDomain.Morph) != 0;
                     joint |= (t.Domains & ExpressionDomain.Joint) != 0;
                     texture |= (t.Domains & ExpressionDomain.Texture) != 0;
-                    mask |= t.Masks != null && t.Masks.Length > 0;
+                    suppression |= t.Suppressions != null && t.Suppressions.Length > 0;
                 }
                 AddIf(morph, CharacterCapability.Morphtarget);
                 AddIf(joint, CharacterCapability.Joint);
-                AddIf(texture, CharacterCapability.Texture);
-                AddIf(mask, CharacterCapability.Mask);
+                AddIf(texture, CharacterCapability.TextureTransform);
+                AddIf(suppression, CharacterCapability.Suppression);
             }
             AddIf((set?.MappingSets != null && set.MappingSets.Length > 0)
                   || (set?.InputMappingSets != null && set.InputMappingSets.Length > 0),

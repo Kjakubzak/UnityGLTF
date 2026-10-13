@@ -30,16 +30,16 @@ namespace UnityGLTF.KhrCharacter
 
             remapper = remapper ?? new DefaultMaterialPropertiesRemapper();
             var tracks = new List<ExpressionTrack>();
-            var rawMasks = new List<KHR_character_expression_mask>(); // aligned with tracks, for the post-pass
+            var rawSuppressions = new List<KHR_character_expression_suppression>(); // aligned with tracks, for the post-pass
             var wireToTrackIndex = new Dictionary<int, int>();
 
             for (int expressionIndex = 0; expressionIndex < expressionExt.Expressions.Count; expressionIndex++)
             {
                 var item = expressionExt.Expressions[expressionIndex];
-                if (item == null || string.IsNullOrEmpty(item.Expression)) continue;
+                if (item == null || string.IsNullOrEmpty(item.Name)) continue;
                 if (root.Animations == null || item.Animation < 0 || item.Animation >= root.Animations.Count)
                 {
-                    Debug.LogWarning($"[KHR_character] Expression '{item.Expression}' references an invalid animation index ({item.Animation}); skipping.");
+                    Debug.LogWarning($"[KHR_character] Expression '{item.Name}' references an invalid animation index ({item.Animation}); skipping.");
                     continue;
                 }
 
@@ -50,7 +50,7 @@ namespace UnityGLTF.KhrCharacter
                 // PR #2512 blendMode/priority discriminator; wire those through here once the schema lands.
                 var track = new ExpressionTrack
                 {
-                    Name = item.Expression,
+                    Name = item.Name,
                     BlendMode = ExpressionBlendMode.Additive,
                 };
 
@@ -73,15 +73,15 @@ namespace UnityGLTF.KhrCharacter
                 }
 
                 var textureDrivers = new List<TextureDriver>();
-                if (item.Texture?.Channels != null)
-                    BakeTextureChannels(root, importer, remapper, animation, item.Texture.Channels, nodeIndexToGo, textureDrivers);
+                if (item.TextureTransform?.Channels != null)
+                    BakeTextureChannels(root, importer, remapper, animation, item.TextureTransform.Channels, nodeIndexToGo, textureDrivers);
                 if (textureDrivers.Count > 0)
                 {
                     track.TextureDrivers = textureDrivers.ToArray();
                     track.Domains |= ExpressionDomain.Texture;
                 }
 
-                rawMasks.Add(item.Mask);
+                rawSuppressions.Add(item.Suppression);
                 wireToTrackIndex[expressionIndex] = tracks.Count;
                 tracks.Add(track);
             }
@@ -93,19 +93,19 @@ namespace UnityGLTF.KhrCharacter
             // been skipped while baking runtime tracks.
             for (int i = 0; i < tracks.Count; i++)
             {
-                if (rawMasks[i] == null) continue;
-                var masks = BuildMaskEntries(rawMasks[i], i, wireToTrackIndex, expressionExt.Expressions);
-                if (masks.Length > 0)
+                if (rawSuppressions[i] == null) continue;
+                var suppressions = BuildSuppressionEntries(rawSuppressions[i], i, wireToTrackIndex);
+                if (suppressions.Length > 0)
                 {
-                    tracks[i].Masks = masks;
-                    tracks[i].MaskExtensionsJson = rawMasks[i].Extensions?.ToString(
+                    tracks[i].Suppressions = suppressions;
+                    tracks[i].SuppressionExtensionsJson = rawSuppressions[i].Extensions?.ToString(
                         Newtonsoft.Json.Formatting.None);
-                    tracks[i].MaskExtrasJson = rawMasks[i].Extras?.ToString(
+                    tracks[i].SuppressionExtrasJson = rawSuppressions[i].Extras?.ToString(
                         Newtonsoft.Json.Formatting.None);
-                    tracks[i].MaskAdditionalPropertiesJson = rawMasks[i].AdditionalProperties?.ToString(
+                    tracks[i].SuppressionAdditionalPropertiesJson = rawSuppressions[i].AdditionalProperties?.ToString(
                         Newtonsoft.Json.Formatting.None);
-                    tracks[i].MaskRequiredCompanionExtensions = GetRequiredMaskCompanionExtensions(
-                        root, rawMasks[i], masks);
+                    tracks[i].SuppressionRequiredCompanionExtensions = GetRequiredSuppressionCompanionExtensions(
+                        root, rawSuppressions[i], suppressions);
                 }
             }
 
@@ -681,7 +681,7 @@ namespace UnityGLTF.KhrCharacter
             return importer.TextureCache[textureIndex]?.Texture;
         }
 
-        // ── Mask + mapping resolution (wire expression indices -> track indices) ────
+        // ── Suppression + mapping resolution (wire expression indices -> track indices) ────
 
         internal static bool TryApplyMappingSets(
             GLTFRoot root,
@@ -721,45 +721,39 @@ namespace UnityGLTF.KhrCharacter
             }
         }
 
-        internal static MaskEntry[] BuildMaskEntries(
-            KHR_character_expression_mask mask,
+        internal static SuppressionEntry[] BuildSuppressionEntries(
+            KHR_character_expression_suppression suppression,
             int sourceIndex,
-            IReadOnlyDictionary<int, int> wireToTrackIndex,
-            IReadOnlyList<KHR_character_expression.ExpressionItem> wireExpressions = null)
+            IReadOnlyDictionary<int, int> wireToTrackIndex)
         {
-            var list = new List<MaskEntry>();
-            if (mask?.Masks != null)
+            var list = new List<SuppressionEntry>();
+            if (suppression?.Suppressions != null)
             {
-                foreach (var m in mask.Masks)
+                foreach (var s in suppression.Suppressions)
                 {
-                    if (m == null || !wireToTrackIndex.TryGetValue(m.Target, out int targetIndex))
+                    if (s == null || !wireToTrackIndex.TryGetValue(s.Target, out int targetIndex))
                     {
-                        Debug.LogWarning($"[KHR_character] Mask references invalid expression index {m?.Target ?? -1}; dropping.");
+                        Debug.LogWarning($"[KHR_character] Suppression references invalid expression index {s?.Target ?? -1}; dropping.");
                         continue;
                     }
-                    if (m.Name != null
-                        && (wireExpressions == null
-                            || m.Target < 0
-                            || m.Target >= wireExpressions.Count
-                            || m.Name != wireExpressions[m.Target]?.Expression))
-                        Debug.LogWarning($"[KHR_character] Mask name '{m.Name}' does not match expression index {m.Target}.");
-                    string maskType = m.Type?.Trim();
-                    bool isBlock = string.Equals(maskType, "block", StringComparison.Ordinal);
-                    bool isBlend = string.IsNullOrEmpty(maskType) ||
-                        string.Equals(maskType, "blend", StringComparison.Ordinal);
-                    list.Add(new MaskEntry
+                    string type = s.Type?.Trim();
+                    bool isBlock = string.Equals(type, "block", StringComparison.Ordinal);
+                    bool isBlend = string.IsNullOrEmpty(type) ||
+                        string.Equals(type, "blend", StringComparison.Ordinal);
+                    list.Add(new SuppressionEntry
                     {
                         TargetIndex = targetIndex,
                         SourceIndex = sourceIndex,
-                        Name = m.Name,
-                        Type = isBlock ? MaskType.Block : isBlend ? MaskType.Blend : MaskType.Identity,
-                        CustomType = isBlend || isBlock ? null : maskType,
-                        RawExtensionsJson = m.Extensions?.ToString(Newtonsoft.Json.Formatting.None),
-                        RawExtrasJson = m.Extras?.ToString(Newtonsoft.Json.Formatting.None),
-                        RawAdditionalPropertiesJson = m.AdditionalProperties?.ToString(
+                        Type = isBlock ? SuppressionType.Block : isBlend ? SuppressionType.Blend : SuppressionType.Identity,
+                        CustomType = isBlend || isBlock ? null : type,
+                        RawExtensionsJson = s.Extensions?.ToString(Newtonsoft.Json.Formatting.None),
+                        RawExtrasJson = s.Extras?.ToString(Newtonsoft.Json.Formatting.None),
+                        RawAdditionalPropertiesJson = s.AdditionalProperties?.ToString(
                             Newtonsoft.Json.Formatting.None),
-                        Amount = m.Amount,
-                        Threshold = m.Threshold,
+                        Amount = s.Amount ?? 1d,
+                        HasAmount = s.Amount.HasValue,
+                        Threshold = s.Threshold ?? 0d,
+                        HasThreshold = s.Threshold.HasValue,
                     });
                 }
             }
@@ -776,8 +770,7 @@ namespace UnityGLTF.KhrCharacter
             foreach (var setKv in mappingExt.ExpressionSetMappings)
             {
                 if (!KHR_character_expression_mapping.IsValidMappingSetIdentifier(setKv.Key))
-                    throw new InvalidOperationException(
-                        $"Mapping-set identifier '{setKv.Key}' is not a valid absolute URI.");
+                    throw new InvalidOperationException("A mapping-set identifier is empty.");
                 var targets = new List<MappingTarget>();
                 if (setKv.Value != null)
                 {
@@ -793,12 +786,8 @@ namespace UnityGLTF.KhrCharacter
                                     Debug.LogWarning($"[KHR_character] Mapping references invalid expression index {sw.Source}; dropping.");
                                     continue;
                                 }
-                                if (sw.Name != null
-                                    && (wireExpressions == null
-                                        || sw.Source < 0
-                                        || sw.Source >= wireExpressions.Count
-                                        || sw.Name != wireExpressions[sw.Source]?.Expression))
-                                    Debug.LogWarning($"[KHR_character] Mapping name '{sw.Name}' does not match expression index {sw.Source}.");
+                                if (sw.Name != null && !DiagnosticNameMatches(sw.Name, sw.Source, wireExpressions))
+                                    Debug.LogWarning($"[KHR_character] Mapping name '{sw.Name}' does not match the name of expression index {sw.Source}.");
                                 contributions.Add(new MappingContribution
                                 {
                                     SourceIndex = srcIndex,
@@ -831,8 +820,7 @@ namespace UnityGLTF.KhrCharacter
             foreach (var setKv in mappingExt.ExpressionSetInputMappings)
             {
                 if (!KHR_character_expression_mapping.IsValidMappingSetIdentifier(setKv.Key))
-                    throw new InvalidOperationException(
-                        $"Mapping-set identifier '{setKv.Key}' is not a valid absolute URI.");
+                    throw new InvalidOperationException("A mapping-set identifier is empty.");
                 var commands = new List<InputMappingCommand>();
                 if (setKv.Value != null)
                     foreach (var commandKv in setKv.Value)
@@ -846,12 +834,8 @@ namespace UnityGLTF.KhrCharacter
                                     Debug.LogWarning($"[KHR_character] Input mapping references invalid expression index {target.Target}; dropping.");
                                     continue;
                                 }
-                                if (target.Name != null
-                                    && (wireExpressions == null
-                                        || target.Target < 0
-                                        || target.Target >= wireExpressions.Count
-                                        || target.Name != wireExpressions[target.Target]?.Expression))
-                                    Debug.LogWarning($"[KHR_character] Input mapping name '{target.Name}' does not match expression index {target.Target}.");
+                                if (target.Name != null && !DiagnosticNameMatches(target.Name, target.Target, wireExpressions))
+                                    Debug.LogWarning($"[KHR_character] Input mapping name '{target.Name}' does not match the name of expression index {target.Target}.");
                                 contributions.Add(new InputMappingContribution
                                 {
                                     TargetIndex = targetIndex,
@@ -876,6 +860,19 @@ namespace UnityGLTF.KhrCharacter
             return sets.Count > 0 ? sets.ToArray() : null;
         }
 
+        // A mapping's diagnostic name must equal the referenced entry's name by code point. Indices stay
+        // authoritative, so a mismatch is reported but never changes the resolved entry.
+        private static bool DiagnosticNameMatches(
+            string diagnosticName,
+            int expressionIndex,
+            IReadOnlyList<KHR_character_expression.ExpressionItem> wireExpressions)
+        {
+            return wireExpressions != null
+                && expressionIndex >= 0
+                && expressionIndex < wireExpressions.Count
+                && string.Equals(diagnosticName, wireExpressions[expressionIndex]?.Name, StringComparison.Ordinal);
+        }
+
         private static KHR_character_expression_mapping GetMappingExtension(GLTFRoot root)
         {
             if (root.Extensions == null) return null;
@@ -886,20 +883,20 @@ namespace UnityGLTF.KhrCharacter
             return null;
         }
 
-        internal static string[] GetRequiredMaskCompanionExtensions(
+        internal static string[] GetRequiredSuppressionCompanionExtensions(
             GLTFRoot root,
-            KHR_character_expression_mask mask,
-            IReadOnlyList<MaskEntry> retainedMasks = null)
+            KHR_character_expression_suppression suppression,
+            IReadOnlyList<SuppressionEntry> retainedSuppressions = null)
         {
             var present = new HashSet<string>();
-            AddCompanionNames(present, mask?.Extensions);
-            if (retainedMasks != null)
+            AddCompanionNames(present, suppression?.Extensions);
+            if (retainedSuppressions != null)
             {
-                foreach (var entry in retainedMasks)
+                foreach (var entry in retainedSuppressions)
                     AddCompanionNames(present, entry?.RawExtensionsJson);
             }
-            else if (mask?.Masks != null)
-                foreach (var entry in mask.Masks)
+            else if (suppression?.Suppressions != null)
+                foreach (var entry in suppression.Suppressions)
                     AddCompanionNames(present, entry?.Extensions);
             return GetDeclaredRequiredCompanions(root, present);
         }

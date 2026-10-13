@@ -8,11 +8,12 @@
 // The runtime contracts stay unchanged — they remain the import↔runtime boundary with live refs. Conversion
 // between the two lives in CharacterExpressionSetAsset.Extract/Resolve.
 //
-// Reused portable contract types (already [Serializable]): Sampler, MaskEntry, ExpressionMappingSet,
+// Reused portable contract types (already [Serializable]): Sampler, SuppressionEntry, ExpressionMappingSet,
 // ExpressionInputMappingSet, TrsChannel, ExpressionDomain and ExpressionBlendMode.
 
 using System;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace UnityGLTF.KhrCharacter
 {
@@ -29,8 +30,8 @@ namespace UnityGLTF.KhrCharacter
         public string[] MappingRequiredCompanionExtensions;
     }
 
-    // Path-based mirror of ExpressionTrack. Metadata (Name/Domains/BlendMode/IsBinary/Masks) is carried verbatim;
-    // the driver arrays become path-based bindings.
+    // Path-based mirror of ExpressionTrack. Metadata (Name/Domains/BlendMode/IsBinary/Suppressions) is carried
+    // verbatim; the driver arrays become path-based bindings.
     [Serializable]
     public class ExpressionBinding
     {
@@ -38,11 +39,11 @@ namespace UnityGLTF.KhrCharacter
         public ExpressionDomain Domains;
         public ExpressionBlendMode BlendMode = ExpressionBlendMode.Additive;
         public bool IsBinary;
-        public MaskEntry[] Masks;
-        public string MaskExtensionsJson;
-        public string MaskExtrasJson;
-        public string MaskAdditionalPropertiesJson;
-        public string[] MaskRequiredCompanionExtensions;
+        [FormerlySerializedAs("Masks")] public SuppressionEntry[] Suppressions;
+        [FormerlySerializedAs("MaskExtensionsJson")] public string SuppressionExtensionsJson;
+        [FormerlySerializedAs("MaskExtrasJson")] public string SuppressionExtrasJson;
+        [FormerlySerializedAs("MaskAdditionalPropertiesJson")] public string SuppressionAdditionalPropertiesJson;
+        [FormerlySerializedAs("MaskRequiredCompanionExtensions")] public string[] SuppressionRequiredCompanionExtensions;
         public MorphBinding[] MorphBindings;
         public JointBinding[] JointBindings;
         public TextureBinding[] TextureBindings;

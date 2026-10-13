@@ -44,11 +44,37 @@ namespace UnityGLTF.KhrCharacter.Tests
             var response = ExpressionResponseEvaluator.Evaluate(entries[0].Animation, 0.5f);
 
             Assert.That(entries, Has.Length.EqualTo(1));
-            Assert.That(entries[0].Label, Is.EqualTo("move"));
+            Assert.That(entries[0].Name, Is.EqualTo("move"));
             Assert.That(response.Duration, Is.EqualTo(2f));
             Assert.That(response.Records[0].Value[0], Is.EqualTo(1f).Within(1e-6f));
             Assert.That(response.Records[0].Value[1], Is.EqualTo(2f).Within(1e-6f));
             Assert.That(response.Records[0].Value[2], Is.EqualTo(3f).Within(1e-6f));
+        }
+
+        [Test]
+        public void EntryWithOnlyLegacyExpressionLabelIsRejectedForMissingName()
+        {
+            var fixture = new Fixture();
+            int input = fixture.AddFloatAccessor(GLTFAccessorAttributeType.SCALAR, 2, new[] { 0f, 1f }, 0d, 1d);
+            int output = fixture.AddFloatAccessor(GLTFAccessorAttributeType.VEC3, 2, new[] { 0f, 0f, 0f, 1f, 1f, 1f });
+            fixture.Root.Nodes.Add(new Node());
+            fixture.AddAnimation(
+                new[] { new SamplerSpec(input, output) },
+                new[] { CoreChannel(0, fixture.Root, 0, "translation") });
+            var extension = new KHR_character_expression_Factory().Deserialize(
+                fixture.Root,
+                new Newtonsoft.Json.Linq.JProperty(KHR_character_expression.EXTENSION_NAME, new Newtonsoft.Json.Linq.JObject
+                {
+                    { "expressions", new Newtonsoft.Json.Linq.JArray(new Newtonsoft.Json.Linq.JObject
+                        {
+                            { "expression", "legacy" },
+                            { "animation", 0 },
+                        })
+                    },
+                })) as KHR_character_expression;
+
+            var exception = Assert.Throws<ExpressionResponseEvaluationException>(() => fixture.Bake(extension));
+            StringAssert.Contains("Expression entry 0 has no nonempty name", exception.Message);
         }
 
         [Test]
@@ -737,7 +763,7 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             var response = restored.Evaluate(0, 0.5f);
             Assert.IsTrue(restored.RequiredOnImport);
-            Assert.That(restored.Entries[0].Label, Is.EqualTo("serialized"));
+            Assert.That(restored.Entries[0].Name, Is.EqualTo("serialized"));
             Assert.That(response.Records[0].Value[0], Is.EqualTo(1f).Within(1e-6f));
             Assert.IsNull(restored.GetComponent<ExpressionController>());
         }
@@ -935,13 +961,16 @@ namespace UnityGLTF.KhrCharacter.Tests
                     {
                         new KHR_character_expression.ExpressionItem
                         {
-                            Expression = label,
+                            Name = label,
                             Animation = 0,
                         },
                     },
                 };
-                return KhrCharacterResponseBaker.Bake(Root, view => _bufferData[view], extension);
+                return Bake(extension);
             }
+
+            public ExpressionResponseSetEntry[] Bake(KHR_character_expression extension)
+                => KhrCharacterResponseBaker.Bake(Root, view => _bufferData[view], extension);
 
             private int AddBufferView(byte[] data)
             {

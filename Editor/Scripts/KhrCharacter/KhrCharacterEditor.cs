@@ -5,10 +5,11 @@ using UnityEngine;
 namespace UnityGLTF.KhrCharacter.Editor
 {
     /// <summary>
-    /// Inspector for <see cref="KhrCharacter"/>: readiness plus a per-capability health readout
-    /// (Active / Degraded / Inert) and expression count. In Play mode it shows the live
-    /// <see cref="KhrCharacter.GetHealth"/> snapshot; at edit time it lists the baked capabilities
-    /// from the serialized data (the runtime lists only populate on Awake).
+    /// Inspector for <see cref="KhrCharacter"/>, whose presence marks the imported asset as containing a character
+    /// (the top-level <c>KHR_character</c> designation names no root or member nodes). Shows readiness plus a
+    /// per-capability health readout (Active / Degraded / Inert) and expression count. In Play mode it shows the
+    /// live <see cref="KhrCharacter.GetHealth"/> snapshot; at edit time it lists the baked capabilities from the
+    /// serialized data (the runtime lists only populate on Awake).
     /// </summary>
     [CustomEditor(typeof(KhrCharacter))]
     public class KhrCharacterEditor : UnityEditor.Editor
@@ -29,7 +30,8 @@ namespace UnityGLTF.KhrCharacter.Editor
                     ? (character.IsReady
                         ? $"Ready. {character.Capabilities.Count} capabilities."
                         : "Not ready (awaiting OnCharacterReady).")
-                    : "Edit-time view of baked data. Enter Play mode for live status and controls.",
+                    : "KHR_character designation: this asset contains a character. Edit-time view of baked " +
+                      "data; enter Play mode for live status and controls.",
                 playing && !character.IsReady ? MessageType.Warning : MessageType.Info);
 
             if (playing)

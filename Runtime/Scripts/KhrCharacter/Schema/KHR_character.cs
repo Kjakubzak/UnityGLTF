@@ -3,28 +3,33 @@ using Newtonsoft.Json.Linq;
 namespace GLTF.Schema
 {
     /// <summary>
-    /// glTF root extension <c>KHR_character</c> (PR #2512): marks the asset as a Character and records the
-    /// character root node. Raw JSON is preserved so unknown / forward-compatible fields round-trip.
+    /// glTF root extension <c>KHR_character</c> (PR #2512): designates the asset as containing at most one
+    /// character. The object defines no properties and names no nodes; it is <c>{}</c> unless it carries
+    /// <c>extensions</c> or <c>extras</c>. Unknown members, such as a legacy <c>rootNode</c>, are kept in
+    /// <see cref="AdditionalProperties"/> and carry no meaning.
     /// </summary>
     public class KHR_character : IExtension
     {
         public const string EXTENSION_NAME = "KHR_character";
 
-        /// <summary>Index into <c>nodes</c> for the character root. Required by the spec; tolerated if absent.</summary>
-        public int? RootNode;
+        public JObject Extensions;
+        public JToken Extras;
 
-        /// <summary>The original JProperty, preserved for round-trip / forward-compat.</summary>
+        /// <summary>Members the extension does not define, preserved verbatim for round-trip.</summary>
+        public JObject AdditionalProperties;
+
+        /// <summary>The original JProperty, preserved for diagnostics.</summary>
         public JProperty RawData;
 
         public JProperty Serialize()
         {
-            // Round-trip the original data when present; otherwise emit the known fields.
-            if (RawData != null)
-                return new JProperty(RawData.Name, RawData.Value);
-
-            var obj = new JObject();
-            if (RootNode.HasValue)
-                obj.Add("rootNode", RootNode.Value);
+            var obj = AdditionalProperties != null
+                ? (JObject)AdditionalProperties.DeepClone()
+                : new JObject();
+            if (Extensions != null && Extensions.HasValues) obj["extensions"] = Extensions.DeepClone();
+            else obj.Remove("extensions");
+            if (Extras != null) obj["extras"] = Extras.DeepClone();
+            else obj.Remove("extras");
             return new JProperty(EXTENSION_NAME, obj);
         }
 
@@ -32,7 +37,11 @@ namespace GLTF.Schema
         {
             return new KHR_character
             {
-                RootNode = RootNode,
+                Extensions = Extensions != null ? (JObject)Extensions.DeepClone() : null,
+                Extras = Extras?.DeepClone(),
+                AdditionalProperties = AdditionalProperties != null
+                    ? (JObject)AdditionalProperties.DeepClone()
+                    : null,
                 RawData = RawData != null ? new JProperty(RawData) : null
             };
         }
@@ -41,7 +50,7 @@ namespace GLTF.Schema
     /// <summary>
     /// Deserializes the <c>KHR_character</c> root extension. When this factory is not registered, the
     /// extension still round-trips as a <see cref="DefaultExtension"/> and the import plugin detects the
-    /// character by name.
+    /// character by name. Required use is accepted only when an import plugin exposes the designation.
     /// </summary>
     public class KHR_character_Factory : ExtensionFactory
     {
@@ -50,15 +59,23 @@ namespace GLTF.Schema
         public KHR_character_Factory()
         {
             ExtensionName = EXTENSION_NAME;
+            RequiresRuntimeSupportForRequiredUse = true;
         }
 
         public override IExtension Deserialize(GLTFRoot root, JProperty extensionToken)
         {
             var ext = new KHR_character { RawData = extensionToken };
-            if (extensionToken.Value is JObject obj && obj.TryGetValue("rootNode", out var rootNodeToken))
-                ext.RootNode = rootNodeToken.Value<int>();
-            if (!ext.RootNode.HasValue)
-                UnityEngine.Debug.LogWarning($"{EXTENSION_NAME}: required field 'rootNode' is missing.");
+            if (!(extensionToken?.Value is JObject obj)) return ext;
+
+            ext.Extensions = obj["extensions"] is JObject extensions
+                ? (JObject)extensions.DeepClone()
+                : null;
+            ext.Extras = obj["extras"]?.DeepClone();
+            ext.AdditionalProperties = new JObject();
+            foreach (var property in obj.Properties())
+                if (property.Name != "extensions" && property.Name != "extras")
+                    ext.AdditionalProperties.Add(property.Name, property.Value.DeepClone());
+            if (!ext.AdditionalProperties.HasValues) ext.AdditionalProperties = null;
             return ext;
         }
     }

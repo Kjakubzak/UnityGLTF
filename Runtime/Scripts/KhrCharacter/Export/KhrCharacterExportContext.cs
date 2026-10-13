@@ -18,8 +18,8 @@ namespace UnityGLTF.KhrCharacter
     {
         private sealed class InvalidMappingSetIdentifierException : InvalidOperationException
         {
-            public InvalidMappingSetIdentifierException(string identifier)
-                : base($"Mapping-set identifier '{identifier}' is not a valid absolute URI.") { }
+            public InvalidMappingSetIdentifierException()
+                : base("A mapping-set identifier must be a nonempty string.") { }
         }
 
         private sealed class PassiveExpressionExportNotSupportedException : InvalidOperationException
@@ -64,7 +64,7 @@ namespace UnityGLTF.KhrCharacter
 
         private readonly KhrCharacterExportPlugin _settings;
         private readonly ExportContext _context;
-        private static readonly Regex CustomMaskTypePattern = new Regex(
+        private static readonly Regex CustomSuppressionTypePattern = new Regex(
             "^[A-Z0-9]+_[a-z0-9]+(?:_[a-z0-9]+)*$",
             RegexOptions.CultureInvariant);
 
@@ -114,7 +114,7 @@ namespace UnityGLTF.KhrCharacter
 
             // Phase 0: Emit root KHR_character extension FIRST (F2 blocker)
             // Without this, re-import fails completely (import gates on KHR_character presence)
-            EmitRootCharacterExtension(exporter, gltfRoot, root);
+            EmitRootCharacterExtension(exporter, gltfRoot);
 
             // Phases 2+3: Export expressions (interleaved: channels then metadata)
             if (hasExpressions)
@@ -183,9 +183,9 @@ namespace UnityGLTF.KhrCharacter
         // MaterialVariantsPlugin). Include-inactive: imported character roots are frequently inactive at edit
         // time (consistent with AfterSceneExport's edit-time-safe intent).
         //
-        // KHR_character provides one author-selected root designation. When the export set contains several
-        // character components, choose one deterministically for that designation and leave the others as
-        // ordinary glTF content; the extension does not assert that the asset contains only one character.
+        // KHR_character designates at most one character per asset and names no nodes. When the export set
+        // contains several character roots, the first one deterministically supplies the character components to
+        // export; the others are exported as ordinary glTF content.
         private Transform FindCharacterRoot(GLTFSceneExporter exporter)
         {
             var roots = exporter?.RootTransforms;
@@ -210,27 +210,17 @@ namespace UnityGLTF.KhrCharacter
             {
                 Debug.LogWarning(
                     $"[KHR_character] Export contains {characterRootNames.Count} character roots " +
-                    $"({string.Join(", ", characterRootNames)}). Designating '{selected.name}' as rootNode; " +
-                    "additional roots remain ordinary glTF content unless exported separately with their own designation.");
+                    $"({string.Join(", ", characterRootNames)}). KHR_character allows one character per asset; " +
+                    "additional characters are out of scope and are exported as ordinary content. " +
+                    $"Character data is exported from '{selected.name}'.");
             }
 
             return selected;
         }
 
-        private void EmitRootCharacterExtension(GLTFSceneExporter exporter, GLTFRoot gltfRoot, Transform root)
+        private void EmitRootCharacterExtension(GLTFSceneExporter exporter, GLTFRoot gltfRoot)
         {
-            int rootNodeIndex = exporter.GetTransformIndex(root);
-            if (rootNodeIndex < 0)
-            {
-                Debug.LogWarning("[KHR_character] Could not resolve character root node index, skipping root extension");
-                return;
-            }
-
-            var rootExtension = new KHR_character
-            {
-                RootNode = rootNodeIndex
-            };
-            gltfRoot.AddExtension(KHR_character.EXTENSION_NAME, rootExtension);
+            gltfRoot.AddExtension(KHR_character.EXTENSION_NAME, new KHR_character());
             // Additive metadata: declare as USED (not REQUIRED) so plain glTF viewers that don't
             // understand KHR_character still load the asset; KHR-aware importers detect it by presence.
             exporter.DeclareExtensionUsage(KHR_character.EXTENSION_NAME, isRequired: false);
@@ -433,7 +423,7 @@ namespace UnityGLTF.KhrCharacter
 
                 if (concreteTargets.Count == 0)
                     throw InvalidExpression($"Expression {expressionIndex} has no exportable animation channels.");
-                ValidateMasks(set.Expressions, expressionIndex, track);
+                ValidateSuppressions(set.Expressions, expressionIndex, track);
             }
 
             ValidateMappings(set);
@@ -616,18 +606,18 @@ namespace UnityGLTF.KhrCharacter
             textureTargets[target] = new TextureTargetSignature { Sampler = sampler, Values = values };
         }
 
-        private static void ValidateMasks(ExpressionTrack[] expressions, int expressionIndex, ExpressionTrack track)
+        private static void ValidateSuppressions(ExpressionTrack[] expressions, int expressionIndex, ExpressionTrack track)
         {
-            bool hasMasks = track.Masks != null && track.Masks.Length > 0;
-            if (!hasMasks)
+            bool hasSuppressions = track.Suppressions != null && track.Suppressions.Length > 0;
+            if (!hasSuppressions)
             {
                 if (HasCompanionPayload(
-                        track.MaskExtensionsJson,
-                        track.MaskExtrasJson,
-                        track.MaskAdditionalPropertiesJson,
-                        track.MaskRequiredCompanionExtensions))
+                        track.SuppressionExtensionsJson,
+                        track.SuppressionExtrasJson,
+                        track.SuppressionAdditionalPropertiesJson,
+                        track.SuppressionRequiredCompanionExtensions))
                     throw InvalidExpression(
-                        $"Expression {expressionIndex} has mask metadata but no mask entries.");
+                        $"Expression {expressionIndex} has suppression metadata but no suppression entries.");
                 return;
             }
 
@@ -635,40 +625,47 @@ namespace UnityGLTF.KhrCharacter
             AddExtensionNames(
                 companionExtensionNames,
                 ParseExtensionsObject(
-                    track.MaskExtensionsJson,
-                    $"Expression {expressionIndex} mask companion extensions"));
-            ParseToken(track.MaskExtrasJson);
-            ParseObject(track.MaskAdditionalPropertiesJson);
-            for (int maskIndex = 0; maskIndex < track.Masks.Length; maskIndex++)
+                    track.SuppressionExtensionsJson,
+                    $"Expression {expressionIndex} suppression companion extensions"));
+            ParseToken(track.SuppressionExtrasJson);
+            ParseObject(track.SuppressionAdditionalPropertiesJson);
+            for (int suppressionIndex = 0; suppressionIndex < track.Suppressions.Length; suppressionIndex++)
             {
-                var mask = track.Masks[maskIndex];
-                string description = $"Expression {expressionIndex} mask {maskIndex}";
-                if (mask == null) throw InvalidExpression($"{description} is null.");
-                if (mask.TargetIndex < 0 || mask.TargetIndex >= expressions.Length || expressions[mask.TargetIndex] == null)
-                    throw InvalidExpression($"{description} references invalid expression {mask.TargetIndex}.");
-                if (mask.Name != null && mask.Name != expressions[mask.TargetIndex].Name)
-                    throw InvalidExpression($"{description} name does not match its target expression.");
-                RequireUnit(mask.Amount, $"{description} amount");
-                RequireUnit(mask.Threshold, $"{description} threshold");
-                if (!string.IsNullOrEmpty(mask.CustomType))
+                var suppression = track.Suppressions[suppressionIndex];
+                string description = $"Expression {expressionIndex} suppression {suppressionIndex}";
+                if (suppression == null) throw InvalidExpression($"{description} is null.");
+                if (suppression.TargetIndex < 0 || suppression.TargetIndex >= expressions.Length
+                    || expressions[suppression.TargetIndex] == null)
+                    throw InvalidExpression($"{description} references invalid expression {suppression.TargetIndex}.");
+                if (!string.IsNullOrEmpty(suppression.CustomType))
                 {
-                    if (!CustomMaskTypePattern.IsMatch(mask.CustomType))
-                        throw InvalidExpression($"{description} custom type '{mask.CustomType}' is invalid.");
+                    if (!CustomSuppressionTypePattern.IsMatch(suppression.CustomType))
+                        throw InvalidExpression($"{description} custom type '{suppression.CustomType}' is invalid.");
                 }
-                else if (mask.Type != MaskType.Blend && mask.Type != MaskType.Block)
+                else if (suppression.Type != SuppressionType.Blend && suppression.Type != SuppressionType.Block)
                 {
                     throw InvalidExpression($"{description} identity type has no custom token.");
                 }
+                if (suppression.HasAmount) RequireUnit(suppression.Amount, $"{description} amount");
+                if (suppression.HasThreshold
+                    && KHR_character_expression_suppression.AllowsThreshold(SuppressionTypeToken(suppression)))
+                    RequireUnit(suppression.Threshold, $"{description} threshold");
                 AddExtensionNames(
                     companionExtensionNames,
-                    ParseExtensionsObject(mask.RawExtensionsJson, $"{description} companion extensions"));
-                ParseToken(mask.RawExtrasJson);
-                ParseObject(mask.RawAdditionalPropertiesJson);
+                    ParseExtensionsObject(suppression.RawExtensionsJson, $"{description} companion extensions"));
+                ParseToken(suppression.RawExtrasJson);
+                ParseObject(suppression.RawAdditionalPropertiesJson);
             }
             ValidateRequiredCompanionExtensions(
-                track.MaskRequiredCompanionExtensions,
+                track.SuppressionRequiredCompanionExtensions,
                 companionExtensionNames,
-                $"Expression {expressionIndex} mask metadata");
+                $"Expression {expressionIndex} suppression metadata");
+        }
+
+        private static string SuppressionTypeToken(SuppressionEntry suppression)
+        {
+            if (!string.IsNullOrEmpty(suppression.CustomType)) return suppression.CustomType;
+            return suppression.Type == SuppressionType.Block ? "block" : "blend";
         }
 
         private static void ValidateMappings(CharacterExpressionSet set)
@@ -788,14 +785,15 @@ namespace UnityGLTF.KhrCharacter
         {
             if (expressionIndex < 0 || expressionIndex >= expressions.Length || expressions[expressionIndex] == null)
                 throw InvalidExpression($"{description} references invalid expression {expressionIndex}.");
-            if (diagnosticName != null && diagnosticName != expressions[expressionIndex].Name)
+            if (diagnosticName != null
+                && !string.Equals(diagnosticName, expressions[expressionIndex].Name, StringComparison.Ordinal))
                 throw InvalidExpression($"{description} name does not match expression {expressionIndex}.");
         }
 
         private static void ValidateMappingIdentifier(string identifier)
         {
             if (!KHR_character_expression_mapping.IsValidMappingSetIdentifier(identifier))
-                throw new InvalidMappingSetIdentifierException(identifier);
+                throw new InvalidMappingSetIdentifierException();
         }
 
         private static NormalizedLegacySampler NormalizeLegacySampler(Sampler sampler, string description)
@@ -1150,9 +1148,9 @@ namespace UnityGLTF.KhrCharacter
                 throw InvalidExpression($"{description} does not match the exported authored initial value.");
         }
 
-        private static void RequireUnit(float value, string description)
+        private static void RequireUnit(double value, string description)
         {
-            if (!IsFinite(value) || value < 0f || value > 1f)
+            if (double.IsNaN(value) || double.IsInfinity(value) || value < 0d || value > 1d)
                 throw InvalidExpression($"{description} must be finite and in [0, 1].");
         }
 
@@ -1203,11 +1201,11 @@ namespace UnityGLTF.KhrCharacter
             var mappingDict = new Dictionary<string, Dictionary<string, List<KHR_character_expression_mapping.SourceWeight>>>();
             var inputMappingDict = new Dictionary<string, Dictionary<string, List<KHR_character_expression_mapping.TargetWeight>>>();
             var runtimeToWireIndex = new Dictionary<int, int>();
-            var pendingMasks = new Dictionary<KHR_character_expression.ExpressionItem, ExpressionTrack>();
+            var pendingSuppressions = new Dictionary<KHR_character_expression.ExpressionItem, ExpressionTrack>();
 
             // Track which nested expression sub-extensions are actually emitted, so each can be declared once in
             // extensionsUsed (B1: nested KHR_character_expression_* were written on items but never declared).
-            bool anyMorph = false, anyJoint = false, anyTexture = false, anyMask = false;
+            bool anyMorph = false, anyJoint = false, anyTexture = false, anySuppression = false;
 
             // Process each expression track
             for (int trackIndex = 0; trackIndex < set.Expressions.Length; trackIndex++)
@@ -1268,7 +1266,7 @@ namespace UnityGLTF.KhrCharacter
                 // Build expression metadata (Phase 2)
                 var expressionItem = new KHR_character_expression.ExpressionItem
                 {
-                    Expression = track.Name,
+                    Name = track.Name,
                     Animation = animIndex
                 };
                 runtimeToWireIndex[trackIndex] = expressions.Count;
@@ -1289,13 +1287,13 @@ namespace UnityGLTF.KhrCharacter
 
                 if (texChannels.Count > 0)
                 {
-                    expressionItem.Texture =
-                        new KHR_character_expression_texture { Channels = texChannels.ToArray() };
+                    expressionItem.TextureTransform =
+                        new KHR_character_expression_texture_transform { Channels = texChannels.ToArray() };
                     anyTexture = true;
                 }
 
-                if (track.Masks != null && track.Masks.Length > 0)
-                    pendingMasks[expressionItem] = track;
+                if (track.Suppressions != null && track.Suppressions.Length > 0)
+                    pendingSuppressions[expressionItem] = track;
 
                 // blendMode/priority are intentionally NOT exported (no ratified KHR field; the baker reconstructs
                 // Additive + Priority 0), so no vendor extras are written — the expression wire stays neutral.
@@ -1303,47 +1301,48 @@ namespace UnityGLTF.KhrCharacter
                 expressions.Add(expressionItem);
             }
 
-            foreach (var pending in pendingMasks)
+            foreach (var pending in pendingSuppressions)
             {
-                var masks = new List<KHR_character_expression_mask.Mask>();
-                foreach (var mask in pending.Value.Masks)
+                var suppressions = new List<KHR_character_expression_suppression.Suppression>();
+                foreach (var suppression in pending.Value.Suppressions)
                 {
-                    if (mask == null) continue;
-                    if (!runtimeToWireIndex.TryGetValue(mask.TargetIndex, out int targetIndex)) continue;
+                    if (suppression == null) continue;
+                    if (!runtimeToWireIndex.TryGetValue(suppression.TargetIndex, out int targetIndex)) continue;
                     var companionExtensions = ParseExtensionsObject(
-                        mask.RawExtensionsJson,
-                        "Mask entry companion extensions");
-                    masks.Add(new KHR_character_expression_mask.Mask
+                        suppression.RawExtensionsJson,
+                        "Suppression entry companion extensions");
+                    string type = SuppressionTypeToken(suppression);
+                    suppressions.Add(new KHR_character_expression_suppression.Suppression
                     {
                         Target = targetIndex,
-                        Name = mask.Name,
-                        Type = !string.IsNullOrEmpty(mask.CustomType)
-                            ? mask.CustomType
-                            : mask.Type == MaskType.Block ? "block" : "blend",
-                        Amount = mask.Amount,
-                        Threshold = mask.Threshold,
+                        Type = type,
+                        Amount = suppression.HasAmount ? suppression.Amount : (double?)null,
+                        Threshold = suppression.HasThreshold
+                                    && KHR_character_expression_suppression.AllowsThreshold(type)
+                            ? suppression.Threshold
+                            : (double?)null,
                         Extensions = companionExtensions,
-                        Extras = ParseToken(mask.RawExtrasJson),
-                        AdditionalProperties = ParseObject(mask.RawAdditionalPropertiesJson),
+                        Extras = ParseToken(suppression.RawExtrasJson),
+                        AdditionalProperties = ParseObject(suppression.RawAdditionalPropertiesJson),
                     });
                     DeclareCompanionExtensions(
-                        exporter, companionExtensions, pending.Value.MaskRequiredCompanionExtensions);
+                        exporter, companionExtensions, pending.Value.SuppressionRequiredCompanionExtensions);
                 }
-                if (masks.Count > 0)
+                if (suppressions.Count > 0)
                 {
                     var companionExtensions = ParseExtensionsObject(
-                        pending.Value.MaskExtensionsJson,
-                        "Mask extension companion extensions");
-                    pending.Key.Mask = new KHR_character_expression_mask
+                        pending.Value.SuppressionExtensionsJson,
+                        "Suppression extension companion extensions");
+                    pending.Key.Suppression = new KHR_character_expression_suppression
                     {
-                        Masks = masks,
+                        Suppressions = suppressions,
                         Extensions = companionExtensions,
-                        Extras = ParseToken(pending.Value.MaskExtrasJson),
-                        AdditionalProperties = ParseObject(pending.Value.MaskAdditionalPropertiesJson),
+                        Extras = ParseToken(pending.Value.SuppressionExtrasJson),
+                        AdditionalProperties = ParseObject(pending.Value.SuppressionAdditionalPropertiesJson),
                     };
                     DeclareCompanionExtensions(
-                        exporter, companionExtensions, pending.Value.MaskRequiredCompanionExtensions);
-                    anyMask = true;
+                        exporter, companionExtensions, pending.Value.SuppressionRequiredCompanionExtensions);
+                    anySuppression = true;
                 }
             }
 
@@ -1353,8 +1352,7 @@ namespace UnityGLTF.KhrCharacter
                 foreach (var mappingSet in set.MappingSets)
                 {
                     if (mappingSet?.Targets == null) continue;
-                    if (!KHR_character_expression_mapping.IsValidMappingSetIdentifier(mappingSet.SetName))
-                        throw new InvalidMappingSetIdentifierException(mappingSet.SetName);
+                    ValidateMappingIdentifier(mappingSet.SetName);
                     var setDict = new Dictionary<string, List<KHR_character_expression_mapping.SourceWeight>>();
                     foreach (var target in mappingSet.Targets)
                     {
@@ -1389,8 +1387,7 @@ namespace UnityGLTF.KhrCharacter
                 foreach (var mappingSet in set.InputMappingSets)
                 {
                     if (mappingSet?.Commands == null) continue;
-                    if (!KHR_character_expression_mapping.IsValidMappingSetIdentifier(mappingSet.SetName))
-                        throw new InvalidMappingSetIdentifierException(mappingSet.SetName);
+                    ValidateMappingIdentifier(mappingSet.SetName);
                     var setDict = new Dictionary<string, List<KHR_character_expression_mapping.TargetWeight>>();
                     foreach (var command in mappingSet.Commands)
                     {
@@ -1434,8 +1431,8 @@ namespace UnityGLTF.KhrCharacter
                 // Only those actually emitted on at least one expression item are declared.
                 if (anyMorph) exporter.DeclareExtensionUsage(KHR_character_expression_morphtarget.EXTENSION_NAME);
                 if (anyJoint) exporter.DeclareExtensionUsage(KHR_character_expression_joint.EXTENSION_NAME);
-                if (anyTexture) exporter.DeclareExtensionUsage(KHR_character_expression_texture.EXTENSION_NAME);
-                if (anyMask) exporter.DeclareExtensionUsage(KHR_character_expression_mask.EXTENSION_NAME);
+                if (anyTexture) exporter.DeclareExtensionUsage(KHR_character_expression_texture_transform.EXTENSION_NAME);
+                if (anySuppression) exporter.DeclareExtensionUsage(KHR_character_expression_suppression.EXTENSION_NAME);
             }
 
             if (mappingDict.Count > 0 || inputMappingDict.Count > 0)
@@ -1643,7 +1640,7 @@ namespace UnityGLTF.KhrCharacter
 
         // Emits the animation channels for a texture driver via KHR_animation_pointer, mirroring the import baker
         // (KhrCharacterBaker.BakeTextureChannels). The captured channel indices populate the expression item's
-        // KHR_character_expression_texture sub-extension. GltfTextureSlot is the full glTF slot path the importer
+        // KHR_character_expression_texture_transform listing. GltfTextureSlot is the full glTF slot path the importer
         // parses (e.g. "pbrMetallicRoughness/baseColorTexture") — populated at bake (G-B).
         private void WriteTextureDriver(
             GLTFSceneExporter exporter,
@@ -1745,12 +1742,8 @@ namespace UnityGLTF.KhrCharacter
             {
                 foreach (var set in result.MappingSets)
                 {
-                    if (set == null || string.IsNullOrEmpty(set.Identifier)) continue;
-                    if (!Uri.TryCreate(set.Identifier, UriKind.Absolute, out _))
-                    {
-                        Debug.LogWarning($"[KHR_character] Skeleton mapping-set identifier '{set.Identifier}' is not an absolute URI; skipping it.");
+                    if (set == null || !KHR_character_expression_mapping.IsValidMappingSetIdentifier(set.Identifier))
                         continue;
-                    }
                     var associations = ExportAssociations(exporter, set.Associations);
                     if (associations.Count > 0) mappings[set.Identifier] = associations;
                 }
@@ -1758,13 +1751,8 @@ namespace UnityGLTF.KhrCharacter
             else if (result.Bones != null && result.Bones.Count > 0)
             {
                 var identifier = result.SelectedRig;
-                if (!string.IsNullOrEmpty(identifier))
+                if (KHR_character_expression_mapping.IsValidMappingSetIdentifier(identifier))
                 {
-                    if (!Uri.TryCreate(identifier, UriKind.Absolute, out _))
-                    {
-                        Debug.LogWarning($"[KHR_character] Skeleton mapping-set identifier '{identifier}' is not an absolute URI; skipping it.");
-                        return;
-                    }
                     var associations = ExportAssociations(exporter, result.Bones);
                     if (associations.Count > 0) mappings[identifier] = associations;
                 }
@@ -1806,7 +1794,8 @@ namespace UnityGLTF.KhrCharacter
         private void ExportReferencePose(GLTFSceneExporter exporter, GLTFRoot gltfRoot, ReferencePose pose)
         {
             if (pose == null) return;
-            var anim = new GLTFAnimation { Name = $"ReferencePose_{pose.PoseType}" };
+            string poseType = string.IsNullOrEmpty(pose.PoseType) ? ReferencePoseLabels.TPose : pose.PoseType;
+            var anim = new GLTFAnimation { Name = $"ReferencePose_{poseType}" };
             if (pose.Bones == null) return;
 
             int n = pose.Bones.Length;
@@ -1842,7 +1831,7 @@ namespace UnityGLTF.KhrCharacter
             if (anim.Channels.Count > 0)
             {
                 anim.AddExtension(KHR_character_reference_pose.EXTENSION_NAME,
-                    new KHR_character_reference_pose { PoseType = pose.PoseType });
+                    new KHR_character_reference_pose { PoseType = poseType });
                 gltfRoot.Animations.Add(anim);
                 exporter.DeclareExtensionUsage(KHR_character_reference_pose.EXTENSION_NAME);
             }

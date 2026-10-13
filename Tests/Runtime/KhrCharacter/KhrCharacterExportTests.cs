@@ -13,7 +13,7 @@ namespace UnityGLTF.KhrCharacter.Tests
 {
     /// <summary>
     /// Tests for the KHR Character export plugin: drives a real GLTFSceneExporter over an in-memory character
-    /// and verifies expression metadata (morph/joint/texture/mask/mapping), skeleton mapping, reference pose,
+    /// and verifies expression metadata (morph/joint/texture_transform/suppression/mapping), skeleton mapping, reference pose,
     /// and response-versus-ordinary-animation scope. Runs in PlayMode (the export pipeline needs the Unity runtime).
     /// </summary>
     public class KhrCharacterExportTests
@@ -48,7 +48,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         // Like ExportToGltfRoot but with multiple export roots: the exporter sees several character components
-        // and must deterministically select one rootNode designation.
+        // and must deterministically choose which one supplies the exported character data.
         private static GLTFRoot ExportRootsToGltfRoot(params GameObject[] roots)
         {
             var settings = GLTFSettings.GetDefaultSettings();
@@ -257,7 +257,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                 "KHR_character_expression root extension should be present");
             var ext = gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
             Assert.IsNotNull(ext);
-            var item = ext.Expressions.Find(e => e.Expression == "blink");
+            var item = ext.Expressions.Find(e => e.Name == "blink");
             Assert.IsNotNull(item, "the exported expression item should be present");
             Assert.IsNotNull(item.Morphtarget, "the expression should have a KHR_character_expression_morphtarget sub-extension");
             Assert.AreEqual(1, item.Morphtarget.Channels.Length, "one morph driver -> one channel");
@@ -330,7 +330,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                 "KHR_character_expression root extension should be present");
             var ext = gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
             Assert.IsNotNull(ext);
-            var item = ext.Expressions.Find(e => e.Expression == "jawOpen");
+            var item = ext.Expressions.Find(e => e.Name == "jawOpen");
             Assert.IsNotNull(item, "the exported expression item should be present");
             Assert.IsNotNull(item.Joint, "the expression should have a KHR_character_expression_joint sub-extension");
             Assert.AreEqual(2, item.Joint.Channels.Length, "both joint TRS channels should be captured");
@@ -376,8 +376,8 @@ namespace UnityGLTF.KhrCharacter.Tests
         public void ExpressionMetadataExport_IncludesTextureChannels()
         {
             // A UV-transform TextureDriver must export as two KHR_animation_pointer channels into the material's
-            // KHR_texture_transform (scale + offset), referenced by the expression item's
-            // KHR_character_expression_texture sub-extension — the exact inverse of KhrCharacterBaker's import.
+            // KHR_texture_transform (scale + offset), listed by the expression item's
+            // KHR_character_expression_texture_transform extension — the exact inverse of KhrCharacterBaker's import.
             var shader = TextureShaderOrFail();
 
             var root = new GameObject("char");
@@ -438,15 +438,16 @@ namespace UnityGLTF.KhrCharacter.Tests
                 "KHR_character_expression root extension should be present");
             var ext = gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
             Assert.IsNotNull(ext);
-            var item = ext.Expressions.Find(e => e.Expression == "scroll");
+            var item = ext.Expressions.Find(e => e.Name == "scroll");
             Assert.IsNotNull(item, "the exported expression item should be present");
-            Assert.IsNotNull(item.Texture, "the expression should have a KHR_character_expression_texture sub-extension");
-            Assert.AreEqual(2, item.Texture.Channels.Length, "a UV transform exports a scale + an offset channel");
+            Assert.IsNotNull(item.TextureTransform,
+                "the expression should have a KHR_character_expression_texture_transform extension");
+            Assert.AreEqual(2, item.TextureTransform.Channels.Length, "a UV transform exports a scale + an offset channel");
 
             // The referenced channels are KHR_animation_pointer channels into this material's texture transform.
             var anim = gltf.Animations[item.Animation];
             AnimationChannel scaleCh = null, offsetCh = null;
-            foreach (var ci in item.Texture.Channels)
+            foreach (var ci in item.TextureTransform.Channels)
             {
                 var ch = anim.Channels[ci];
                 Assert.AreEqual("pointer", ch.Target.Path, "texture channels are exported via KHR_animation_pointer");
@@ -571,8 +572,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(0.25f, (float)morphOutput.Min[0], 1e-5f);
             Assert.AreEqual(0.75f, (float)morphOutput.Max[0], 1e-5f);
 
-            Assert.AreEqual(2, item.Texture.Channels.Length);
-            foreach (var channelIndex in item.Texture.Channels)
+            Assert.AreEqual(2, item.TextureTransform.Channels.Length);
+            foreach (var channelIndex in item.TextureTransform.Channels)
             {
                 var textureSampler = animation.Samplers[animation.Channels[channelIndex].Sampler.Id];
                 Assert.AreEqual(InterpolationType.LINEAR, textureSampler.Interpolation);
@@ -650,13 +651,13 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             var gltf = ExportToGltfRoot(root);
             var extension = gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
-            var item = extension.Expressions.Find(expression => expression.Expression == "uv");
+            var item = extension.Expressions.Find(expression => expression.Name == "uv");
             var animation = gltf.Animations[item.Animation];
-            Assert.That(item.Texture.Channels, Has.Length.EqualTo(2));
+            Assert.That(item.TextureTransform.Channels, Has.Length.EqualTo(2));
 
             AnimationChannel scaleChannel = null;
             AnimationChannel offsetChannel = null;
-            foreach (var channelIndex in item.Texture.Channels)
+            foreach (var channelIndex in item.TextureTransform.Channels)
             {
                 var channel = animation.Channels[channelIndex];
                 var path = PointerPath(channel);
@@ -676,12 +677,14 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void ExpressionMetadataExport_IncludesMaskEntries()
+        public void ExpressionMetadataExport_IncludesSuppressionEntries()
         {
-            // MaskEntry[] on an expression export as a KHR_character_expression_mask sub-extension whose masks[]
-            // carry { target (expression index), type "blend"|"block", amount, threshold } — the exact inverse of
-            // KhrCharacterBaker.BuildMaskEntries. Mirrors the spec example: "happy" blend-masks "aa"; "angry"
-            // block-masks "aa". Each masking expression also has a driver channel so its item is emitted.
+            // SuppressionEntry[] on an expression export as a KHR_character_expression_suppression extension whose
+            // suppressions[] carry { target (expression index), type, amount?, threshold? } — the inverse of
+            // KhrCharacterBaker.BuildSuppressionEntries. Mirrors the spec example: "happy" blend-suppresses "aa";
+            // "angry" block-suppresses "aa". Each suppressing expression also has a driver channel so its item is
+            // emitted. No suppression writes a name, a blend never writes a threshold, and only authored amounts
+            // and thresholds are written back.
             var root = new GameObject("char");
             _created.Add(root);
             var ctrl = new GameObject("ctrl").transform;
@@ -691,24 +694,50 @@ namespace UnityGLTF.KhrCharacter.Tests
             {
                 Expressions = new[]
                 {
-                    new ExpressionTrack // index 0: the lip-sync phoneme being masked
+                    new ExpressionTrack // index 0: the lip-sync phoneme being suppressed
                     {
                         Name = "aa", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
                     },
-                    new ExpressionTrack // index 1: blend-masks "aa" by 0.5
+                    new ExpressionTrack // index 1: blend-suppresses "aa" by 0.5; its authored threshold is not written
                     {
                         Name = "happy", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
-                        Masks = new[] { new MaskEntry { TargetIndex = 0, Type = MaskType.Blend, Amount = 0.5f, Threshold = 0f } },
+                        Suppressions = new[]
+                        {
+                            new SuppressionEntry
+                            {
+                                TargetIndex = 0, Type = SuppressionType.Blend,
+                                Amount = 0.5, HasAmount = true, Threshold = 0.25, HasThreshold = true,
+                            },
+                        },
                     },
-                    new ExpressionTrack // index 2: block-masks "aa" above threshold 0.2
+                    new ExpressionTrack // index 2: block-suppresses "aa" above threshold 0.2
                     {
                         Name = "angry", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
-                        Masks = new[] { new MaskEntry { TargetIndex = 0, Type = MaskType.Block, Amount = 1f, Threshold = 0.2f } },
+                        Suppressions = new[]
+                        {
+                            new SuppressionEntry
+                            {
+                                TargetIndex = 0, Type = SuppressionType.Block,
+                                Amount = 1, HasAmount = true, Threshold = 0.2, HasThreshold = true,
+                            },
+                        },
                     },
-                    new ExpressionTrack // index 3: application-defined mask type, with blend fallback at runtime
+                    new ExpressionTrack // index 3: application-defined type, factor 1 at runtime
                     {
                         Name = "soft", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
-                        Masks = new[] { new MaskEntry { TargetIndex = 0, Type = MaskType.Identity, CustomType = "3D_3d_mask", Amount = 0.25f } },
+                        Suppressions = new[]
+                        {
+                            new SuppressionEntry
+                            {
+                                TargetIndex = 0, Type = SuppressionType.Identity, CustomType = "3D_3d_suppression",
+                                Amount = 0.1, HasAmount = true, Threshold = 0.3, HasThreshold = true,
+                            },
+                        },
+                    },
+                    new ExpressionTrack // index 4: amount and threshold not authored
+                    {
+                        Name = "plain", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
+                        Suppressions = new[] { new SuppressionEntry { TargetIndex = 0, Type = SuppressionType.Block } },
                     },
                 },
             };
@@ -720,54 +749,72 @@ namespace UnityGLTF.KhrCharacter.Tests
                 "KHR_character_expression root extension should be present");
             var ext = gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
             Assert.IsNotNull(ext);
+            CollectionAssert.Contains(gltf.ExtensionsUsed, KHR_character_expression_suppression.EXTENSION_NAME);
 
             // Exported entries are contiguous here, so wire and runtime indices are identical.
             var nameToIndex = new Dictionary<string, int>();
-            for (int i = 0; i < ext.Expressions.Count; i++) nameToIndex[ext.Expressions[i].Expression] = i;
+            for (int i = 0; i < ext.Expressions.Count; i++) nameToIndex[ext.Expressions[i].Name] = i;
             var wireToTrackIndex = new Dictionary<int, int>();
             for (int i = 0; i < ext.Expressions.Count; i++) wireToTrackIndex[i] = i;
 
-            // "aa" carries no mask of its own.
-            var aa = ext.Expressions.Find(e => e.Expression == "aa");
+            // "aa" carries no suppression of its own.
+            var aa = ext.Expressions.Find(e => e.Name == "aa");
             Assert.IsNotNull(aa);
-            Assert.IsNull(aa.Mask, "an expression with no MaskEntry must not emit an (empty) mask sub-extension");
+            Assert.IsNull(aa.Suppression,
+                "an expression with no SuppressionEntry must not emit an (empty) suppression extension");
 
-            // "happy": one blend mask on "aa", amount 0.5.
-            var happy = ext.Expressions.Find(e => e.Expression == "happy");
-            Assert.IsNotNull(happy);
-            Assert.IsNotNull(happy.Mask, "happy should carry a KHR_character_expression_mask sub-extension");
-            Assert.AreEqual(1, happy.Mask.Masks.Count);
-            Assert.AreEqual(nameToIndex["aa"], happy.Mask.Masks[0].Target);
-            Assert.AreEqual("blend", happy.Mask.Masks[0].Type);
-            Assert.AreEqual(0.5f, happy.Mask.Masks[0].Amount, 1e-5f);
+            // "happy": one blend suppression on "aa", amount 0.5, no threshold.
+            var happy = ext.Expressions.Find(e => e.Name == "happy");
+            Assert.IsNotNull(happy?.Suppression, "happy should carry a KHR_character_expression_suppression extension");
+            var happyWire = (JObject)((JArray)((JObject)happy.Suppression.Serialize().Value)["suppressions"])[0];
+            Assert.AreEqual(nameToIndex["aa"], happyWire["target"].Value<int>());
+            Assert.AreEqual("blend", happyWire["type"].Value<string>());
+            Assert.AreEqual(0.5, happyWire["amount"].Value<double>());
+            Assert.IsNull(happyWire["threshold"], "an exporter must not write a threshold on a blend suppression");
+            Assert.IsNull(happyWire["name"], "suppressions carry no name");
 
-            // "angry": one block mask on "aa", threshold 0.2.
-            var angry = ext.Expressions.Find(e => e.Expression == "angry");
-            Assert.IsNotNull(angry);
-            Assert.IsNotNull(angry.Mask);
-            Assert.AreEqual("block", angry.Mask.Masks[0].Type);
-            Assert.AreEqual(0.2f, angry.Mask.Masks[0].Threshold, 1e-5f);
+            // "angry": one block suppression on "aa", threshold 0.2.
+            var angry = ext.Expressions.Find(e => e.Name == "angry");
+            var angryWire = (JObject)((JArray)((JObject)angry.Suppression.Serialize().Value)["suppressions"])[0];
+            Assert.AreEqual("block", angryWire["type"].Value<string>());
+            Assert.AreEqual(1d, angryWire["amount"].Value<double>());
+            Assert.AreEqual(0.2, angryWire["threshold"].Value<double>());
+            Assert.IsNull(angryWire["name"]);
 
-            // Round-trip through the real import baker: exported masks resolve back to the original MaskEntry.
-            var happyEntries = KhrCharacterBaker.BuildMaskEntries(happy.Mask, nameToIndex["happy"], wireToTrackIndex);
+            // Round-trip through the real import baker: exported suppressions resolve back to the original entries.
+            var happyEntries = KhrCharacterBaker.BuildSuppressionEntries(
+                happy.Suppression, nameToIndex["happy"], wireToTrackIndex);
             Assert.AreEqual(1, happyEntries.Length);
             Assert.AreEqual(nameToIndex["aa"], happyEntries[0].TargetIndex);
-            Assert.AreEqual(MaskType.Blend, happyEntries[0].Type);
-            Assert.AreEqual(0.5f, happyEntries[0].Amount, 1e-5f);
+            Assert.AreEqual(SuppressionType.Blend, happyEntries[0].Type);
+            Assert.AreEqual(0.5, happyEntries[0].Amount);
+            Assert.IsFalse(happyEntries[0].HasThreshold);
 
-            var angryEntries = KhrCharacterBaker.BuildMaskEntries(angry.Mask, nameToIndex["angry"], wireToTrackIndex);
+            var angryEntries = KhrCharacterBaker.BuildSuppressionEntries(
+                angry.Suppression, nameToIndex["angry"], wireToTrackIndex);
             Assert.AreEqual(1, angryEntries.Length);
             Assert.AreEqual(nameToIndex["aa"], angryEntries[0].TargetIndex);
-            Assert.AreEqual(MaskType.Block, angryEntries[0].Type);
-            Assert.AreEqual(0.2f, angryEntries[0].Threshold, 1e-5f);
+            Assert.AreEqual(SuppressionType.Block, angryEntries[0].Type);
+            Assert.AreEqual(0.2, angryEntries[0].Threshold);
 
-            var soft = ext.Expressions.Find(e => e.Expression == "soft");
-            Assert.IsNotNull(soft?.Mask);
-            Assert.AreEqual("3D_3d_mask", soft.Mask.Masks[0].Type,
-                "application-defined mask type must be preserved on export");
-            var softEntries = KhrCharacterBaker.BuildMaskEntries(soft.Mask, nameToIndex["soft"], wireToTrackIndex);
-            Assert.AreEqual(MaskType.Identity, softEntries[0].Type);
-            Assert.AreEqual("3D_3d_mask", softEntries[0].CustomType);
+            // The custom type keeps its token and writes back the exact authored doubles it does not interpret.
+            var soft = ext.Expressions.Find(e => e.Name == "soft");
+            var softWire = (JObject)((JArray)((JObject)soft.Suppression.Serialize().Value)["suppressions"])[0];
+            Assert.AreEqual("3D_3d_suppression", softWire["type"].Value<string>(),
+                "application-defined suppression type must be preserved on export");
+            Assert.AreEqual(0.1, softWire["amount"].Value<double>());
+            Assert.AreEqual(0.3, softWire["threshold"].Value<double>());
+            var softEntries = KhrCharacterBaker.BuildSuppressionEntries(
+                soft.Suppression, nameToIndex["soft"], wireToTrackIndex);
+            Assert.AreEqual(SuppressionType.Identity, softEntries[0].Type);
+            Assert.AreEqual("3D_3d_suppression", softEntries[0].CustomType);
+
+            // Unauthored values stay omitted.
+            var plain = ext.Expressions.Find(e => e.Name == "plain");
+            var plainWire = (JObject)((JArray)((JObject)plain.Suppression.Serialize().Value)["suppressions"])[0];
+            Assert.AreEqual("block", plainWire["type"].Value<string>());
+            Assert.IsNull(plainWire["amount"]);
+            Assert.IsNull(plainWire["threshold"]);
         }
 
         [Test]
@@ -846,8 +893,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(0.8f, baked[1].Weight, 1e-5f);
         }
 
-        [Test]
-        public void ExpressionMetadataExport_InvalidMappingSetUriIsRejected()
+        private GameObject MappingIdentifierCharacter(string identifier)
         {
             var root = new GameObject("char");
             _created.Add(root);
@@ -868,7 +914,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                 {
                     new ExpressionMappingSet
                     {
-                        SetName = "vrm",
+                        SetName = identifier,
                         Targets = new[]
                         {
                             new MappingTarget
@@ -876,16 +922,36 @@ namespace UnityGLTF.KhrCharacter.Tests
                                 TargetName = "Smile",
                                 Contributions = new[]
                                 {
-                                    new MappingContribution { SourceIndex = 0, Weight = 1f },
+                                    new MappingContribution { SourceIndex = 0, Name = "smile", Weight = 1 },
                                 },
                             },
                         },
                     },
                 },
             });
+            return root;
+        }
 
-            var exception = Assert.Catch<System.InvalidOperationException>(() => ExportToGltfRoot(root));
-            StringAssert.Contains("'vrm' is not a valid absolute URI", exception.Message);
+        [TestCase("vrm")]
+        [TestCase("relative/v1")]
+        public void ExpressionMetadataExport_NonUriMappingSetIdentifierIsExported(string identifier)
+        {
+            var gltf = ExportToGltfRoot(MappingIdentifierCharacter(identifier));
+
+            var mappingExt = gltf.Extensions[KHR_character_expression_mapping.EXTENSION_NAME]
+                as KHR_character_expression_mapping;
+            Assert.IsNotNull(mappingExt);
+            Assert.IsTrue(mappingExt.ExpressionSetMappings.ContainsKey(identifier),
+                "any nonempty identifier is a valid opaque mapping-set key");
+            Assert.AreEqual(1d, mappingExt.ExpressionSetMappings[identifier]["Smile"][0].Weight);
+        }
+
+        [Test]
+        public void ExpressionMetadataExport_EmptyMappingSetIdentifierIsRejected()
+        {
+            var exception = Assert.Catch<System.InvalidOperationException>(
+                () => ExportToGltfRoot(MappingIdentifierCharacter("")));
+            StringAssert.Contains("mapping-set identifier must be a nonempty string", exception.Message);
         }
 
         [Test]
@@ -1263,7 +1329,7 @@ namespace UnityGLTF.KhrCharacter.Tests
 
         [TestCase(true)]
         [TestCase(false)]
-        public void OrphanMaskOrMappingMetadataAbortsWholeCharacterExport(bool maskMetadata)
+        public void OrphanSuppressionOrMappingMetadataAbortsWholeCharacterExport(bool suppressionMetadata)
         {
             var root = new GameObject("char");
             _created.Add(root);
@@ -1274,7 +1340,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                 JointDrivers = new[] { RotationDriver(root.transform) },
             };
             var set = new CharacterExpressionSet { Expressions = new[] { track } };
-            if (maskMetadata) track.MaskExtrasJson = "{\"orphan\":true}";
+            if (suppressionMetadata) track.SuppressionExtrasJson = "{\"orphan\":true}";
             else set.MappingExtrasJson = "{\"orphan\":true}";
             root.AddComponent<ExpressionController>().Initialize(set);
 
@@ -1299,16 +1365,17 @@ namespace UnityGLTF.KhrCharacter.Tests
                     },
                     new ExpressionTrack
                     {
-                        Name = "masking",
+                        Name = "suppressing",
                         Domains = ExpressionDomain.Joint,
                         JointDrivers = new[] { RotationDriver(root.transform) },
-                        Masks = new[]
+                        Suppressions = new[]
                         {
-                            new MaskEntry
+                            new SuppressionEntry
                             {
                                 TargetIndex = 0,
-                                Type = MaskType.Blend,
-                                Amount = 1f,
+                                Type = SuppressionType.Blend,
+                                Amount = 1,
+                                HasAmount = true,
                                 RawExtensionsJson = "{\"ACME_bad\":5}",
                             },
                         },
@@ -1337,14 +1404,14 @@ namespace UnityGLTF.KhrCharacter.Tests
                     },
                     new ExpressionTrack
                     {
-                        Name = "masking",
+                        Name = "suppressing",
                         Domains = ExpressionDomain.Joint,
                         JointDrivers = new[] { RotationDriver(root.transform) },
-                        Masks = new[]
+                        Suppressions = new[]
                         {
-                            new MaskEntry { TargetIndex = 0, Type = MaskType.Blend, Amount = 1f },
+                            new SuppressionEntry { TargetIndex = 0, Type = SuppressionType.Blend, Amount = 1, HasAmount = true },
                         },
-                        MaskRequiredCompanionExtensions = new[] { "ACME_missing" },
+                        SuppressionRequiredCompanionExtensions = new[] { "ACME_missing" },
                     },
                 },
             });
@@ -1354,7 +1421,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void ExpressionMetadataExport_PreservesMaskMappingPayloadAndCompanionRequiredness()
+        public void ExpressionMetadataExport_PreservesSuppressionMappingPayloadAndCompanionRequiredness()
         {
             var root = new GameObject("char");
             _created.Add(root);
@@ -1375,24 +1442,25 @@ namespace UnityGLTF.KhrCharacter.Tests
                         Name = "source",
                         Domains = ExpressionDomain.Joint,
                         JointDrivers = new[] { RotationDriver(ctrl) },
-                        MaskExtensionsJson =
-                            "{\"ACME_mask_root\":{\"value\":1},\"ACME_optional\":{\"value\":2}}",
-                        MaskExtrasJson = "[\"root-mask\",3]",
-                        MaskAdditionalPropertiesJson = "{\"futureMaskRootField\":4}",
-                        MaskRequiredCompanionExtensions = new[] { "ACME_mask_root", "ACME_mask_entry" },
-                        Masks = new[]
+                        SuppressionExtensionsJson =
+                            "{\"ACME_suppression_root\":{\"value\":1},\"ACME_optional\":{\"value\":2}}",
+                        SuppressionExtrasJson = "[\"root-suppression\",3]",
+                        SuppressionAdditionalPropertiesJson = "{\"futureSuppressionRootField\":4}",
+                        SuppressionRequiredCompanionExtensions = new[] { "ACME_suppression_root", "ACME_suppression_entry" },
+                        Suppressions = new[]
                         {
-                            new MaskEntry
+                            new SuppressionEntry
                             {
                                 TargetIndex = 0,
-                                Name = "target",
-                                Type = MaskType.Identity,
-                                CustomType = "ACME_mask_entry",
-                                Amount = 0.5f,
-                                Threshold = 0.25f,
-                                RawExtensionsJson = "{\"ACME_mask_entry\":{\"value\":5}}",
+                                Type = SuppressionType.Identity,
+                                CustomType = "ACME_suppression_entry",
+                                Amount = 0.5,
+                                HasAmount = true,
+                                Threshold = 0.25,
+                                HasThreshold = true,
+                                RawExtensionsJson = "{\"ACME_suppression_entry\":{\"value\":5}}",
                                 RawExtrasJson = "false",
-                                RawAdditionalPropertiesJson = "{\"futureMaskEntryField\":6}",
+                                RawAdditionalPropertiesJson = "{\"futureSuppressionEntryField\":6}",
                             },
                         },
                     },
@@ -1463,17 +1531,18 @@ namespace UnityGLTF.KhrCharacter.Tests
             var gltf = ExportToGltfRoot(root);
             var expressions = gltf.Extensions[KHR_character_expression.EXTENSION_NAME]
                 as KHR_character_expression;
-            var source = expressions.Expressions.Find(item => item.Expression == "source");
-            var mask = source.Mask;
-            Assert.AreEqual(1, mask.Extensions["ACME_mask_root"]["value"].Value<int>());
-            Assert.AreEqual("root-mask", mask.Extras[0].Value<string>());
-            Assert.AreEqual(4, mask.AdditionalProperties["futureMaskRootField"].Value<int>());
-            Assert.AreEqual("target", mask.Masks[0].Name);
-            Assert.AreEqual("ACME_mask_entry", mask.Masks[0].Type);
-            Assert.AreEqual(5, mask.Masks[0].Extensions["ACME_mask_entry"]["value"].Value<int>());
-            Assert.IsFalse(mask.Masks[0].Extras.Value<bool>());
+            var source = expressions.Expressions.Find(item => item.Name == "source");
+            var suppression = source.Suppression;
+            Assert.AreEqual(1, suppression.Extensions["ACME_suppression_root"]["value"].Value<int>());
+            Assert.AreEqual("root-suppression", suppression.Extras[0].Value<string>());
+            Assert.AreEqual(4, suppression.AdditionalProperties["futureSuppressionRootField"].Value<int>());
+            Assert.AreEqual("ACME_suppression_entry", suppression.Suppressions[0].Type);
+            Assert.AreEqual(0.5, suppression.Suppressions[0].Amount);
+            Assert.AreEqual(0.25, suppression.Suppressions[0].Threshold);
+            Assert.AreEqual(5, suppression.Suppressions[0].Extensions["ACME_suppression_entry"]["value"].Value<int>());
+            Assert.IsFalse(suppression.Suppressions[0].Extras.Value<bool>());
             Assert.AreEqual(6,
-                mask.Masks[0].AdditionalProperties["futureMaskEntryField"].Value<int>());
+                suppression.Suppressions[0].AdditionalProperties["futureSuppressionEntryField"].Value<int>());
 
             var mapping = gltf.Extensions[KHR_character_expression_mapping.EXTENSION_NAME]
                 as KHR_character_expression_mapping;
@@ -1493,7 +1562,7 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             foreach (var required in new[]
                      {
-                         "ACME_mask_root", "ACME_mask_entry", "ACME_mapping_root",
+                         "ACME_suppression_root", "ACME_suppression_entry", "ACME_mapping_root",
                          "ACME_mapping_entry", "ACME_input_entry",
                      })
             {
@@ -1522,7 +1591,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                         Name = "source",
                         Domains = ExpressionDomain.Joint,
                         JointDrivers = new[] { RotationDriver(ctrl) },
-                        Masks = new[] { new MaskEntry { TargetIndex = 2, Type = MaskType.Blend, Amount = 1f } },
+                        Suppressions = new[] { new SuppressionEntry { TargetIndex = 2, Type = SuppressionType.Blend } },
                     },
                     new ExpressionTrack
                     {
@@ -1558,8 +1627,8 @@ namespace UnityGLTF.KhrCharacter.Tests
         {
             // B1: every nested KHR_character_expression_* sub-extension actually emitted on an expression item must be
             // declared in extensionsUsed (deduped, exactly once), and NONE of them in extensionsRequired (they stay
-            // non-required, consistent with the parent KHR_character_expression). Exercises morph + joint + texture +
-            // mask in one character so all four nested tokens are emitted.
+            // non-required, consistent with the parent KHR_character_expression). Exercises morph + joint +
+            // texture_transform + suppression in one character so all four nested tokens are emitted.
             var shader = TextureShaderOrFail();
 
             var root = MakeUvCharacter(shader, out var mr); // root + quad + material (texture domain)
@@ -1617,14 +1686,17 @@ namespace UnityGLTF.KhrCharacter.Tests
                             },
                         },
                     },
-                    new ExpressionTrack // 3: the masked target (joint so its item is emitted)
+                    new ExpressionTrack // 3: the suppressed target (joint so its item is emitted)
                     {
                         Name = "aa", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
                     },
-                    new ExpressionTrack // 4: joint + a blend mask on "aa" (emits both _joint and _mask)
+                    new ExpressionTrack // 4: joint + a blend suppression on "aa" (emits both _joint and _suppression)
                     {
                         Name = "happy", Domains = ExpressionDomain.Joint, JointDrivers = new[] { RotationDriver(ctrl) },
-                        Masks = new[] { new MaskEntry { TargetIndex = 3, Type = MaskType.Blend, Amount = 0.5f, Threshold = 0f } },
+                        Suppressions = new[]
+                        {
+                            new SuppressionEntry { TargetIndex = 3, Type = SuppressionType.Blend, Amount = 0.5, HasAmount = true },
+                        },
                     },
                 },
             };
@@ -1639,8 +1711,8 @@ namespace UnityGLTF.KhrCharacter.Tests
                 KHR_character_expression.EXTENSION_NAME,
                 KHR_character_expression_morphtarget.EXTENSION_NAME,
                 KHR_character_expression_joint.EXTENSION_NAME,
-                KHR_character_expression_texture.EXTENSION_NAME,
-                KHR_character_expression_mask.EXTENSION_NAME,
+                KHR_character_expression_texture_transform.EXTENSION_NAME,
+                KHR_character_expression_suppression.EXTENSION_NAME,
             };
             foreach (var token in nestedTokens)
             {
@@ -1653,13 +1725,15 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsFalse(gltf.ExtensionsUsed.Contains(KhrCharacterExtensionNames.XmpJsonLd),
                 "metadata-free character assets do not declare an XMP dependency");
             Assert.IsFalse(gltf.Extensions.ContainsKey(KhrCharacterExtensionNames.XmpJsonLd));
+            foreach (var former in new[] { "KHR_character_expression_texture", "KHR_character_expression_mask" })
+                Assert.IsFalse(gltf.ExtensionsUsed.Contains(former), $"the former name {former} is never written");
         }
 
         [Test]
         public void ExtensionsUsed_MorphOnly_DeclaresOnlyMorphtargetNested()
         {
             // B1 guard: a morph-only character declares KHR_character_expression_morphtarget but NONE of the other
-            // nested tokens (no spurious _joint / _texture / _mask declarations).
+            // nested tokens (no spurious _joint / _texture_transform / _suppression declarations).
             var root = new GameObject("char");
             _created.Add(root);
 
@@ -1707,16 +1781,16 @@ namespace UnityGLTF.KhrCharacter.Tests
                 "morph-only must declare KHR_character_expression_morphtarget");
             Assert.IsFalse(gltf.ExtensionsUsed.Contains(KHR_character_expression_joint.EXTENSION_NAME),
                 "morph-only must NOT declare KHR_character_expression_joint");
-            Assert.IsFalse(gltf.ExtensionsUsed.Contains(KHR_character_expression_texture.EXTENSION_NAME),
-                "morph-only must NOT declare KHR_character_expression_texture");
-            Assert.IsFalse(gltf.ExtensionsUsed.Contains(KHR_character_expression_mask.EXTENSION_NAME),
-                "morph-only must NOT declare KHR_character_expression_mask");
+            Assert.IsFalse(gltf.ExtensionsUsed.Contains(KHR_character_expression_texture_transform.EXTENSION_NAME),
+                "morph-only must NOT declare KHR_character_expression_texture_transform");
+            Assert.IsFalse(gltf.ExtensionsUsed.Contains(KHR_character_expression_suppression.EXTENSION_NAME),
+                "morph-only must NOT declare KHR_character_expression_suppression");
         }
 
         [Test]
         public void SkeletonMappingExport_WritesVocabularyAssociationDictionary()
         {
-            // The outer key is a version-stable vocabulary URI. Role keys and their node associations are preserved;
+            // The outer key is the mapping-set identifier. Role keys and their node associations are preserved;
             // no Unity Humanoid completeness or anatomy semantics are written into the extension.
             var root = new GameObject("char");
             _created.Add(root);
@@ -1741,7 +1815,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             var ext = gltf.Extensions[KHR_character_skeleton_mapping.EXTENSION_NAME] as KHR_character_skeleton_mapping;
             Assert.IsNotNull(ext);
             Assert.IsTrue(ext.SkeletalRigMappings.ContainsKey(SkeletonVocab),
-                "the absolute vocabulary URI keys the mapping set");
+                "the mapping-set identifier keys the mapping set");
             var rig = ext.SkeletalRigMappings[SkeletonVocab];
 
             // Canonical target-vocabulary joint names (keys) -> source node INDICES (values) into nodes[].
@@ -1786,7 +1860,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                 SelectedRig = SkeletonVocab,
                 ReferencePose = new ReferencePose
                 {
-                    PoseType = "TPose",
+                    PoseType = ReferencePoseLabels.TPose,
                     Bones = new[] { bone },
                     LocalPositions = new[] { pos },
                     LocalRotations = new[] { rot },
@@ -1804,6 +1878,9 @@ namespace UnityGLTF.KhrCharacter.Tests
                     break;
                 }
             Assert.IsNotNull(refAnim, "an animation tagged KHR_character_reference_pose should be exported");
+            Assert.AreEqual("ReferencePose_t_pose", refAnim.Name);
+            var poseJson = (JObject)refAnim.Extensions[KHR_character_reference_pose.EXTENSION_NAME].Serialize().Value;
+            Assert.AreEqual("t_pose", poseJson["poseType"].Value<string>(), "poseType is always written explicitly");
             Assert.AreEqual(3, refAnim.Channels.Count, "one translation + rotation + scale channel for the single bone");
 
             AnimationChannel tCh = null, rCh = null, sCh = null;
@@ -1867,12 +1944,12 @@ namespace UnityGLTF.KhrCharacter.Tests
                 {
                     new ReferencePose
                     {
-                        AnimationIndex = 4, PoseType = "TPose", Bones = new[] { hips },
+                        AnimationIndex = 4, PoseType = ReferencePoseLabels.TPose, Bones = new[] { hips },
                         LocalPositions = new[] { Vector3.one },
                     },
                     new ReferencePose
                     {
-                        AnimationIndex = 9, PoseType = "TPose", Bones = new[] { head },
+                        AnimationIndex = 9, PoseType = ReferencePoseLabels.TPose, Bones = new[] { head },
                         LocalPositions = new[] { Vector3.up },
                     },
                 },
@@ -1893,6 +1970,84 @@ namespace UnityGLTF.KhrCharacter.Tests
                     poseCount++;
             Assert.AreEqual(2, poseCount,
                 "duplicate poseType labels do not collapse distinct animation-indexed reference poses");
+        }
+
+        [TestCase(null, "t_pose")]
+        [TestCase("", "t_pose")]
+        [TestCase("T_POSE", "T_POSE")]
+        [TestCase("TPose", "TPose")]
+        public void ReferencePoseExport_WritesResolvedLabelExplicitly(string authoredLabel, string expectedLabel)
+        {
+            var root = new GameObject("char");
+            _created.Add(root);
+            var hips = new GameObject("Hips").transform; hips.SetParent(root.transform, false);
+            root.AddComponent<SkeletonMap>().Bind(new SkeletonMappingResult
+            {
+                Bones = new Dictionary<string, Transform> { { "hips", hips } },
+                SelectedRig = SkeletonVocab,
+                ReferencePose = new ReferencePose
+                {
+                    PoseType = authoredLabel, Bones = new[] { hips }, LocalPositions = new[] { Vector3.one },
+                },
+            });
+
+            var gltf = ExportToGltfRoot(root);
+
+            GLTFAnimation refAnim = null;
+            foreach (var animation in gltf.Animations)
+                if (animation.Extensions != null
+                    && animation.Extensions.ContainsKey(KHR_character_reference_pose.EXTENSION_NAME))
+                    refAnim = animation;
+            Assert.IsNotNull(refAnim);
+            var poseJson = (JObject)refAnim.Extensions[KHR_character_reference_pose.EXTENSION_NAME].Serialize().Value;
+            Assert.AreEqual(expectedLabel, poseJson["poseType"].Value<string>(),
+                "an unset label resolves to t_pose; any other label is written verbatim");
+            Assert.AreEqual("ReferencePose_" + expectedLabel, refAnim.Name);
+        }
+
+        [TestCase("vrm")]
+        [TestCase("relative/v1")]
+        public void SkeletonMappingExport_NonUriIdentifiersAreExported(string identifier)
+        {
+            var root = new GameObject("char");
+            _created.Add(root);
+            var hips = new GameObject("Hips").transform; hips.SetParent(root.transform, false);
+            var head = new GameObject("Head").transform; head.SetParent(hips, false);
+            root.AddComponent<SkeletonMap>().Bind(new SkeletonMappingResult
+            {
+                MappingSets = new[]
+                {
+                    new SkeletonMappingSetResult
+                    {
+                        Identifier = identifier,
+                        Associations = new Dictionary<string, Transform> { { "hips", hips } },
+                    },
+                },
+                Bones = new Dictionary<string, Transform> { { "hips", hips } },
+                SelectedRig = identifier,
+            });
+
+            var gltf = ExportToGltfRoot(root);
+
+            var mapping = gltf.Extensions[KHR_character_skeleton_mapping.EXTENSION_NAME]
+                as KHR_character_skeleton_mapping;
+            Assert.IsNotNull(mapping, "a nonempty non-URI identifier is valid and must not be skipped");
+            Assert.IsTrue(mapping.SkeletalRigMappings.ContainsKey(identifier));
+            Assert.AreEqual("Hips", gltf.Nodes[mapping.SkeletalRigMappings[identifier]["hips"].Node].Name);
+
+            var selectedOnly = new GameObject("selected");
+            _created.Add(selectedOnly);
+            var bone = new GameObject("Hips").transform; bone.SetParent(selectedOnly.transform, false);
+            selectedOnly.AddComponent<SkeletonMap>().Bind(new SkeletonMappingResult
+            {
+                Bones = new Dictionary<string, Transform> { { "hips", bone } },
+                SelectedRig = identifier,
+            });
+            var selectedMapping = ExportToGltfRoot(selectedOnly).Extensions[KHR_character_skeleton_mapping.EXTENSION_NAME]
+                as KHR_character_skeleton_mapping;
+            Assert.IsNotNull(selectedMapping);
+            Assert.IsTrue(selectedMapping.SkeletalRigMappings.ContainsKey(identifier),
+                "the adapter-selected rig is exported under its nonempty identifier");
         }
 
         [Test]
@@ -1943,7 +2098,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             var ext = gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
             Assert.IsNotNull(ext);
             Assert.AreEqual(1, ext.Expressions.Count, "only the explicitly authored response should be an expression item");
-            Assert.AreEqual("jawOpen", ext.Expressions[0].Expression);
+            Assert.AreEqual("jawOpen", ext.Expressions[0].Name);
 
             // The ordinary animation exports as a plain glTF animation...
             int waveIndex = gltf.Animations.FindIndex(a => a.Name == "Wave");
@@ -2011,22 +2166,22 @@ namespace UnityGLTF.KhrCharacter.Tests
                 "exporting rootA should still emit KHR_character_expression");
             var ext = gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
             Assert.IsNotNull(ext);
-            Assert.IsNotNull(ext.Expressions.Find(e => e.Expression == "A_only"),
+            Assert.IsNotNull(ext.Expressions.Find(e => e.Name == "A_only"),
                 "the exported expression must come from the export root (rootA)");
-            Assert.IsNull(ext.Expressions.Find(e => e.Expression == "B_only"),
+            Assert.IsNull(ext.Expressions.Find(e => e.Name == "B_only"),
                 "an unrelated character elsewhere in the scene must NOT leak into rootA's export (R3 isolation)");
 
             // rootB's hierarchy must not appear in rootA's export at all.
             Assert.IsFalse(gltf.Nodes.Exists(n => n.Name == "ctrlB"),
                 "nodes from the unrelated character (rootB) must not be present in rootA's export");
 
-            // Stronger: the root KHR_character.rootNode must resolve to rootA's own node, not rootB's.
+            // The designation is the marker object only: it names no node.
             Assert.IsTrue(gltf.Extensions.ContainsKey(KHR_character.EXTENSION_NAME), "root KHR_character should be present");
             var rootExt = gltf.Extensions[KHR_character.EXTENSION_NAME] as KHR_character;
             Assert.IsNotNull(rootExt);
-            Assert.IsTrue(rootExt.RootNode.HasValue, "KHR_character.rootNode should be set");
-            Assert.AreEqual("charA", gltf.Nodes[rootExt.RootNode.Value].Name,
-                "rootNode must point at the exported root (charA), proving root-scoped discovery");
+            Assert.AreEqual("{}", rootExt.Serialize().Value.ToString(Newtonsoft.Json.Formatting.None),
+                "KHR_character serializes as an empty marker object");
+            CollectionAssert.Contains(gltf.ExtensionsUsed, KHR_character.EXTENSION_NAME);
         }
 
         [Test]
@@ -2072,10 +2227,10 @@ namespace UnityGLTF.KhrCharacter.Tests
                 if (!(item.Extras is JObject extras)) continue;
                 // Tolerate future non-vendor extras, but fail hard on ANY vendor (META_*) token.
                 Assert.IsNull(extras["META_character_runtime"],
-                    $"expression '{item.Expression}' must not carry the META_character_runtime vendor token (wire neutrality)");
+                    $"expression '{item.Name}' must not carry the META_character_runtime vendor token (wire neutrality)");
                 foreach (var prop in extras.Properties())
                     StringAssert.DoesNotStartWith("META_", prop.Name,
-                        $"expression '{item.Expression}' must not carry any META_* vendor extras token (wire neutrality)");
+                        $"expression '{item.Name}' must not carry any META_* vendor extras token (wire neutrality)");
             }
         }
 
@@ -2113,13 +2268,13 @@ namespace UnityGLTF.KhrCharacter.Tests
         {
             var ext = gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
             Assert.IsNotNull(ext);
-            var item = ext.Expressions.Find(e => e.Expression == "scroll");
+            var item = ext.Expressions.Find(e => e.Name == "scroll");
             Assert.IsNotNull(item, "the exported expression item should be present");
-            Assert.IsNotNull(item.Texture, "the expression should carry a texture sub-extension");
+            Assert.IsNotNull(item.TextureTransform, "the expression should carry a texture sub-extension");
 
             var anim = gltf.Animations[item.Animation];
             AnimationChannel scaleCh = null, offsetCh = null;
-            foreach (var ci in item.Texture.Channels)
+            foreach (var ci in item.TextureTransform.Channels)
             {
                 var ch = anim.Channels[ci];
                 var path = PointerPath(ch);
@@ -2678,13 +2833,14 @@ namespace UnityGLTF.KhrCharacter.Tests
                 "KHR_node_lookat_target must not be declared when nothing was emitted");
         }
 
-        // ── #6: Deterministic root designation with multiple character-like roots ─────────────────────────
+        // ── #6: Deterministic character choice with multiple character-like roots ─────────────────────────
 
         [Test]
         public void MultiCharacter_ExportsFirstDeterministically_AndWarns()
         {
-            // KHR_character carries one rootNode designation. With two character roots in the same export set, the
-            // exporter designates the first RootTransforms entry and leaves the other as ordinary glTF content.
+            // KHR_character covers at most one character per asset. With two character roots in the same export set,
+            // the exporter takes the character data from the first RootTransforms entry and exports the other as
+            // ordinary glTF content.
             var rootA = new GameObject("charA");
             _created.Add(rootA);
             var ctrlA = new GameObject("ctrlA").transform; ctrlA.SetParent(rootA.transform, false);
@@ -2708,25 +2864,27 @@ namespace UnityGLTF.KhrCharacter.Tests
             });
 
             // Expect the multi-character warning (consumes it so it does not fail the run).
-            LogAssert.Expect(LogType.Warning, new Regex("Export contains 2 character roots.*charA.*charB"));
+            LogAssert.Expect(LogType.Warning, new Regex(
+                "Export contains 2 character roots.*charA.*charB.*one character per asset; additional characters " +
+                "are out of scope and are exported as ordinary content"));
 
             var gltf = ExportRootsToGltfRoot(rootA, rootB);
 
-            // Exactly one KHR_character, rooted at charA (the first).
+            // Exactly one KHR_character marker; it names no node.
             Assert.IsTrue(gltf.Extensions != null && gltf.Extensions.ContainsKey(KHR_character.EXTENSION_NAME),
                 "a single root KHR_character should be present");
             var rootExt = gltf.Extensions[KHR_character.EXTENSION_NAME] as KHR_character;
             Assert.IsNotNull(rootExt);
-            Assert.IsTrue(rootExt.RootNode.HasValue);
-            Assert.AreEqual("charA", gltf.Nodes[rootExt.RootNode.Value].Name,
-                "the first character root (charA) must win deterministically");
+            Assert.AreEqual("{}", rootExt.Serialize().Value.ToString(Newtonsoft.Json.Formatting.None));
+            Assert.IsTrue(gltf.Nodes.Exists(n => n.Name == "ctrlB"),
+                "the other character root is still exported as ordinary content");
 
             // Only charA's expression is present; charB's must not leak.
             var ext = gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
             Assert.IsNotNull(ext);
-            Assert.IsNotNull(ext.Expressions.Find(e => e.Expression == "A_only"),
+            Assert.IsNotNull(ext.Expressions.Find(e => e.Name == "A_only"),
                 "the first character's expression must be exported");
-            Assert.IsNull(ext.Expressions.Find(e => e.Expression == "B_only"),
+            Assert.IsNull(ext.Expressions.Find(e => e.Name == "B_only"),
                 "the skipped character's expression must NOT leak into the document");
         }
 
@@ -2755,18 +2913,18 @@ namespace UnityGLTF.KhrCharacter.Tests
             var gltfA = ExportToGltfRoot(rootA);
             var extA = gltfA.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
             Assert.IsNotNull(extA);
-            Assert.IsNotNull(extA.Expressions.Find(e => e.Expression == "A_only"));
-            Assert.IsNull(extA.Expressions.Find(e => e.Expression == "B_only"));
+            Assert.IsNotNull(extA.Expressions.Find(e => e.Name == "A_only"));
+            Assert.IsNull(extA.Expressions.Find(e => e.Name == "B_only"));
             var rootExtA = gltfA.Extensions[KHR_character.EXTENSION_NAME] as KHR_character;
-            Assert.AreEqual("charA", gltfA.Nodes[rootExtA.RootNode.Value].Name);
+            Assert.AreEqual("{}", rootExtA.Serialize().Value.ToString(Newtonsoft.Json.Formatting.None));
 
             var gltfB = ExportToGltfRoot(rootB);
             var extB = gltfB.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
             Assert.IsNotNull(extB);
-            Assert.IsNotNull(extB.Expressions.Find(e => e.Expression == "B_only"));
-            Assert.IsNull(extB.Expressions.Find(e => e.Expression == "A_only"));
+            Assert.IsNotNull(extB.Expressions.Find(e => e.Name == "B_only"));
+            Assert.IsNull(extB.Expressions.Find(e => e.Name == "A_only"));
             var rootExtB = gltfB.Extensions[KHR_character.EXTENSION_NAME] as KHR_character;
-            Assert.AreEqual("charB", gltfB.Nodes[rootExtB.RootNode.Value].Name);
+            Assert.AreEqual("{}", rootExtB.Serialize().Value.ToString(Newtonsoft.Json.Formatting.None));
         }
     }
 }

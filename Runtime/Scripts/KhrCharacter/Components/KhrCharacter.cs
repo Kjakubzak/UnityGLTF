@@ -5,10 +5,11 @@ using UnityEngine;
 namespace UnityGLTF.KhrCharacter
 {
     /// <summary>
-    /// Top-level hub attached to the character root. Owns capability discovery and references to the
-    /// sub-controllers (null when the corresponding extension is absent). Application code branches on
-    /// <see cref="Has"/> / <see cref="Capabilities"/> and registers a readiness callback via
-    /// <see cref="WhenReady"/>.
+    /// Hub attached to the imported scene root when the asset carries the top-level <c>KHR_character</c>
+    /// designation. Its presence means "this asset contains a character"; it identifies no character root or
+    /// member nodes. Owns capability discovery and references to the sub-controllers (null when the
+    /// corresponding extension is absent). Application code branches on <see cref="Has"/> /
+    /// <see cref="Capabilities"/> and registers a readiness callback via <see cref="WhenReady"/>.
     /// </summary>
     [DisallowMultipleComponent]
     public class KhrCharacter : MonoBehaviour
@@ -29,8 +30,6 @@ namespace UnityGLTF.KhrCharacter
         public LookAtTargetSet LookAtTargets { get; internal set; }
         public SkeletonMap Skeleton { get; internal set; }
         public ViewModeController View { get; internal set; }
-        public int DesignatedRootNodeIndex => _designatedRootNodeIndex;
-        public Transform DesignatedRoot => _designatedRoot;
 
         private readonly List<CharacterCapability> _capabilities = new List<CharacterCapability>();
         public IReadOnlyList<CharacterCapability> Capabilities => _capabilities;
@@ -39,8 +38,6 @@ namespace UnityGLTF.KhrCharacter
         // that this component was deserialized from a baked asset (vs added fresh by a live import). Hidden from
         // the inspector: it's baked data, surfaced read-only by KhrCharacterEditor rather than hand-edited.
         [SerializeField, HideInInspector] private List<CharacterCapability> _serializedCapabilities = new List<CharacterCapability>();
-        [SerializeField, HideInInspector] private int _designatedRootNodeIndex = -1;
-        [SerializeField, HideInInspector] private Transform _designatedRoot;
 
         public bool Has(CharacterCapability capability) => _capabilities.Contains(capability);
 
@@ -73,12 +70,6 @@ namespace UnityGLTF.KhrCharacter
             _capabilities.Clear();
             if (capabilities != null) _capabilities.AddRange(capabilities);
             _serializedCapabilities = new List<CharacterCapability>(_capabilities);   // persist for prefab rehydration
-        }
-
-        internal void SetDesignation(int nodeIndex, Transform resolvedTransform)
-        {
-            _designatedRootNodeIndex = nodeIndex;
-            _designatedRoot = resolvedTransform;
         }
 
         internal void MarkReady()
@@ -133,8 +124,8 @@ namespace UnityGLTF.KhrCharacter
                         : CapabilityStatus.Inert;
                 case CharacterCapability.Morphtarget:
                 case CharacterCapability.Joint:
-                case CharacterCapability.Texture:
-                case CharacterCapability.Mask:
+                case CharacterCapability.TextureTransform:
+                case CharacterCapability.Suppression:
                 case CharacterCapability.Mapping:
                     return Expressions != null ? CapabilityStatus.Active : CapabilityStatus.Inert;
                 case CharacterCapability.CameraHint:

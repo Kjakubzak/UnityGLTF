@@ -7,7 +7,7 @@ namespace UnityGLTF.KhrCharacter
     /// <summary>
     /// Default expression evaluation policy: additive over rest. A 0..1 driver is mapped across the sampler's
     /// input-time range and sampled per interpolation; each expression contributes a delta over the rest value;
-    /// masks attenuate inputs (blend/block); rotations accumulate commutatively in log space.
+    /// suppressions attenuate inputs (blend/block); rotations accumulate commutatively in log space.
     /// </summary>
     public sealed class AdditiveExpressionSemantics : IExpressionSemantics
     {
@@ -65,28 +65,29 @@ namespace UnityGLTF.KhrCharacter
             return Vector4.Lerp(deltaVec[i], deltaVec[i + 1], u);
         }
 
-        public float ResolveMaskedInput(int trackIndex, IReadOnlyList<float> rawInputs, ExpressionTrack[] tracks)
+        public float ResolveSuppressedInput(int trackIndex, IReadOnlyList<float> rawInputs, ExpressionTrack[] tracks)
         {
             if (rawInputs == null || trackIndex < 0 || trackIndex >= rawInputs.Count) return 0f;
             float result = rawInputs[trackIndex];
             if (tracks == null) return result;
 
-            // A mask lives on the source expression and references the target it attenuates.
+            // A suppression lives on the source expression and references the target it attenuates.
             for (int s = 0; s < tracks.Length; s++)
             {
-                var masks = tracks[s]?.Masks;
-                if (masks == null) continue;
-                for (int m = 0; m < masks.Length; m++)
+                var suppressions = tracks[s]?.Suppressions;
+                if (suppressions == null) continue;
+                for (int m = 0; m < suppressions.Length; m++)
                 {
-                    var mask = masks[m];
-                    if (mask == null || mask.TargetIndex != trackIndex) continue;
-                    int src = mask.SourceIndex;
+                    var suppression = suppressions[m];
+                    if (suppression == null || suppression.TargetIndex != trackIndex) continue;
+                    int src = suppression.SourceIndex;
                     float sv = (src >= 0 && src < rawInputs.Count) ? rawInputs[src] : 0f;
+                    float amount = (float)suppression.Amount;
                     float f;
-                    if (mask.Type == MaskType.Block)
-                        f = sv > mask.Threshold ? 1f - mask.Amount : 1f;
-                    else if (mask.Type == MaskType.Blend)
-                        f = 1f - mask.Amount * sv;
+                    if (suppression.Type == SuppressionType.Block)
+                        f = sv > (float)suppression.Threshold ? 1f - amount : 1f;
+                    else if (suppression.Type == SuppressionType.Blend)
+                        f = 1f - amount * sv;
                     else
                         f = 1f;
                     result *= f;
@@ -114,8 +115,9 @@ namespace UnityGLTF.KhrCharacter
                 {
                     var contribution = command.Contributions[i];
                     if (contribution.TargetIndex < 0 || contribution.TargetIndex >= sums.Length) continue;
-                    ValidateUnit(contribution.Weight, nameof(contribution.Weight));
-                    sums[contribution.TargetIndex] += value * contribution.Weight;
+                    float weight = (float)contribution.Weight;
+                    ValidateUnit(weight, nameof(contribution.Weight));
+                    sums[contribution.TargetIndex] += value * weight;
                 }
             }
 
@@ -138,9 +140,10 @@ namespace UnityGLTF.KhrCharacter
                     var contribution = endpoint.Contributions[c];
                     if (contribution.SourceIndex < 0 || contribution.SourceIndex >= nativeInputs.Count) continue;
                     float value = nativeInputs[contribution.SourceIndex];
+                    float weight = (float)contribution.Weight;
                     ValidateUnit(value, nameof(nativeInputs));
-                    ValidateUnit(contribution.Weight, nameof(contribution.Weight));
-                    sum += value * contribution.Weight;
+                    ValidateUnit(weight, nameof(contribution.Weight));
+                    sum += value * weight;
                 }
                 outputs[endpoint.TargetName] = (float)System.Math.Min(1d, sum);
             }

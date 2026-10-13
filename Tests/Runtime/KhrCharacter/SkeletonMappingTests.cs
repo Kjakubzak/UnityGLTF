@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using GLTF.Schema;
+using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using UnityEngine;
 
@@ -267,7 +268,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                 Bones = new Dictionary<string, Transform>(),
                 ReferencePose = new ReferencePose
                 {
-                    PoseType = "TPose",
+                    PoseType = ReferencePoseLabels.TPose,
                     Bones = new[] { bone.transform },
                     LocalPositions = new[] { target },
                     LocalRotations = new[] { rot },
@@ -305,8 +306,8 @@ namespace UnityGLTF.KhrCharacter.Tests
                 },
                 ReferencePoses = new[]
                 {
-                    new ReferencePose { AnimationIndex = 3, PoseType = "TPose", Bones = new[] { hips }, LocalPositions = new[] { Vector3.one } },
-                    new ReferencePose { AnimationIndex = 7, PoseType = "TPose", Bones = new[] { hips }, LocalPositions = new[] { target } },
+                    new ReferencePose { AnimationIndex = 3, PoseType = ReferencePoseLabels.TPose, Bones = new[] { hips }, LocalPositions = new[] { Vector3.one } },
+                    new ReferencePose { AnimationIndex = 7, PoseType = ReferencePoseLabels.TPose, Bones = new[] { hips }, LocalPositions = new[] { target } },
                 },
                 Bones = new Dictionary<string, Transform> { { "hips", hips } },
                 SelectedRig = Vocab,
@@ -319,6 +320,42 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsTrue(skel.ApplyReferencePose(7));
             Assert.AreEqual(target, hips.localPosition);
             Assert.IsFalse(skel.ApplyReferencePose(99));
+        }
+
+        [Test]
+        public void ReferencePoseSchema_OmittedPoseTypeResolvesToTPose()
+        {
+            var pose = new KHR_character_reference_pose_Factory().Deserialize(
+                new GLTFRoot(),
+                new JProperty(KHR_character_reference_pose.EXTENSION_NAME, new JObject()))
+                as KHR_character_reference_pose;
+
+            Assert.AreEqual("t_pose", ReferencePoseLabels.TPose);
+            Assert.AreEqual(ReferencePoseLabels.TPose, pose.PoseType);
+            Assert.AreEqual(ReferencePoseLabels.TPose, new KHR_character_reference_pose().PoseType);
+        }
+
+        [TestCase("T_POSE")]
+        [TestCase("TPose")]
+        [TestCase("ACME_relaxed_pose")]
+        public void ReferencePoseSchema_NonStandardLabelsAreKeptVerbatim(string label)
+        {
+            var pose = new KHR_character_reference_pose_Factory().Deserialize(
+                new GLTFRoot(),
+                new JProperty(KHR_character_reference_pose.EXTENSION_NAME, new JObject { { "poseType", label } }))
+                as KHR_character_reference_pose;
+
+            Assert.AreEqual(label, pose.PoseType, "labels are exact and case-sensitive; custom labels are not mapped");
+            Assert.AreEqual(label, ((JObject)new KHR_character_reference_pose { PoseType = label }.Serialize().Value)
+                ["poseType"].Value<string>());
+        }
+
+        [Test]
+        public void ReferencePoseSchema_NeverSerializesANullLabel()
+        {
+            var value = (JObject)new KHR_character_reference_pose { PoseType = null }.Serialize().Value;
+
+            Assert.IsNull(value["poseType"]);
         }
     }
 }

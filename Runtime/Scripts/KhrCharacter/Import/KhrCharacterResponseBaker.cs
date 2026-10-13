@@ -66,15 +66,15 @@ namespace UnityGLTF.KhrCharacter
             for (int expressionIndex = 0; expressionIndex < entries.Length; expressionIndex++)
             {
                 var item = extension.Expressions[expressionIndex];
-                if (item == null || string.IsNullOrEmpty(item.Expression))
-                    throw Invalid($"Expression entry {expressionIndex} has no nonempty label.");
+                if (item == null || string.IsNullOrEmpty(item.Name))
+                    throw Invalid($"Expression entry {expressionIndex} has no nonempty name.");
                 if (root.Animations == null || item.Animation < 0 || item.Animation >= root.Animations.Count)
                     throw Invalid(
                         $"Expression entry {expressionIndex} references invalid animation {item.Animation}.");
 
                 var animation = BakeAnimation(root, readBufferView, root.Animations[item.Animation]);
                 entries[expressionIndex] = new ExpressionResponseSetEntry(
-                    item.Expression,
+                    item.Name,
                     item.Animation,
                     animation,
                     item.RawExtensions?.ToString(Formatting.None),

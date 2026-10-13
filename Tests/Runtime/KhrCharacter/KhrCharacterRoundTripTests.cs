@@ -142,7 +142,7 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             var ext = gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
             Assert.IsNotNull(ext);
-            var item = ext.Expressions.Find(e => e.Expression == "blinkLinear");
+            var item = ext.Expressions.Find(e => e.Name == "blinkLinear");
             Assert.IsNotNull(item);
             Assert.IsNotNull(item.Morphtarget);
             Assert.AreEqual(1, item.Morphtarget.Channels.Length);
@@ -224,7 +224,7 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             var ext = gltf.Extensions[KHR_character_expression.EXTENSION_NAME] as KHR_character_expression;
             Assert.IsNotNull(ext);
-            var item = ext.Expressions.Find(e => e.Expression == "jaw");
+            var item = ext.Expressions.Find(e => e.Name == "jaw");
             Assert.IsNotNull(item);
             Assert.IsNotNull(item.Joint);
             Assert.AreEqual(2, item.Joint.Channels.Length);
@@ -373,7 +373,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             var tracks = new List<ExpressionTrack>();
             foreach (var item in ext.Expressions)
             {
-                var track = new ExpressionTrack { Name = item.Expression, BlendMode = ExpressionBlendMode.Additive };
+                var track = new ExpressionTrack { Name = item.Name, BlendMode = ExpressionBlendMode.Additive };
                 var anim = gltf.Animations[item.Animation];
 
                 if (item.Morphtarget?.Channels != null)
@@ -455,23 +455,23 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             foreach (var itemA in extA.Expressions)
             {
-                var itemB = extB.Expressions.Find(e => e.Expression == itemA.Expression);
-                Assert.IsNotNull(itemB, $"expression '{itemA.Expression}' is present in both exports");
+                var itemB = extB.Expressions.Find(e => e.Name == itemA.Name);
+                Assert.IsNotNull(itemB, $"expression '{itemA.Name}' is present in both exports");
 
                 var chA = CollectChannelData(glbA, gltfA, itemA);
                 var chB = CollectChannelData(glbB, gltfB, itemB);
-                CollectionAssert.AreEquivalent(chA.Keys, chB.Keys, $"expression '{itemA.Expression}' has the same channels");
+                CollectionAssert.AreEquivalent(chA.Keys, chB.Keys, $"expression '{itemA.Name}' has the same channels");
 
                 foreach (var key in chA.Keys)
                 {
                     var a = chA[key];
                     var b = chB[key];
-                    Assert.AreEqual(a.interp, b.interp, $"{itemA.Expression}/{key}: interpolation is stable");
-                    Assert.AreEqual(a.times.Length, b.times.Length, $"{itemA.Expression}/{key}: key count is stable");
+                    Assert.AreEqual(a.interp, b.interp, $"{itemA.Name}/{key}: interpolation is stable");
+                    Assert.AreEqual(a.times.Length, b.times.Length, $"{itemA.Name}/{key}: key count is stable");
                     if (!compareValues) continue;
-                    Assert.That(b.times, Is.EqualTo(a.times).Within(eps), $"{itemA.Expression}/{key}: input times are stable");
-                    Assert.AreEqual(a.values.Length, b.values.Length, $"{itemA.Expression}/{key}: output length is stable");
-                    Assert.That(b.values, Is.EqualTo(a.values).Within(eps), $"{itemA.Expression}/{key}: output values are stable");
+                    Assert.That(b.times, Is.EqualTo(a.times).Within(eps), $"{itemA.Name}/{key}: input times are stable");
+                    Assert.AreEqual(a.values.Length, b.values.Length, $"{itemA.Name}/{key}: output length is stable");
+                    Assert.That(b.values, Is.EqualTo(a.values).Within(eps), $"{itemA.Name}/{key}: output values are stable");
                 }
             }
         }
@@ -488,7 +488,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             var channelIndices = new List<int>();
             if (item.Morphtarget?.Channels != null) channelIndices.AddRange(item.Morphtarget.Channels);
             if (item.Joint?.Channels != null) channelIndices.AddRange(item.Joint.Channels);
-            if (item.Texture?.Channels != null) channelIndices.AddRange(item.Texture.Channels);
+            if (item.TextureTransform?.Channels != null) channelIndices.AddRange(item.TextureTransform.Channels);
 
             foreach (var ci in channelIndices)
             {
