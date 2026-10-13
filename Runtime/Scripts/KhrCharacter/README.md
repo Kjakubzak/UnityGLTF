@@ -281,7 +281,10 @@ adds it only when `CreateExpressionController` is enabled.
 - **Authored sets** (`Initialize(CharacterExpressionSet)`) run through the same pipeline: each track becomes the
   response animation its export would contain (`AuthoredExpressionCurves`), with legacy samplers normalized to
   response progress, values in glTF space and constant channels unlisted, so previewing an authored set matches
-  evaluating the exported asset. Their properties are keyed `authored:<instanceId>/<property>`.
+  evaluating the exported asset. Their properties are keyed `authored:<instanceId>/<property>`. A track that the
+  exporter would refuse produces no output and one warning, for example one whose joint keys leave the driver's base
+  at time zero, or one that animates a node rotation, node scale or texture scale that an earlier track already
+  animates.
 - **Application.** Translation is written as `(-x, y, z)` to `localPosition` (times the editor import scale factor),
   rotation as `(x, -y, -z, w)` to `localRotation`, keeping UnityGLTF's 180° turn on camera and light nodes, and scale
   to `localScale`. Morph weights are the node's complete vector, written as `SetBlendShapeWeight(j, w * frameWeight)`
@@ -292,7 +295,10 @@ adds it only when `CreateExpressionController` is enabled.
   `<texture>Rotation` when the material has one.
 - **Ownership.** `ExpressionControllerOwnershipMode.Standalone` (the default) owns the bound targets: a property
   without a record returns to its authored initial value. `Integrated` leaves a property without a record, and a
-  morph weight no record covers, to an earlier writer such as an Animator.
+  morph weight no record covers, to an earlier writer such as an Animator. Because a texture's offset and scale share
+  one `_ST` vector, when only one of them has a record the other keeps the earlier writer's value, read back from the
+  slot's property block or else from the material. In both modes, a property with a record replaces the earlier
+  writer's value with the composed result; it is not layered on top of it.
 - **Export.** The exporter writes authored sets. Export of imported expressions still fails closed
   (`RejectPassiveExpressionData`): a character with an `ExpressionResponseSet` aborts the export rather than
   re-exporting the legacy projection.

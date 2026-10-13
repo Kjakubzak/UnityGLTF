@@ -14,7 +14,7 @@ namespace UnityGLTF.KhrCharacter
         Standalone,
         /// <summary>
         /// An earlier animation system owns the targets: a property without a record, and a morph weight no record
-        /// covers, keep that system's value.
+        /// covers, keep that system's value. A property with a record replaces that value.
         /// </summary>
         Integrated,
     }
@@ -50,6 +50,8 @@ namespace UnityGLTF.KhrCharacter
             public int[] Slots;
             public int StPropertyId;
             public bool HasStProperty;
+            public int TexturePropertyId;
+            public bool HasTextureProperty;
             public int RotationPropertyId;
             public bool HasRotationProperty;
             public bool Flipped;
@@ -58,6 +60,8 @@ namespace UnityGLTF.KhrCharacter
 
         // UnityGLTF's camera/light forward-axis turn, 180° about Y (SchemaExtensions.InvertDirection).
         private static readonly Quaternion ForwardAxisTurn = new Quaternion(0f, -1f, 0f, 0f);
+
+        private static readonly List<Material> SharedMaterials = new List<Material>();
 
         // The authoring set and, for an imported character, its response set and bindings are persisted so a prefab
         // rehydrates in Awake; a live import calls Initialize itself. Hidden from the inspector: baked data.
@@ -145,7 +149,8 @@ namespace UnityGLTF.KhrCharacter
         /// <summary>
         /// Evaluates a set authored in Unity. Its tracks become the response animations its export would contain (legacy
         /// curves normalized to response progress, in glTF space), so previewing the set matches evaluating the exported
-        /// asset. A track that cannot be expressed that way is reported as a warning and produces no output.
+        /// asset. A track that cannot be expressed that way, or that animates a node rotation, node scale or texture
+        /// scale an earlier track already animates, is reported as a warning and produces no output.
         /// </summary>
         public void Initialize(CharacterExpressionSet set)
         {
@@ -414,6 +419,8 @@ namespace UnityGLTF.KhrCharacter
             return frameWeights != null && index >= 0 && index < frameWeights.Length ? frameWeights[index] : 1f;
         }
 
+        // Offset and scale share one _ST vector. In Integrated mode, when only one of them has a record, the other keeps
+        // the earlier writer's value.
         private static void ApplyTexture(TextureGroup group, ExpressionComposition composition, bool standalone)
         {
             bool hasOffset = TryGetValue(group.Offset, composition, out var offset);
@@ -423,15 +430,13 @@ namespace UnityGLTF.KhrCharacter
             bool writeRotation = group.HasRotationProperty && (standalone || hasRotation);
             if (!writeSt && !writeRotation) return;
 
+            bool keepEarlierComponent = writeSt && !standalone && !(hasOffset && hasScale);
             var gltfOffset = offset != null && offset.Count == 2
                 ? new Vector2((float)offset[0], (float)offset[1])
                 : Vector2.zero;
             var gltfScale = scale != null && scale.Count == 2
                 ? new Vector2((float)scale[0], (float)scale[1])
                 : Vector2.one;
-            GLTFSceneImporter.ConvertTextureTransformScaleAndOffset(
-                group.Flipped, gltfOffset, gltfScale, out var unityScale, out var unityOffset);
-            var st = new Vector4(unityScale.x, unityScale.y, unityOffset.x, unityOffset.y);
             float angle = rotation != null && rotation.Count == 1 ? (float)rotation[0] : 0f;
 
             for (int index = 0; index < group.Renderers.Length; index++)
@@ -440,10 +445,58 @@ namespace UnityGLTF.KhrCharacter
                 if (renderer == null) continue;
                 int slot = group.Slots != null && index < group.Slots.Length ? group.Slots[index] : 0;
                 renderer.GetPropertyBlock(group.Block, slot);
-                if (writeSt) group.Block.SetVector(group.StPropertyId, st);
+                if (writeSt)
+                {
+                    var slotOffset = gltfOffset;
+                    var slotScale = gltfScale;
+                    if (keepEarlierComponent &&
+                        TryGetEarlierTextureTransform(group, renderer, slot, out var earlierOffset, out var earlierScale))
+                    {
+                        if (!hasOffset) slotOffset = earlierOffset;
+                        if (!hasScale) slotScale = earlierScale;
+                    }
+                    GLTFSceneImporter.ConvertTextureTransformScaleAndOffset(
+                        group.Flipped, slotOffset, slotScale, out var unityScale, out var unityOffset);
+                    group.Block.SetVector(
+                        group.StPropertyId, new Vector4(unityScale.x, unityScale.y, unityOffset.x, unityOffset.y));
+                }
                 if (writeRotation) group.Block.SetFloat(group.RotationPropertyId, angle);
                 renderer.SetPropertyBlock(group.Block, slot);
             }
+        }
+
+        // The glTF offset and scale a slot shows before this controller writes it: its property block's _ST, else its
+        // material's texture scale and offset, converted back with the inverse of the importer's _ST conversion.
+        private static bool TryGetEarlierTextureTransform(
+            TextureGroup group,
+            Renderer renderer,
+            int slot,
+            out Vector2 offset,
+            out Vector2 scale)
+        {
+            Vector4 st;
+            if (group.Block.HasVector(group.StPropertyId))
+            {
+                st = group.Block.GetVector(group.StPropertyId);
+            }
+            else
+            {
+                renderer.GetSharedMaterials(SharedMaterials);
+                var material = slot >= 0 && slot < SharedMaterials.Count ? SharedMaterials[slot] : null;
+                SharedMaterials.Clear();
+                if (material == null || !group.HasTextureProperty || !material.HasProperty(group.TexturePropertyId))
+                {
+                    offset = default;
+                    scale = default;
+                    return false;
+                }
+                var textureScale = material.GetTextureScale(group.TexturePropertyId);
+                var textureOffset = material.GetTextureOffset(group.TexturePropertyId);
+                st = new Vector4(textureScale.x, textureScale.y, textureOffset.x, textureOffset.y);
+            }
+            scale = new Vector2(st.x, group.Flipped ? -st.y : st.y);
+            offset = new Vector2(st.z, group.Flipped ? st.w - scale.y : 1f - scale.y - st.w);
+            return true;
         }
 
         // The current value of one texture-transform component: its record, else its authored value.
@@ -568,14 +621,18 @@ namespace UnityGLTF.KhrCharacter
 
         private static TextureGroup CreateTextureGroup(ExpressionTargetBinding binding)
         {
-            bool hasSt = !string.IsNullOrEmpty(binding.TextureStProperty);
+            string stProperty = binding.TextureStProperty;
+            bool hasSt = !string.IsNullOrEmpty(stProperty);
+            bool hasTexture = hasSt && stProperty.Length > 3 && stProperty.EndsWith("_ST", StringComparison.Ordinal);
             bool hasRotation = !string.IsNullOrEmpty(binding.TextureRotationProperty);
             return new TextureGroup
             {
                 Renderers = binding.TextureRenderers ?? Array.Empty<Renderer>(),
                 Slots = binding.TextureMaterialSlots,
                 HasStProperty = hasSt,
-                StPropertyId = hasSt ? Shader.PropertyToID(binding.TextureStProperty) : 0,
+                StPropertyId = hasSt ? Shader.PropertyToID(stProperty) : 0,
+                HasTextureProperty = hasTexture,
+                TexturePropertyId = hasTexture ? Shader.PropertyToID(stProperty.Substring(0, stProperty.Length - 3)) : 0,
                 HasRotationProperty = hasRotation,
                 RotationPropertyId = hasRotation ? Shader.PropertyToID(binding.TextureRotationProperty) : 0,
                 Flipped = binding.TextureFlipped,

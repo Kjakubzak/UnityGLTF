@@ -92,6 +92,31 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [UnityTest]
+        public IEnumerator IntegratedPartlyActiveTextureKeepsTheEarlierScale()
+        {
+            var renderer = BuildTextureSet(out var set, out int propertyId, out var root);
+            var controller = root.AddComponent<ExpressionController>();
+            controller.OwnershipMode = ExpressionControllerOwnershipMode.Integrated;
+            controller.Initialize(set);
+
+            // The expression lists only the offset: at full weight its record is the glTF offset (1, 0).
+            renderer.sharedMaterial.SetTextureScale("_MainTex", new Vector2(2f, 3f));
+            controller.SetWeight(0, 1f);
+            yield return null;
+            Assert.That(GetPropertyBlock(renderer, propertyId), Is.EqualTo(new Vector4(2f, 3f, 1f, -2f)),
+                "the material's scale is kept under the recorded offset");
+
+            yield return null;
+            Assert.That(GetPropertyBlock(renderer, propertyId), Is.EqualTo(new Vector4(2f, 3f, 1f, -2f)),
+                "reading back its own write keeps the same scale");
+
+            SetPropertyBlock(renderer, propertyId, new Vector4(4f, 0.5f, 9f, 9f));
+            yield return null;
+            Assert.That(GetPropertyBlock(renderer, propertyId), Is.EqualTo(new Vector4(4f, 0.5f, 1f, 0.5f)),
+                "a property block's scale is kept under the recorded offset");
+        }
+
+        [UnityTest]
         public IEnumerator StandaloneInactiveTextureRestoresBakedBase()
         {
             var renderer = BuildTextureSet(out var set, out int propertyId, out var root);

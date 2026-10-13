@@ -113,7 +113,8 @@ namespace UnityGLTF.KhrCharacter
         }
 
         // The offset, scale and rotation of one KHR_texture_transform object are bound together, because Unity keeps
-        // offset and scale in one _ST vector; the components without a channel are written at their authored values.
+        // offset and scale in one _ST vector; in Standalone mode the controller writes a component without a record at
+        // its authored value.
         private static void AddTextureBindings(
             GLTFRoot root,
             GLTFSceneImporter importer,

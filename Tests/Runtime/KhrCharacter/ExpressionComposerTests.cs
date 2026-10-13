@@ -50,6 +50,20 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
+        public void EachTranslationSubtractsItsOwnNeutralSample()
+        {
+            var target = Target(Translation, ExpressionPropertyKind.NodeTranslation, new[] { 0d, 1d, 0d });
+
+            var composition = ExpressionComposer.Compose(new[]
+            {
+                Response(Record(target, new[] { 0f, 2f, 0f }, new[] { 0f, 1f, 0f })),
+                Response(Record(target, new[] { 0f, 3.5f, 0f }, new[] { 0f, 1.5f, 0f })),
+            });
+
+            Assert.That(composition.Records[0].Value, Is.EqualTo(new[] { 0d, 4d, 0d }), "b + (2 - 1) + (3.5 - 1.5)");
+        }
+
+        [Test]
         public void TheNeutralSampleIsSubtractedEvenWhenItDiffersFromTheAuthoredValue()
         {
             float neutral = 128f / 255f;

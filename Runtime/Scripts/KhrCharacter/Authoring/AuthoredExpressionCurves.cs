@@ -321,7 +321,9 @@ namespace UnityGLTF.KhrCharacter
         /// writes: each legacy sampler normalized to response progress, one channel per concrete target, and a channel whose
         /// keys never leave the authored value left unlisted. A property is keyed <c>authored:&lt;instanceId&gt;/...</c>
         /// after the Unity object it belongs to, and its binding takes the authored value from the drivers' bases. A track
-        /// whose curves the exporter would reject produces no animation and a warning.
+        /// that the exporter would refuse produces no animation and one warning: one whose curves are invalid, including
+        /// joint keys that leave the driver's base at time zero, and one that animates a single-writer property (node
+        /// rotation or scale, texture scale) that an earlier track already animates.
         /// </summary>
         internal static AuthoredResponses BuildResponseAnimations(CharacterExpressionSet set)
         {
@@ -329,16 +331,18 @@ namespace UnityGLTF.KhrCharacter
             var animations = new ExpressionResponseAnimation[tracks.Length];
             var bindings = new List<ExpressionTargetBinding>();
             var bound = new HashSet<string>(StringComparer.Ordinal);
+            var singleWriterOwners = new Dictionary<string, int>(StringComparer.Ordinal);
             var morphBases = ResolveMorphBases(tracks);
             for (int expressionIndex = 0; expressionIndex < tracks.Length; expressionIndex++)
             {
                 var track = tracks[expressionIndex];
                 if (track == null) continue;
                 var builder = new TrackBuilder(expressionIndex, morphBases);
+                ExpressionResponseAnimation animation;
                 try
                 {
                     builder.AddTrack(track);
-                    animations[expressionIndex] = builder.Build();
+                    animation = builder.Build();
                 }
                 catch (Exception exception) when (
                     exception is InvalidOperationException || exception is ExpressionResponseEvaluationException)
@@ -348,10 +352,56 @@ namespace UnityGLTF.KhrCharacter
                         exception.Message);
                     continue;
                 }
+                if (animation != null &&
+                    !ClaimSingleWriterProperties(animation, builder.Bindings, expressionIndex, tracks, singleWriterOwners))
+                    continue;
+                animations[expressionIndex] = animation;
                 foreach (var binding in builder.Bindings)
                     if (bound.Add(binding.Property)) bindings.Add(binding);
             }
             return new AuthoredResponses { Animations = animations, Bindings = bindings.ToArray() };
+        }
+
+        // Composition rejects records from two expressions for one single-writer property, so, as the exporter does,
+        // the first track that animates such a property owns it.
+        private static bool ClaimSingleWriterProperties(
+            ExpressionResponseAnimation animation,
+            List<ExpressionTargetBinding> bindings,
+            int expressionIndex,
+            ExpressionTrack[] tracks,
+            Dictionary<string, int> owners)
+        {
+            var claimed = new List<string>();
+            foreach (var channel in animation.Channels)
+            {
+                if (!channel.EmitsRecords || !ExpressionComposer.IsStandardSingleWriter(channel.Target)) continue;
+                string property = channel.Target.Identity.CanonicalProperty;
+                if (owners.TryGetValue(property, out int owner))
+                {
+                    Debug.LogWarning(
+                        $"[KHR_character] Expressions {owner} ('{tracks[owner].Name}') and {expressionIndex} " +
+                        $"('{tracks[expressionIndex].Name}') both animate {DescribeProperty(property, bindings)}, " +
+                        $"which only one expression may write; expression {expressionIndex} produces no output.");
+                    return false;
+                }
+                claimed.Add(property);
+            }
+            foreach (var property in claimed) owners[property] = expressionIndex;
+            return true;
+        }
+
+        private static string DescribeProperty(string property, List<ExpressionTargetBinding> bindings)
+        {
+            foreach (var binding in bindings)
+            {
+                if (!string.Equals(binding.Property, property, StringComparison.Ordinal)) continue;
+                if (binding.Node != null)
+                    return $"the {property.Substring(property.LastIndexOf('/') + 1)} of '{binding.Node.name}'";
+                if (binding.TextureRenderers != null && binding.TextureRenderers.Length > 0 &&
+                    binding.TextureRenderers[0] != null)
+                    return $"the {binding.TextureStProperty} scale of '{binding.TextureRenderers[0].name}'";
+            }
+            return $"'{property}'";
         }
 
         private sealed class TrackBuilder
@@ -461,6 +511,7 @@ namespace UnityGLTF.KhrCharacter
                         kind = ExpressionPropertyKind.NodeTranslation;
                         var values = BuildJointVectorValues(driver, sampler, description);
                         authored = ToGltfTranslation(driver.BaseVec);
+                        RequireEquivalent(authored, ToGltfTranslation(values[0]), $"{description} time-zero translation");
                         outputs = new float[values.Length][];
                         for (int key = 0; key < values.Length; key++)
                         {
@@ -475,6 +526,7 @@ namespace UnityGLTF.KhrCharacter
                         kind = ExpressionPropertyKind.NodeScale;
                         var values = BuildJointVectorValues(driver, sampler, description);
                         authored = ToComponents(driver.BaseVec);
+                        RequireEquivalent(authored, ToComponents(values[0]), $"{description} time-zero scale");
                         outputs = new float[values.Length][];
                         for (int key = 0; key < values.Length; key++)
                         {
@@ -490,6 +542,12 @@ namespace UnityGLTF.KhrCharacter
                         valueKind = ExpressionResponseValueKind.Quaternion;
                         var values = BuildJointRotationValues(driver, sampler, description);
                         authored = ToGltfRotation(driver.BaseQuat);
+                        if (!ExpressionInitialValueValidation.QuaternionsEquivalent(
+                                authored,
+                                ToGltfRotation(values[0]),
+                                ExpressionAccessorComponentEncoding.Float))
+                            throw InvalidExpression(
+                                $"{description} time-zero rotation does not match the exported authored initial value.");
                         outputs = new float[values.Length][];
                         for (int key = 0; key < values.Length; key++)
                         {

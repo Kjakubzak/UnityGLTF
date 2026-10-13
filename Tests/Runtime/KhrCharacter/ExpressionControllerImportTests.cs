@@ -10,8 +10,9 @@ namespace UnityGLTF.KhrCharacter.Tests
 {
     /// <summary>
     /// The expression controller of imported characters: it evaluates the imported response set and writes the composed
-    /// records through bindings to the imported objects, rehydrates in a copy, keeps UnityGLTF's camera turn, writes
-    /// texture transforms as the importer writes materials, and previews an authored set as its export evaluates.
+    /// records through bindings to the imported objects, rehydrates in a copy, keeps UnityGLTF's camera turn and import
+    /// scale factor, writes texture transforms as the importer writes materials (flipped textures included), and
+    /// previews an authored set as its export evaluates.
     /// </summary>
     public class ExpressionControllerImportTests
     {
@@ -214,6 +215,88 @@ namespace UnityGLTF.KhrCharacter.Tests
                 Is.EqualTo(material.GetVector(binding.TextureStProperty)));
             Assert.That(block.GetFloat(binding.TextureRotationProperty),
                 Is.EqualTo(material.GetFloat(binding.TextureRotationProperty)));
+        }
+
+        [UnityTest]
+        public IEnumerator Applicator_ScalesTranslationsAndMirrorsFlippedTextures()
+        {
+            var host = new GameObject("host");
+            _created.Add(host);
+            var node = new GameObject("node").transform;
+            node.SetParent(host.transform, false);
+            var panel = MakeTexturedPanel(host.transform);
+            var responses = BindResponses(ResponseEntry("move",
+                Ramp(NodeTranslation, ExpressionPropertyKind.NodeTranslation, KhrCharacterExtensionNames.ExpressionJoint,
+                    new[] { 1d, 2d, 3d }, new[] { 2f, 2f, 3f }),
+                Ramp(TextureOffset, ExpressionPropertyKind.TextureOffset, KhrCharacterExtensionNames.ExpressionTextureTransform,
+                    new[] { 0.25d, 0.5d }, new[] { 0.75f, 0.25f }),
+                Ramp(TextureScale, ExpressionPropertyKind.TextureScale, KhrCharacterExtensionNames.ExpressionTextureTransform,
+                    new[] { 1d, 1d }, new[] { 2f, 4f })));
+            var bindings = new[]
+            {
+                new ExpressionTargetBinding
+                {
+                    Property = NodeTranslation,
+                    Kind = ExpressionPropertyKind.NodeTranslation,
+                    AuthoredInitial = new[] { 1d, 2d, 3d },
+                    Node = node,
+                    TranslationScale = 2f,
+                },
+                FlippedTextureBinding(TextureOffset, ExpressionPropertyKind.TextureOffset, new[] { 0.25d, 0.5d }, panel),
+                FlippedTextureBinding(TextureScale, ExpressionPropertyKind.TextureScale, new[] { 1d, 1d }, panel),
+            };
+            var controller = host.AddComponent<ExpressionController>();
+            controller.Initialize(null, responses, bindings);
+
+            controller.SetWeight(0, 1f);
+            yield return null;
+            Assert.That(node.localPosition, Is.EqualTo(new Vector3(-4f, 4f, 6f)), "2 * (-x, y, z) of (2, 2, 3)");
+            Assert.That(PanelSt(panel), Is.EqualTo(new Vector4(2f, -4f, 0.75f, 4.25f)),
+                "offset (0.75, 0.25) and scale (2, 4) as (s.x, -s.y, o.x, s.y + o.y)");
+
+            controller.SetWeight(0, 0f);
+            yield return null;
+            Assert.That(node.localPosition, Is.EqualTo(new Vector3(-2f, 4f, 6f)), "the Standalone reset is scaled too");
+            Assert.That(PanelSt(panel), Is.EqualTo(new Vector4(1f, -1f, 0.25f, 1.5f)),
+                "the authored transform is mirrored too");
+        }
+
+        [UnityTest]
+        public IEnumerator Applicator_IntegratedFlippedTextureKeepsTheEarlierHalf()
+        {
+            var host = new GameObject("host");
+            _created.Add(host);
+            var panel = MakeTexturedPanel(host.transform);
+            var responses = BindResponses(
+                ResponseEntry("scroll",
+                    Ramp(TextureOffset, ExpressionPropertyKind.TextureOffset,
+                        KhrCharacterExtensionNames.ExpressionTextureTransform, new[] { 0.25d, 0.5d }, new[] { 0.75f, 0.25f })),
+                ResponseEntry("zoom",
+                    Ramp(TextureScale, ExpressionPropertyKind.TextureScale,
+                        KhrCharacterExtensionNames.ExpressionTextureTransform, new[] { 1d, 1d }, new[] { 4f, 2f })));
+            var bindings = new[]
+            {
+                FlippedTextureBinding(TextureOffset, ExpressionPropertyKind.TextureOffset, new[] { 0.25d, 0.5d }, panel),
+                FlippedTextureBinding(TextureScale, ExpressionPropertyKind.TextureScale, new[] { 1d, 1d }, panel),
+            };
+            var controller = host.AddComponent<ExpressionController>();
+            controller.OwnershipMode = ExpressionControllerOwnershipMode.Integrated;
+            controller.Initialize(null, responses, bindings);
+            // A flipped _ST of glTF scale (2, 3) and offset (0.5, 1).
+            var underlay = new Vector4(2f, -3f, 0.5f, 4f);
+
+            SetPanelSt(panel, underlay);
+            controller.SetWeight(0, 1f);
+            yield return null;
+            Assert.That(PanelSt(panel), Is.EqualTo(new Vector4(2f, -3f, 0.75f, 3.25f)),
+                "the recorded offset under the earlier scale");
+
+            SetPanelSt(panel, underlay);
+            controller.SetWeight(0, 0f);
+            controller.SetWeight(1, 1f);
+            yield return null;
+            Assert.That(PanelSt(panel), Is.EqualTo(new Vector4(4f, -2f, 0.5f, 3f)),
+                "the recorded scale over the earlier offset");
         }
 
         [UnityTest]
@@ -554,6 +637,102 @@ namespace UnityGLTF.KhrCharacter.Tests
             if (texture != null) material.mainTexture = texture;
             _created.Add(material);
             return material;
+        }
+
+        private const string NodeTranslation = "/nodes/0/translation";
+        private const string TexturePath =
+            "/materials/0/pbrMetallicRoughness/baseColorTexture/extensions/KHR_texture_transform";
+        private const string TextureOffset = TexturePath + "/offset";
+        private const string TextureScale = TexturePath + "/scale";
+
+        private ExpressionResponseSet BindResponses(params ExpressionResponseSetEntry[] entries)
+        {
+            var host = new GameObject("responses");
+            _created.Add(host);
+            var responses = host.AddComponent<ExpressionResponseSet>();
+            responses.Bind(entries, false);
+            return responses;
+        }
+
+        private static ExpressionResponseSetEntry ResponseEntry(
+            string name,
+            params (ExpressionResponseSampler Sampler, ExpressionResponseChannel Channel)[] ramps)
+        {
+            var samplers = new ExpressionResponseSampler[ramps.Length];
+            var channels = new ExpressionResponseChannel[ramps.Length];
+            for (int index = 0; index < ramps.Length; index++)
+            {
+                samplers[index] = ramps[index].Sampler;
+                channels[index] = ramps[index].Channel;
+                channels[index].SamplerIndex = index;
+            }
+            var animation = new ExpressionResponseAnimation { Samplers = samplers, Channels = channels };
+            return new ExpressionResponseSetEntry(name, 0, animation, null, null);
+        }
+
+        // A listed LINEAR channel from the authored value at time 0 to its final value at time 1.
+        private static (ExpressionResponseSampler, ExpressionResponseChannel) Ramp(
+            string property,
+            ExpressionPropertyKind kind,
+            string listedBy,
+            double[] authored,
+            float[] final)
+        {
+            var initial = new float[authored.Length];
+            for (int index = 0; index < initial.Length; index++) initial[index] = (float)authored[index];
+            var sampler = new ExpressionResponseSampler
+            {
+                InputTimes = new[] { 0f, 1f },
+                OutputValues = new[] { initial, final },
+                Interpolation = ExpressionResponseInterpolation.Linear,
+                OutputEncoding = ExpressionAccessorComponentEncoding.Float,
+            };
+            var channel = new ExpressionResponseChannel
+            {
+                Target = new ExpressionResponseTarget(
+                    ExpressionPropertyIdentity.ForProperty(property),
+                    authored.Length,
+                    ExpressionResponseValueKind.Components,
+                    true,
+                    kind,
+                    authored,
+                    0),
+                ListedBy = listedBy,
+                EmitsRecords = true,
+            };
+            return (sampler, channel);
+        }
+
+        private static ExpressionTargetBinding FlippedTextureBinding(
+            string property,
+            ExpressionPropertyKind kind,
+            double[] authored,
+            Renderer panel)
+            => new ExpressionTargetBinding
+            {
+                Property = property,
+                Kind = kind,
+                AuthoredInitial = authored,
+                TextureTransform = TexturePath,
+                TextureRenderers = new[] { panel },
+                TextureMaterialSlots = new[] { 0 },
+                TextureStProperty = "_MainTex_ST",
+                TextureFlipped = true,
+            };
+
+        private static Vector4 PanelSt(Renderer panel)
+        {
+            var block = new MaterialPropertyBlock();
+            panel.GetPropertyBlock(block, 0);
+            return block.GetVector("_MainTex_ST");
+        }
+
+        private static void SetPanelSt(Renderer panel, Vector4 st)
+        {
+            var block = new MaterialPropertyBlock();
+            panel.GetPropertyBlock(block, 0);
+            block.SetVector("_MainTex_ST", st);
+            panel.SetPropertyBlock(block, 0);
         }
     }
 }
