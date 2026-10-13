@@ -759,6 +759,122 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.That(ExpressionResponseEvaluator.Evaluate(entries[0].Animation, 1f).Records, Is.Empty);
         }
 
+        [Test]
+        public void TexturePointerThroughRemappedMaterialExtensionResolvesWithItsDefaults()
+        {
+            var fixture = new Fixture();
+            fixture.AddClearcoatMaterial(new ExtTextureTransformExtension(
+                new GLTF.Math.Vector2(0.25f, 0.5f),
+                0d,
+                new GLTF.Math.Vector2(1f, 1f),
+                null));
+            const string basePath =
+                "/materials/0/extensions/KHR_materials_clearcoat/clearcoatTexture/extensions/KHR_texture_transform/";
+            int input = AddTwoKeyInput(fixture);
+            int offset = fixture.AddFloatAccessor(GLTFAccessorAttributeType.VEC2, 2, new[] { 0.25f, 0.5f, 0.75f, 1f });
+            int scale = fixture.AddFloatAccessor(GLTFAccessorAttributeType.VEC2, 2, new[] { 1f, 1f, 2f, 3f });
+            int rotation = fixture.AddFloatAccessor(GLTFAccessorAttributeType.SCALAR, 2, new[] { 0f, 1f });
+            fixture.AddAnimation(
+                new[]
+                {
+                    new SamplerSpec(input, offset),
+                    new SamplerSpec(input, scale),
+                    new SamplerSpec(input, rotation),
+                },
+                new[]
+                {
+                    PointerChannel(0, fixture.Root, basePath + "offset"),
+                    PointerChannel(1, fixture.Root, basePath + "scale"),
+                    PointerChannel(2, fixture.Root, basePath + "rotation"),
+                });
+
+            var entries = fixture.Bake(
+                new[] { Entry("clearcoat", 0, texture: new[] { 0, 1, 2 }) },
+                null,
+                out var validation);
+            var channels = entries[0].Animation.Channels;
+
+            Assert.IsTrue(validation.IsComplete, string.Join(" ", validation.IncompleteReasons));
+            Assert.That(channels[0].Target.Kind, Is.EqualTo(ExpressionPropertyKind.TextureOffset));
+            Assert.That(channels[0].Target.AuthoredInitial, Is.EqualTo(new[] { 0.25d, 0.5d }),
+                "b comes from the material extension's textureInfo");
+            Assert.That(channels[1].Target.Kind, Is.EqualTo(ExpressionPropertyKind.TextureScale));
+            Assert.That(channels[1].Target.AuthoredInitial, Is.EqualTo(new[] { 1d, 1d }), "an omitted scale is [1, 1]");
+            Assert.That(channels[2].Target.Kind, Is.EqualTo(ExpressionPropertyKind.TextureRotation));
+            Assert.That(channels[2].Target.AuthoredInitial, Is.EqualTo(new[] { 0d }), "an omitted rotation is 0");
+            foreach (var channel in channels)
+                Assert.IsTrue(channel.EmitsRecords);
+            Assert.That(ExpressionResponseEvaluator.Evaluate(entries[0].Animation, 1f).Records.Count, Is.EqualTo(3));
+        }
+
+        [Test]
+        public void PointerToRemappedMaterialExtensionTextureWithoutTextureTransformIsInvalid()
+        {
+            var fixture = new Fixture();
+            fixture.AddClearcoatMaterial(null);
+            int input = AddTwoKeyInput(fixture);
+            int offset = fixture.AddFloatAccessor(GLTFAccessorAttributeType.VEC2, 2, new[] { 0f, 0f, 1f, 0f });
+            fixture.AddAnimation(
+                new[] { new SamplerSpec(input, offset) },
+                new[]
+                {
+                    PointerChannel(
+                        0,
+                        fixture.Root,
+                        "/materials/0/extensions/KHR_materials_clearcoat/clearcoatTexture/extensions/" +
+                        "KHR_texture_transform/offset"),
+                });
+
+            var exception = Assert.Throws<ExpressionResponseEvaluationException>(() => fixture.Bake("clearcoat"));
+            StringAssert.Contains("without an authored KHR_texture_transform", exception.Message);
+        }
+
+        [Test]
+        public void TextureTransformPointersAcceptIntegerOutputs()
+        {
+            var fixture = new Fixture();
+            fixture.AddTexturedMaterial(new ExtTextureTransformExtension(
+                new GLTF.Math.Vector2(0.25f, 0.5f),
+                1d,
+                new GLTF.Math.Vector2(1f, 1f),
+                null));
+            const string basePath = "/materials/0/pbrMetallicRoughness/baseColorTexture/extensions/KHR_texture_transform/";
+            int input = AddTwoKeyInput(fixture);
+            int offset = fixture.AddUnsignedShortAccessor(
+                GLTFAccessorAttributeType.VEC2,
+                2,
+                new ushort[] { 16384, 32768, 65535, 0 },
+                true);
+            int rotation = fixture.AddUnsignedByteAccessor(GLTFAccessorAttributeType.SCALAR, 2, new byte[] { 1, 3 }, false);
+            fixture.AddAnimation(
+                new[] { new SamplerSpec(input, offset), new SamplerSpec(input, rotation) },
+                new[]
+                {
+                    PointerChannel(0, fixture.Root, basePath + "offset"),
+                    PointerChannel(1, fixture.Root, basePath + "rotation"),
+                });
+
+            var entries = fixture.Bake(
+                new[] { Entry("integer-texture", 0, texture: new[] { 0, 1 }) },
+                null,
+                out var validation);
+            var animation = entries[0].Animation;
+            var response = ExpressionResponseEvaluator.Evaluate(animation, 1f);
+
+            Assert.IsTrue(validation.IsComplete, string.Join(" ", validation.IncompleteReasons));
+            Assert.That(
+                animation.Samplers[0].OutputEncoding,
+                Is.EqualTo(ExpressionAccessorComponentEncoding.NormalizedUnsignedShort));
+            Assert.That(
+                animation.Samplers[1].OutputEncoding,
+                Is.EqualTo(ExpressionAccessorComponentEncoding.NonNormalizedInteger));
+            Assert.IsTrue(animation.Channels[0].EmitsRecords);
+            Assert.IsTrue(animation.Channels[1].EmitsRecords);
+            Assert.That(response.Records.Count, Is.EqualTo(2));
+            Assert.That(response.Records[0].Value, Is.EqualTo(new[] { 1f, 0f }));
+            Assert.That(response.Records[1].Value, Is.EqualTo(new[] { 3f }));
+        }
+
         [TestCase("KHR_meshopt_compression", false)]
         [TestCase("EXT_meshopt_compression", false)]
         [TestCase("EXT_meshopt_compression", true)]
@@ -1373,16 +1489,39 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             public void AddTexturedMaterial(ExtTextureTransformExtension transform)
             {
+                Root.Materials.Add(new GLTFMaterial
+                {
+                    PbrMetallicRoughness = new PbrMetallicRoughness
+                    {
+                        BaseColorTexture = TransformedTextureInfo(transform),
+                    },
+                });
+            }
+
+            // The transform sits on the KHR_materials_clearcoat clearcoatTexture, a slot the default remapper maps.
+            public void AddClearcoatMaterial(ExtTextureTransformExtension transform)
+            {
+                Root.Materials.Add(new GLTFMaterial
+                {
+                    Extensions = new Dictionary<string, IExtension>
+                    {
+                        {
+                            KHR_materials_clearcoat_Factory.EXTENSION_NAME,
+                            new KHR_materials_clearcoat { clearcoatTexture = TransformedTextureInfo(transform) }
+                        },
+                    },
+                });
+            }
+
+            private TextureInfo TransformedTextureInfo(ExtTextureTransformExtension transform)
+            {
                 var textureInfo = new TextureInfo { Index = new TextureId { Id = 0, Root = Root } };
                 if (transform != null)
                     textureInfo.Extensions = new Dictionary<string, IExtension>
                     {
                         { ExtTextureTransformExtensionFactory.EXTENSION_NAME, transform },
                     };
-                Root.Materials.Add(new GLTFMaterial
-                {
-                    PbrMetallicRoughness = new PbrMetallicRoughness { BaseColorTexture = textureInfo },
-                });
+                return textureInfo;
             }
 
             public GLTFRoot Root { get; }
@@ -1457,11 +1596,32 @@ namespace UnityGLTF.KhrCharacter.Tests
                 byte[] values,
                 bool normalized)
             {
-                int view = AddBufferView(values);
+                return AddIntegerAccessor(type, count, GLTFComponentType.UnsignedByte, values, normalized);
+            }
+
+            public int AddUnsignedShortAccessor(
+                GLTFAccessorAttributeType type,
+                uint count,
+                ushort[] values,
+                bool normalized)
+            {
+                var bytes = new byte[values.Length * sizeof(ushort)];
+                Buffer.BlockCopy(values, 0, bytes, 0, bytes.Length);
+                return AddIntegerAccessor(type, count, GLTFComponentType.UnsignedShort, bytes, normalized);
+            }
+
+            private int AddIntegerAccessor(
+                GLTFAccessorAttributeType type,
+                uint count,
+                GLTFComponentType componentType,
+                byte[] data,
+                bool normalized)
+            {
+                int view = AddBufferView(data);
                 Root.Accessors.Add(new Accessor
                 {
                     BufferView = new BufferViewId { Id = view, Root = Root },
-                    ComponentType = GLTFComponentType.UnsignedByte,
+                    ComponentType = componentType,
                     Normalized = normalized,
                     Count = count,
                     Type = type,

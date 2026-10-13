@@ -88,9 +88,11 @@ is requested.
   canonical property. `KHR_texture_transform` `offset`, `scale` and `rotation` resolve on the core texture slots and
   on material-extension textures that the material remapper handles; the textureInfo must author a
   `KHR_texture_transform`, whose omitted values read as `[0, 0]`, `[1, 1]` and `0`. Texture rotation is sampled as
-  an ordinary scalar and never wrapped. Each resolved target keeps its kind and authored initial value `b`
-  (`ExpressionResponseTarget.Kind`, `AuthoredInitial`, `ArrayLength`). Node TRS and texture offset and scale carry
-  the float32 values UnityGLTF parses; morph weights and texture rotation carry the JSON doubles.
+  an ordinary scalar and never wrapped. Pointer channels, texture transforms included, accept FLOAT, normalized
+  integer and non-normalized integer outputs as `KHR_animation_pointer` allows; core channels follow core glTF.
+  Each resolved target keeps its kind and authored initial value `b` (`ExpressionResponseTarget.Kind`,
+  `AuthoredInitial`, `ArrayLength`). Node TRS and texture offset and scale carry the float32 values UnityGLTF
+  parses; morph weights and texture rotation carry the JSON doubles.
 - **Matrix nodes.** A core channel must not target a node that defines `matrix`, and a pointer must not target its
   `translation`, `rotation` or `scale`. Pointer-form morph weights on such a node are allowed.
 - **Conflicts.** Every listed channel, supported or not, is a possible record. Two entries whose possible records

@@ -359,8 +359,14 @@ namespace UnityGLTF.KhrCharacter
                     {
                         var raw = DecodeVec4(importer, GetAccessor(root, sampler.Output));
                         if (raw.Length == 0) continue;
+                        // CUBICSPLINE tangents are not rotations and may be zero; only value records are normalized.
+                        bool isCubic = sampler.Interpolation == InterpolationType.CUBICSPLINE;
                         var quats = new Quaternion[raw.Length];
-                        for (int k = 0; k < raw.Length; k++) quats[k] = Normalized(raw[k].ToUnityQuaternionConvert());
+                        for (int k = 0; k < raw.Length; k++)
+                        {
+                            var key = raw[k].ToUnityQuaternionConvert();
+                            quats[k] = isCubic && k % 3 != 1 ? key : Normalized(key);
+                        }
                         BuildJointRotationDriver(target, times, quats, sampler.Interpolation, target.localRotation, output);
                     }
                     else

@@ -85,17 +85,11 @@ namespace UnityGLTF.KhrCharacter.Tests
         /// <summary>Adds a FLOAT accessor; a SCALAR input accessor gets min and max.</summary>
         public int AddFloatAccessor(string type, int count, float[] values, bool withMinMax = false)
         {
-            int byteOffset = _binary.Count;
-            foreach (float value in values) _binary.AddRange(BitConverter.GetBytes(value));
-            _bufferViews.Add(new JObject
-            {
-                { "buffer", 0 },
-                { "byteOffset", byteOffset },
-                { "byteLength", values.Length * sizeof(float) },
-            });
+            var data = new List<byte>();
+            foreach (float value in values) data.AddRange(BitConverter.GetBytes(value));
             var accessor = new JObject
             {
-                { "bufferView", _bufferViews.Count - 1 },
+                { "bufferView", AddBufferView(data.ToArray()) },
                 { "componentType", 5126 },
                 { "count", count },
                 { "type", type },
@@ -113,6 +107,35 @@ namespace UnityGLTF.KhrCharacter.Tests
             }
             _accessors.Add(accessor);
             return _accessors.Count - 1;
+        }
+
+        /// <summary>Adds an integer accessor from little-endian component bytes.</summary>
+        public int AddIntegerAccessor(string type, int count, int componentType, bool normalized, byte[] data)
+        {
+            var accessor = new JObject
+            {
+                { "bufferView", AddBufferView(data) },
+                { "componentType", componentType },
+                { "count", count },
+                { "type", type },
+            };
+            if (normalized) accessor["normalized"] = true;
+            _accessors.Add(accessor);
+            return _accessors.Count - 1;
+        }
+
+        // Every bufferView starts on a four-byte boundary, so any component type is aligned.
+        private int AddBufferView(byte[] data)
+        {
+            while (_binary.Count % 4 != 0) _binary.Add(0);
+            _bufferViews.Add(new JObject
+            {
+                { "buffer", 0 },
+                { "byteOffset", _binary.Count },
+                { "byteLength", data.Length },
+            });
+            _binary.AddRange(data);
+            return _bufferViews.Count - 1;
         }
 
         public byte[] ToGlb()

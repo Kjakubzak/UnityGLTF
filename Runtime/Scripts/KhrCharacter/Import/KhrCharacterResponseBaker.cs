@@ -49,7 +49,6 @@ namespace UnityGLTF.KhrCharacter
             public double[] AuthoredInitial;
             public bool ScalarPackedArray;
             public bool AllowsNormalizedIntegerOutput;
-            public bool FloatOutputOnly;
             public CoreNodeTargetSource Source;
             public ExpressionChannelClassification? Classification;
             public bool Resolved;
@@ -886,7 +885,6 @@ namespace UnityGLTF.KhrCharacter
                     0),
                 OutputType = outputType,
                 AuthoredInitial = authored,
-                FloatOutputOnly = true,
                 Source = CoreNodeTargetSource.AnimationPointer,
                 Classification = ExpressionChannelClassification.TextureTransform,
                 Resolved = true,
@@ -1107,8 +1105,7 @@ namespace UnityGLTF.KhrCharacter
                 accessor.ComponentType == GLTFComponentType.Short ||
                 accessor.ComponentType == GLTFComponentType.UnsignedShort;
             bool isAnyInteger = isNormalizableInteger || accessor.ComponentType == GLTFComponentType.UnsignedInt;
-            bool isPointerInteger = !target.FloatOutputOnly &&
-                target.Source == CoreNodeTargetSource.AnimationPointer &&
+            bool isPointerInteger = target.Source == CoreNodeTargetSource.AnimationPointer &&
                 isAnyInteger && (!accessor.Normalized || isNormalizableInteger);
             bool isCoreNormalizedInteger = target.Source == CoreNodeTargetSource.AnimationChannel &&
                 target.AllowsNormalizedIntegerOutput && accessor.Normalized && isNormalizableInteger;
