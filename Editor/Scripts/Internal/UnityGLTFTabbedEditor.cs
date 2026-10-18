@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
@@ -10,6 +10,7 @@ using UnityEngine;
 
 namespace UnityGLTF
 {
+#if !UNITY_6000_0_OR_NEWER
 	internal class UnityGLTFTabbedEditor : AssetImporterTabbedEditor
 	{
 		private readonly List<GLTFAssetImporterTab> _tabs = new List<GLTFAssetImporterTab>();
@@ -66,4 +67,5 @@ namespace UnityGLTF
 		internal override void OnEnable() { }
 		public override void OnInspectorGUI() => _tabGui?.Invoke();
 	}
+#endif
 }

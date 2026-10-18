@@ -19,6 +19,7 @@ using UnityEditor.Experimental.AssetImporters;
 
 namespace UnityGLTF
 {
+#if !UNITY_6000_0_OR_NEWER
 	[CustomEditor(typeof(GLTFImporter))]
 	[CanEditMultipleObjects]
 	internal class GLTFImporterInspector : UnityGLTFTabbedEditor
@@ -594,6 +595,7 @@ namespace UnityGLTF
 		}
 	}
 
+#endif
 	public static class GLTFImporterHelper
 	{
 		public static bool TextureImportSettingsAreCorrect(GLTFImporter importer)
