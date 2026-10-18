@@ -7,7 +7,7 @@ using UnityEditor;
 namespace UnityGLTF.VisibilityHints
 {
     /// <summary>
-    /// Registers the view-context visibility-hint extension factories into the global <see cref="GLTFProperty"/>
+    /// Registers the visibility-hint extension factories into the global <see cref="GLTFProperty"/>
     /// registry.
     ///
     /// Extension JSON is deserialized at parse time, which for editor and stream imports happens before any import

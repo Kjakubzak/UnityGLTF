@@ -637,6 +637,8 @@ namespace UnityGLTF
 			return false;
 		}
 
+		internal bool IsTextureFlippedOnImport(GLTFTexture texture) => texture != null && IsTextureFlipped(texture);
+
 		/// <summary>
 		/// Creates a texture from a glTF texture
 		/// </summary>

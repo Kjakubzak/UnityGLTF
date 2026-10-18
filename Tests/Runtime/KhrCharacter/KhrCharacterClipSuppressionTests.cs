@@ -71,7 +71,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         public void CollectIndices_TagsExpressionAnimationsAndReferencePose_NotBodyClips()
         {
             var expr = new KHR_character_expression();
-            expr.Expressions.Add(new KHR_character_expression.ExpressionItem { Expression = "smile", Animation = 1 });
+            expr.Expressions.Add(new KHR_character_expression.ExpressionItem { Name = "smile", Animation = 1 });
 
             var root = new GLTFRoot
             {
@@ -90,9 +90,9 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void CollectIndices_ReferencePoseAlias_IsDetected()
+        public void CollectIndices_FormerReferencePoseName_IsAnUnknownExtension()
         {
-            // The reference pose must ALWAYS be suppressed even under an accepted alternate spelling.
+            // Extension names are exact: the former KHR_character_bindpose spelling is not a reference pose.
             var root = new GLTFRoot
             {
                 Animations = new List<GLTFAnimation>
@@ -102,14 +102,14 @@ namespace UnityGLTF.KhrCharacter.Tests
             };
 
             var indices = KhrCharacterImportContext.CollectSuppressedAnimationIndices(root, null);
-            CollectionAssert.Contains(indices, 0);
+            CollectionAssert.DoesNotContain(indices, 0);
         }
 
         [Test]
         public void CollectIndices_OutOfRangeExpressionIndex_IsIgnored()
         {
             var expr = new KHR_character_expression();
-            expr.Expressions.Add(new KHR_character_expression.ExpressionItem { Expression = "x", Animation = 5 });
+            expr.Expressions.Add(new KHR_character_expression.ExpressionItem { Name = "x", Animation = 5 });
             var root = new GLTFRoot { Animations = new List<GLTFAnimation> { new GLTFAnimation() } };
 
             var indices = KhrCharacterImportContext.CollectSuppressedAnimationIndices(root, expr);

@@ -1,7 +1,11 @@
+using System;
+using System.Collections;
 using System.Collections.Generic;
 using GLTF.Schema;
+using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.TestTools;
 
 namespace UnityGLTF.KhrCharacter.Tests
 {
@@ -95,6 +99,140 @@ namespace UnityGLTF.KhrCharacter.Tests
             KhrCharacterBaker.BuildJointVectorDriver(t, TrsChannel.Translation, new[] { 0f, 1f },
                 new[] { Vector3.zero, new Vector3(0f, 1f, 0f) }, InterpolationType.LINEAR, t.localPosition, posDrivers);
             AssertVec(t.localPosition, posDrivers[0].BaseVec);
+        }
+
+        [UnityTest]
+        public IEnumerator LegacyBakerBakesPointerFormJointRotation()
+        {
+            float half = Mathf.Sqrt(0.5f);
+            var glb = RotationCharacter(
+                new JObject
+                {
+                    { "path", "pointer" },
+                    {
+                        "extensions", new JObject
+                        {
+                            { "KHR_animation_pointer", new JObject { { "pointer", "/nodes/0/rotation" } } },
+                        }
+                    },
+                },
+                "LINEAR",
+                builder => builder.AddFloatAccessor("VEC4", 2, new[] { 0f, 0f, 0f, 1f, 0f, half, 0f, half }));
+
+            JointDriver[] drivers = null;
+            yield return ImportJointDrivers(glb, baked => drivers = baked);
+
+            Assert.IsNotNull(drivers, "a KHR_animation_pointer joint channel is baked, not dropped");
+            Assert.AreEqual(1, drivers.Length);
+            Assert.AreEqual(TrsChannel.Rotation, drivers[0].Channel);
+            Assert.AreEqual("head", drivers[0].Target.name);
+            Assert.AreEqual(90f, Quaternion.Angle(Quaternion.identity, drivers[0].DeltaQuat[1]), 1e-3f);
+        }
+
+        [UnityTest]
+        public IEnumerator LegacyBakerKeepsCubicSplineRotationWithZeroTangents()
+        {
+            float half = Mathf.Sqrt(0.5f);
+            var glb = RotationCharacter(
+                CoreRotationTarget(),
+                "CUBICSPLINE",
+                builder => builder.AddFloatAccessor("VEC4", 6, new[]
+                {
+                    0f, 0f, 0f, 0f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 0f,
+                    0f, 0f, 0f, 0f, 0f, half, 0f, half, 0f, 0f, 0f, 0f,
+                }));
+
+            JointDriver[] drivers = null;
+            yield return ImportJointDrivers(glb, baked => drivers = baked);
+
+            Assert.IsNotNull(drivers, "zero in- and out-tangents do not drop the rotation channel");
+            Assert.AreEqual(1, drivers.Length);
+            Assert.AreEqual(90f, Quaternion.Angle(Quaternion.identity, drivers[0].DeltaQuat[1]), 1e-3f);
+        }
+
+        [UnityTest]
+        public IEnumerator LegacyBakerNormalizesNormalizedIntegerStepRotationKeys()
+        {
+            // Normalized BYTE keys: (0, 90, 0, 90) / 127 is about 0.2% longer than unit length.
+            var glb = RotationCharacter(
+                CoreRotationTarget(),
+                "STEP",
+                builder => builder.AddIntegerAccessor(
+                    "VEC4", 2, 5120, true, new byte[] { 0, 0, 0, 127, 0, 90, 0, 90 }));
+
+            JointDriver[] drivers = null;
+            yield return ImportJointDrivers(glb, baked => drivers = baked);
+
+            Assert.IsNotNull(drivers);
+            Assert.AreEqual(1, drivers.Length);
+            foreach (var key in drivers[0].DeltaQuat)
+                Assert.AreEqual(1f, Quaternion.Dot(key, key), 1e-5f, "every rotation key is unit length");
+            Assert.AreEqual(90f, Quaternion.Angle(Quaternion.identity, drivers[0].DeltaQuat[1]), 1e-3f);
+        }
+
+        private static JObject CoreRotationTarget() => new JObject { { "node", 0 }, { "path", "rotation" } };
+
+        // A character whose expression "turn" lists the one rotation channel, on node 0 ("head"), through
+        // KHR_character_expression_joint.
+        private static CharacterGlbBuilder RotationCharacter(
+            JObject target,
+            string interpolation,
+            Func<CharacterGlbBuilder, int> addOutput)
+        {
+            var glb = new CharacterGlbBuilder();
+            int input = glb.AddFloatAccessor("SCALAR", 2, new[] { 0f, 1f }, true);
+            int output = addOutput(glb);
+            var used = new JArray("KHR_character", "KHR_character_expression", "KHR_character_expression_joint");
+            if (target["extensions"] != null) used.Add("KHR_animation_pointer");
+            glb.Json["extensionsUsed"] = used;
+            glb.Json["nodes"] = new JArray(new JObject { { "name", "head" } });
+            glb.Json["animations"] = new JArray(new JObject
+            {
+                {
+                    "samplers", new JArray(new JObject
+                    {
+                        { "input", input },
+                        { "output", output },
+                        { "interpolation", interpolation },
+                    })
+                },
+                { "channels", new JArray(new JObject { { "sampler", 0 }, { "target", target } }) },
+            });
+            glb.Json["extensions"] = new JObject
+            {
+                { "KHR_character", new JObject() },
+                {
+                    "KHR_character_expression", new JObject
+                    {
+                        {
+                            "expressions", new JArray(new JObject
+                            {
+                                { "name", "turn" },
+                                { "animation", 0 },
+                                {
+                                    "extensions", new JObject
+                                    {
+                                        { "KHR_character_expression_joint", new JObject { { "channels", new JArray(0) } } },
+                                    }
+                                },
+                            })
+                        },
+                    }
+                },
+            };
+            return glb;
+        }
+
+        // Imports with the legacy adapter and passes the joint drivers of the one expression to onBaked.
+        private IEnumerator ImportJointDrivers(CharacterGlbBuilder glb, Action<JointDriver[]> onBaked)
+        {
+            GameObject scene = null;
+            yield return glb.Import(plugin => plugin.CreateExpressionController = true, loaded => scene = loaded);
+            _created.Add(scene);
+
+            var controller = scene.GetComponent<ExpressionController>();
+            Assert.IsNotNull(controller, "the expression passes validation and creates the adapter");
+            onBaked(controller.Set.Expressions[0].JointDrivers);
         }
 
         private static void AssertVec(Vector3 expected, Vector3 actual)

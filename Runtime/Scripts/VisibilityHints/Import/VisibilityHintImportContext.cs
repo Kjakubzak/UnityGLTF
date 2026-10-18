@@ -7,7 +7,7 @@ using UnityGLTF.Plugins;
 namespace UnityGLTF.VisibilityHints
 {
     /// <summary>
-    /// Per-import instance that reads view-context visibility hints into queryable metadata components. The shared
+    /// Per-import instance that reads visibility hints into queryable metadata components. The shared
     /// <see cref="ViewContextController"/> exposes pure per-view and per-instance predicates; it does not mutate
     /// scene or rendering state.
     /// </summary>
@@ -29,6 +29,7 @@ namespace UnityGLTF.VisibilityHints
         private sealed class NodeHintRecord
         {
             public Transform Node;
+            public bool NodeUnnamed;
             public HintPayload Payload;
         }
 
@@ -96,6 +97,7 @@ namespace UnityGLTF.VisibilityHints
                     _nodeHints.Add(new NodeHintRecord
                     {
                         Node = nodeObject.transform,
+                        NodeUnnamed = string.IsNullOrEmpty(node.Name),
                         Payload = CreatePayload(
                             hint.Role, hint.Label, hint.Extensions, hint.Extras, hint.AdditionalProperties),
                     });
@@ -145,6 +147,7 @@ namespace UnityGLTF.VisibilityHints
                     entries.Add(new NodeVisibilityHintSet.NodeVisibilityEntry
                     {
                         Node = record.Node,
+                        NodeUnnamed = record.NodeUnnamed,
                         Role = payload.Role,
                         Label = payload.Label,
                         ExtensionsJson = payload.ExtensionsJson,

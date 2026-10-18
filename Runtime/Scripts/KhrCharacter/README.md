@@ -1,8 +1,8 @@
 # KHR Character / Avatar Extensions (UnityGLTF)
 
 Runtime, import, and export support for the Khronos Character/Avatar extension set (glTF **PR #2512**):
-`KHR_character`, `KHR_character_expression` (+ `_morphtarget` / `_joint` / `_texture` / `_mapping` /
-`_mask`), `KHR_character_reference_pose`, `KHR_character_skeleton_mapping`, `KHR_node_camera_hint`, and
+`KHR_character`, `KHR_character_expression` (+ `_morphtarget` / `_joint` / `_texture_transform` / `_mapping` /
+`_suppression`), `KHR_character_reference_pose`, `KHR_character_skeleton_mapping`, `KHR_node_camera_hint`, and
 `KHR_node_lookat_target`.
 
 > **Status: non-ratified.** The extension set is still a PR, so this layer is **disabled by default** and
@@ -10,23 +10,151 @@ Runtime, import, and export support for the Khronos Character/Avatar extension s
 
 ## What it does
 
-On import of a glTF whose root carries `KHR_character`, the plugin attaches a small set of components under
-a single `KhrCharacter` hub component. The independent camera-hint and look-at-target node extensions also
-import on ordinary glTF assets without a character root.
+On import of a glTF whose top-level object carries the `KHR_character` marker, the plugin attaches a small set of
+components under a single `KhrCharacter` hub component on the imported scene root. The independent camera-hint and
+look-at-target node extensions also import on ordinary glTF assets without the marker.
 
 | Component | Responsibility |
 |---|---|
-| `KhrCharacter` | Hub: capability list, readiness, references to the components below. |
-| `ExpressionResponseSet` | Passive, stateless wire evaluator returning absolute response records by authoritative expression index. It never writes scene targets. |
-| `ExpressionController` | Optional Unity host adapter for the legacy additive/override morph, joint, and material application policy. |
-| `SkeletonMap` | Holds the resolved vocabulary→bone mapping + reference pose; can (re)build a Unity humanoid Avatar. |
-| `LookAtTargetSet` | Passive live `Transform` markers for `KHR_node_lookat_target`; never selects or drives a consumer. |
-| `CameraHintSet` | Passive advisory camera descriptors (never creates, owns, selects, or activates a camera). |
+| `KhrCharacter` | Hub: its presence means "this asset contains a character". Capability list, readiness, references to the components below. |
+| `ExpressionResponseSet` | Passive implementation of the expression pipeline: driver snapshot with suppression, per-entry sampling of the channels a supported derived expression extension lists, order-independent composition, and both mapping operations, by authoritative expression index. It also exposes each entry's suppressions, every mapping set and the validation status, and never writes scene targets. |
+| `ExpressionController` | Optional Unity host applicator: drives the response set, or an authored set through the same pipeline, and writes the composed records to node transforms, blendshape weights and material property blocks. |
+| `SkeletonMap` | Every skeleton mapping set (role → node index and transform) and every tagged reference pose with its resolved values; can (re)build a Unity humanoid Avatar. |
+| `LookAtTargetSet` | Passive live `Transform` markers for `KHR_node_lookat_target`; never selects, ranks, or drives a consumer. |
+| `CameraHintSet` | Passive advisory camera descriptors: initial camera pose, subject point, projection, default-view and presentation helpers (never creates, owns, or activates a camera). |
 | `GazeSolver` | Optional Unity host adapter with an application-configured target, expression vocabulary, and response curve. It is never auto-created by import. |
 | `ViewModeController` | First/third-person view utility (no extension required). |
 
 Capabilities distinguish passive response data from optional scene-writing adapters. Schema recognition alone does
 not satisfy an extension's required-use support contract.
+
+## Character designation
+
+`KHR_character` is a marker: `{}`. It designates the asset as containing at most one character and names no root,
+member, or owned nodes, so the hub never resolves or stores a node for it. Unknown members, including a legacy
+`rootNode`, are kept verbatim and carry no meaning; any such asset still opens the character gate. The marker is
+valid only on the top-level glTF object: a node-level `KHR_character` logs a placement warning and adds no
+capability. With the import plugin enabled, `KHR_character` in `extensionsRequired` is supported, because the hub
+exposes the designation to host logic; without the plugin it is rejected.
+
+The exporter always writes `"KHR_character": {}` and lists it in `extensionsUsed`. When an export set contains
+several character roots, the first one supplies the exported character components; the others are exported as
+ordinary content, because additional characters are out of scope for one asset.
+
+## Names and identifiers
+
+- **Extension names are exact.** Only the current names are recognized. Former or alternate spellings
+  (`KHR_character_expression_mask`, `KHR_character_expression_texture`, the plural `_masks` / `_morphtargets` /
+  `_joints`, `KHR_avatar_expression_*`, `KHR_character_bindpose`, `KHR_character_skeleton_bindpose`) import as
+  unknown extensions: they are preserved where the containing object round-trips, and their channels are not animated.
+- **Expression entries use `name`.** The label is required and nonempty, but not unique; the array index identifies
+  an entry. An entry is a glTF property, so unknown members (including a legacy `expression` label) are preserved
+  verbatim and never populate `name`. An entry without `name` is invalid expression data.
+- **Mapping-set identifiers are opaque.** `KHR_character_expression_mapping` and `KHR_character_skeleton_mapping`
+  accept any nonempty identifier and compare it by code point; nothing parses or dereferences it. Exporters should
+  still prefer a version-pinned identifier, such as the commit-pinned VRM 1.0 URLs. Only an empty identifier is
+  rejected.
+- **Diagnostic names** on mapping contributions are compared with the referenced entry's `name` by code point
+  (`Smile` and `smile` differ). On import a mismatch only warns, because the index stays authoritative; export
+  rejects a mismatch.
+
+## Suppressions
+
+`KHR_character_expression_suppression` objects carry `target`, `type`, `amount` and `threshold`. Import keeps the
+authored `amount` and `threshold` as JSON doubles together with whether each was present
+(`SuppressionEntry.HasAmount` / `HasThreshold`); an omitted value reads as `1` or `0`. Export writes back what was
+authored: `amount` when its flag is set or it differs from `1`, and `threshold` when its flag is set or it differs from
+`0`. A value omitted on import keeps its default and stays omitted, while a non-default value whose flag is clear
+(pre-rename serialized masks, inspector or code edits) is still written, because the runtime applies it. A threshold is
+never written on a `blend` or omitted type. A custom type keeps its token and its uninterpreted `amount` and
+`threshold`. A legacy suppression `name` is an unknown member: preserved, never compared with the target.
+
+## Expression import and validation
+
+The import plugin bakes `KHR_character_expression` into `ExpressionResponseSet` whether or not the Unity controller
+is requested.
+
+- **Listing decides which channels animate.** A channel produces response records only when a derived expression
+  extension on its entry lists it, this implementation supports that extension, and its target resolves.
+  `ExpressionResponseChannel.ListedBy` names the listing extension and `EmitsRecords` says whether the channel
+  produces records. An unlisted channel, or one listed only by an unsupported extension, produces none, but it still
+  counts toward the duration `T` and its time-zero value is still checked when its target resolves.
+- **Derived extensions.** The built-in joint, morphtarget and texture_transform extensions list channels and are
+  supported; `KHR_character_expression_suppression` is recognized and lists none. A host registers vendor entry
+  extensions in `ExpressionDerivedExtensionRegistry.Default` before import, with whether they list channels, their
+  channel classification, whether the host supports them, and any properties they declare single-writer. A
+  declaration counts only when the host supports the extension. Registered extensions are unsupported by default.
+- **Targets.** Node `translation`, `rotation`, `scale` and morph `weights` resolve in core and pointer form, as one
+  canonical property. `KHR_texture_transform` `offset`, `scale` and `rotation` resolve on the core texture slots and
+  on material-extension textures that the material remapper handles; the textureInfo must author a
+  `KHR_texture_transform`, whose omitted values read as `[0, 0]`, `[1, 1]` and `0`. Texture rotation is sampled as
+  an ordinary scalar and never wrapped. Pointer channels, texture transforms included, accept FLOAT, normalized
+  integer and non-normalized integer outputs as `KHR_animation_pointer` allows; core channels follow core glTF.
+  Each resolved target keeps its kind and authored initial value `b` (`ExpressionResponseTarget.Kind`,
+  `AuthoredInitial`, `ArrayLength`). Node TRS and texture offset and scale carry the float32 values UnityGLTF
+  parses; morph weights and texture rotation carry the JSON doubles.
+- **Matrix nodes.** A core channel must not target a node that defines `matrix`, and a pointer must not target its
+  `translation`, `rotation` or `scale`. Pointer-form morph weights on such a node are allowed.
+- **Conflicts.** Every listed channel, supported or not, is a possible record. Two entries whose possible records
+  overlap on node `rotation`, node `scale`, `KHR_texture_transform` `scale`, a quaternion, or a property a supported
+  derived extension declares single-writer make the asset invalid; the error names both entries and the property.
+- **Invalid data is rejected as a whole.** A missing `name`, a listed index outside the animation, a channel listed
+  by two derived extensions, a channel outside its extension's classification, a matrix-node target, a time-zero
+  mismatch or a single-writer conflict logs an error and binds no `ExpressionResponseSet`.
+- **Incomplete validation is not a rejection.** `ExpressionResponseSet.Validation` reports, and the import logs as a
+  warning, data the importer cannot check: an unrecognized or unsupported entry extension, a target it cannot
+  resolve, or compressed buffer data. A bufferView with `KHR_meshopt_compression`, an unknown extension, or
+  `EXT_meshopt_compression` without the decompression package and its import plugin is never read from fallback
+  data: such an output leaves its channel without records, and such an input makes the whole entry unevaluable
+  (`ExpressionResponse.IsEvaluable` is false).
+- **Suppressions and mapping sets** are bound to the response set (`ExpressionResponseSetEntry.Suppressions`,
+  `ForwardMappingSets`, `InputMappingSets`) with expression-array indices. An empty mapping-set identifier drops only
+  that set, with an error.
+
+## Expression pipeline and composition
+
+`ExpressionResponseSet` implements the normative pipeline as pure code over the imported data. It returns glTF-space
+values keyed by canonical property (`/nodes/3/translation`, `/nodes/2/weights`, or the texture-transform pointer) and
+never writes scene objects; applying the results and mixing them with other writers is host policy.
+
+1. **Driver snapshot.** `BuildSnapshot(finalNativeDrivers)` takes the host's final native drivers by expression index,
+   after any input mapping and arbitration. Each supplied driver must be finite and is clamped to `[0, 1]`; an absent
+   driver is `0`. That vector `u` is turned into the effective vector `v` by every entry's suppressions: a `blend`
+   factor is `1 - amount * u[source]`, a `block` factor is `1 - amount` when `u[source] > threshold` and `1`
+   otherwise, and a custom type has factor `1`. Every factor reads `u`, so cycles and self-suppression are well
+   defined. `ExpressionDriverSnapshot.U` and `V` expose both vectors.
+2. **Sampling and composition.** `Compose(snapshot)` evaluates every entry with `v[i]` at `t = v[i] * T` and composes
+   all responses in one step (`ExpressionComposer`). Each response record carries its sample `s` and the same channel
+   sampled at time zero, `n` (`ExpressionResponseRecord.NeutralValue`). An additive component is `b + sum(s - n)`,
+   added exactly in binary64 and rounded once (`ExactBinary64Sum`), even for a single record, so the result bits do
+   not depend on entry order. `n` is never replaced by `b`, and the result is never clamped or wrapped. Node
+   translation, texture offset and texture rotation are additive; rotation angles add as raw scalars, so whole turns
+   survive. Morph weights fold whole-array and element records into one complete vector per node, whose untouched
+   elements keep their authored value (`ExpressionAggregateRecord.Contributed` marks the touched ones). Node rotation
+   and scale, texture scale, quaternions and properties that a supported derived extension carried by an entry declares
+   single-writer keep their single absolute sample.
+3. **Failures.** A sample that is not finite, a rotation sample of zero length (such as a CUBICSPLINE midpoint) or an
+   aggregate that is not finite fails only its property: the property gets no record, the failure is logged as an error
+   and listed in `ExpressionResponse.Failures` and `ExpressionComposition.Failures`, and the other properties still
+   compose. A failed element withholds its node's whole morph vector. Records from two entries for one single-writer
+   property can only come from an invalid asset that validation missed; the property is reported and gets no record.
+4. **Mappings.** `EvaluateForwardMapping(identifier, snapshot)` reads `u`, never `v`, so endpoint outputs reflect the
+   requested drivers even while suppression attenuates them. `EvaluateInputMapping(identifier, commands)` maps
+   endpoint commands to native drivers. Both clamp each input to `[0, 1]`, form each `weight * value` as one binary64
+   product, add the products exactly and clamp the sum once, so the mapping README's example gives
+   `Smile = 0.6000000000000001`.
+
+`ExpressionDriverPipeline`, `ExpressionComposer` and `ExactBinary64Sum` expose the same stages for hosts that hold
+their own response data.
+
+- **Required use.** With the import plugin enabled, `KHR_character_expression` and its joint, morphtarget,
+  texture_transform, suppression and mapping extensions are supported in `extensionsRequired`; without the plugin they
+  are rejected. The hub reports these capabilities as Active whenever the response set exists.
+- **Precision of `b` (deviation).** UnityGLTF parses node `translation`, `rotation` and `scale` and
+  `KHR_texture_transform` `offset` and `scale` as float32, so the authored initial value of those targets is the
+  float32 value nearest the JSON number rather than the JSON double. Only the additive translation and offset results
+  depend on it, by at most that rounding. Morph weights and texture rotation keep the JSON doubles. Keeping the JSON
+  doubles for every target is a follow-up.
 
 ## Enabling the import plugin
 
@@ -40,10 +168,12 @@ When disabled, used-only extension data can still import as ordinary glTF metada
 behavioral extension in `extensionsRequired` is rejected unless an enabled plugin claims its complete minimum
 support; schema recognition alone is not a support claim.
 
-`CreateExpressionController` explicitly opts into the Unity scene-writing adapter. It is off by default. When that
-adapter is created successfully, `SuppressNonInteractiveAnimationAutoPlay` may additionally alter Unity's default
-clip selection; it is also off by default. Invalid or passive-only expression data never triggers suppression.
-Imported animation clips, wrap modes, and Animator state are otherwise left untouched.
+`CreateExpressionController` explicitly opts into the Unity scene-writing applicator (see
+[Unity expression applicator](#unity-expression-applicator)). It is off by default.
+`SuppressNonInteractiveAnimationAutoPlay` keeps the animations that expression entries reference, and the
+reference-pose animations, from becoming Unity's default clip; they stay explicitly playable. It is also off by
+default and does not need the controller. Imported animation clips, wrap modes, and Animator state are otherwise left
+untouched.
 
 The passive response representation is not yet an export source. Export aborts whenever a character has passive
 expression data, even if a lossy legacy controller projection is also present, rather than silently discarding the
@@ -59,16 +189,33 @@ exporting character assets:
 
 When enabled, the plugin writes the following extensions from a Unity character with a `KhrCharacter` hub:
 
-- **`KHR_character_expression`** (+ sub-extensions): Expression metadata (names, drivers, masks, mappings).
-  - `KHR_character_expression_morphtarget`: Morph target (blendshape) drivers.
-  - `KHR_character_expression_joint`: Joint (TRS) animation drivers.
-  - `KHR_character_expression_texture`: Texture UV-transform drivers.
-  - `KHR_character_expression_mask`: Mask entries for attenuating other expressions.
+- **`KHR_character`**: Always the empty marker `{}`.
+- **`KHR_character_expression`** (+ entry extensions): Expression entries (`name`, `animation`) and their listings.
+  - `KHR_character_expression_morphtarget`: Morph target (blendshape) channels.
+  - `KHR_character_expression_joint`: Joint (TRS) channels.
+  - `KHR_character_expression_texture_transform`: `KHR_texture_transform` channels.
+  - `KHR_character_expression_suppression`: Suppressions that attenuate other expressions' drivers.
   - `KHR_character_expression_mapping`: Vocabulary mapping sets.
-- **`KHR_character_skeleton_mapping`**: Rig vocabulary → glTF node association dictionary (`{ vocabularyJoint: { node, name? } }`).
-- **`KHR_character_reference_pose`**: Reference pose animation (e.g., T-Pose) with bone TRS channels.
+- **`KHR_character_skeleton_mapping`**: Mapping-set identifier → role → glTF node association dictionary
+  (`{ role: { node, name? } }`).
+- **`KHR_character_reference_pose`**: Reference pose animation with bone TRS channels. `poseType` is always written
+  explicitly; an unset label resolves to `t_pose`. The standard labels are `t_pose`, `a_pose` and `i_pose`; any other
+  label, including a legacy `TPose`, is a custom label written verbatim. The animation is named
+  `ReferencePose_<label>`.
 - **`KHR_node_camera_hint` / `KHR_node_lookat_target`**: Independent passive node annotations. They export
   from all matching sets under the selected export roots and do not synthesize `KHR_character`.
+
+### Listing and single-writer rules
+
+- **Constant channels are not listed.** A channel whose exported keys all equal the authored initial value would
+  still produce records and count for conflicts, so the exporter omits it. Every exported channel ends at normalized
+  time `1`, so omitting one never shortens the duration. When every channel of an expression is constant, the
+  exporter keeps one unlisted channel so the entry still has a duration, and warns that the expression produces no
+  records. A missing `KHR_texture_transform` is authored only on textureInfos an exported channel points at.
+- **Single-writer properties.** Node `rotation`, node `scale` and `KHR_texture_transform` `scale` may be listed by at
+  most one expression. A second expression listing one aborts the export with the property's name. For a joint,
+  give each expression its own helper node: one ancestor of the joint per expression at the joint's pivot, each
+  rotated or scaled by one expression only. Translation, morph weights and texture offset add up across expressions.
 
 ### Response-animation scope
 
@@ -77,28 +224,15 @@ limited to a particular facial vocabulary, but each entry is a stateless respons
 scalar. Ordinary looping locomotion and idle playback belong on the standard UnityGLTF animation path unless an
 author deliberately intends that response contract.
 
-### Pending schema fields
-
-The following fields are in the runtime contract but **not yet in the glTF schema** (pending PR #2512 update):
-
-- `ExpressionTrack.BlendMode` (`Additive` | `Override`): **Not exported** — no ratified schema field exists yet.
-- `ExpressionTrack.Priority`: **Not exported** — no ratified schema field exists yet.
-
-The exporter writes **no** vendor `extras` for these, so the expression wire is fully Khronos-neutral. The import
-baker reconstructs `Additive` + priority `0` regardless, so they round-trip via the authoring asset
-(`CharacterExpressionSetAsset`) but **not** through a glTF import/export cycle. They may return later via a
-ratified representation.
-
 ## Round-trip caveats
 
 Honest fidelity notes for an export → import (or import → export) cycle. None of these break neutral-glTF
 loading in a third-party viewer; they are documented so consumers know what is and isn't preserved.
 
 - **The passive response evaluator preserves CUBICSPLINE.** It decodes in-tangent/value/out-tangent records and
-  evaluates them with the glTF time-scaled Hermite rule. The optional legacy `ExpressionController` baker still
-  reduces CUBICSPLINE to its older host-adapter representation. Exporting that legacy representation writes LINEAR,
-  because it no longer contains the tangent triplets required for a valid CUBICSPLINE accessor; do not use that
-  adapter as a wire-conformance oracle.
+  evaluates them with the glTF time-scaled Hermite rule. The authoring model (`CharacterExpressionSet`), which the
+  legacy baker builds for an imported character, reduces CUBICSPLINE to its value keys. Exporting that model writes
+  LINEAR, because it no longer contains the tangent triplets required for a valid CUBICSPLINE accessor.
 - **Legacy expression samplers are normalized to response progress.** Export maps every multi-key input range to
   `[0, 1]`, and expands a legacy single target into an initial-to-target LINEAR response. This guarantees that the
   response reaches its target at progress `1`, independent of the source clip's duration.
@@ -111,10 +245,8 @@ loading in a third-party viewer; they are documented so consumers know what is a
   drivers in one expression resolve to the same concrete material property, identical curves are emitted once and
   conflicting curves reject the export. Give renderers distinct materials when they need independent texture
   animation.
-- **`blendMode` / per-driver `priority` are not exported.**
-  import baker reconstructs `Additive` + priority `0` regardless, so the exporter writes **no** vendor `extras`
-  at all — the expression wire is fully Khronos-neutral. They may return later via a ratified representation. Each
-  sub-extension lists its animation channels under the `channels` (plural) key.
+- **The expression wire is Khronos-neutral.** The exporter writes no vendor `extras` on expression entries. Each
+  derived expression extension lists its animation channels under the `channels` key.
 - **Camera hints / look-at targets preserve passive descriptor payloads.** `CameraHintSet` and
   `LookAtTargetSet` preserve their known fields, `extensions`, `extras`, unknown same-object properties, and
   required companion-extension provenance. Imported required look-at use is preserved; newly authored markers
@@ -122,74 +254,74 @@ loading in a third-party viewer; they are documented so consumers know what is a
   the referenced camera definition is also instantiated by an ordinary exported core-camera node. A projection
   definition with no instantiated Unity `Camera` cannot currently be force-exported because
   `GLTFSceneExporter.ExportCamera` is private, so that optional reference is omitted.
-- **One `KHR_character` root designation per glTF asset.** `rootNode` identifies the author-selected character
-  root; it does not assert scene membership, skin ownership, skeleton membership, descendant coverage, or that
-  the asset contains only one character-like object. If an export set contains multiple character components,
-  the exporter deterministically designates the first and leaves the others as ordinary glTF content.
+- **One character per asset.** `KHR_character` is an asset-level marker; it does not assert scene membership, skin
+  ownership, skeleton membership, or descendant coverage. If an export set contains multiple character components,
+  the exporter deterministically exports the first one's character data and the others as ordinary glTF content.
+- **Reference-pose labels are exact.** Import keeps every `poseType` verbatim, so a legacy `TPose` stays a custom
+  label rather than being mapped to `t_pose`.
 
-## Optional Unity compositing policy (additive vs. override)
+## Unity expression applicator
 
-`KHR_character_expression` returns absolute Asset Object Model response records and does not define their final
-composition. `ExpressionController` is one optional Unity policy for applying a supported subset. It is created only
-when `CreateExpressionController` is enabled.
+`KHR_character_expression` defines how simultaneous expressions compose (see
+[Expression pipeline and composition](#expression-pipeline-and-composition)); only their mix with other writers is
+host-defined. `ExpressionController` is the optional Unity host that applies the composed output. The import plugin
+adds it only when `CreateExpressionController` is enabled.
 
-`ExpressionControllerOwnershipMode.Standalone` (the default) restores targets it owns to their baked bases when no
-contributor is active. `Integrated` leaves an inactive target untouched so an Animator or another earlier system can
-refresh the live underlay before `LateUpdate`. Active joint and texture application still uses the adapter's baked
-base policy described below; `Integrated` is an inactive-target handoff, not a portable mixing rule.
-
-Expression evaluation is **target-major**: for each concrete target (a blendshape, a transform TRS channel,
-or a material `_ST`/texture property), every active expression that touches it is combined, then written
-once and re-based to the stored neutral each frame. The composition rule is selected per expression via
-`ExpressionTrack.BlendMode`:
-
-- **`Additive` (default):** contributors **sum** as deltas over the target's base. This is the
-  VRM authoring convention and is correct for morph targets.
-- **`Override` (winner-takes):** if **any** active (`d > 0`) Override contributor exists on a target, the
-  **winner replaces** the additive result with its absolute pose (`base + winnerDelta`; for rotation
-  `winnerDelta * base`). The winner is the highest **`Priority`**; ties are broken by **latest declaration**
-  (highest expression index). Additive-only targets are byte-identical to pure-additive evaluation.
-
-Composition lives in `ExpressionController`; sampling lives behind the `IExpressionSemantics` seam
-(`Evaluation/AdditiveExpressionSemantics.cs`), so the policy is swappable without touching the math.
-
-Texture **index swaps** on the same material slot resolve deterministically by **`Priority` desc, then
-driver weight, then declaration order** (above an activation threshold); with equal priorities — the baker
-default — this is identical to the prior most-active-wins behavior. The default (nothing active) is the
-slot's base texture.
+- **Pipeline.** Each `LateUpdate`, after the Animator and after `GazeSolver`, the controller forms the final native
+  drivers: the direct weights (`SetWeight`), or the output of the selected input mapping set
+  (`SelectVocabularyInputSet`, `SetWeightByVocabulary`). It then builds the driver snapshot, composes every entry at
+  `t = v[i] * T` and writes the aggregate records. Drivers and endpoint commands must be finite and are clamped to
+  `[0, 1]`. `EvaluateVocabularyOutputs` computes the forward mapping from `u`, so a suppressed source keeps its
+  endpoint output. `Snapshot` and `Composition` expose the last step's `u`, `v` and failures, which the inspector
+  shows.
+- **Imported characters** evaluate their `ExpressionResponseSet`. Import binds every property a channel can write
+  to the imported Unity objects (`ExpressionTargetBinding`), with its authored initial value `b`; the legacy bake is
+  kept only as `Set`/`BakedSet`, the authoring model for extraction and export. The controller persists the response
+  set and bindings, so an editor-imported prefab or an instantiated copy rehydrates in `Awake`.
+- **Authored sets** (`Initialize(CharacterExpressionSet)`) run through the same pipeline: each track becomes the
+  response animation its export would contain (`AuthoredExpressionCurves`), with legacy samplers normalized to
+  response progress, values in glTF space and constant channels unlisted, so previewing an authored set matches
+  evaluating the exported asset. Their properties are keyed `authored:<instanceId>/<property>`. A track that the
+  exporter would refuse produces no output and one warning, for example one whose joint keys leave the driver's base
+  at time zero, or one that animates a node rotation, node scale or texture scale that an earlier track already
+  animates.
+- **Application.** Translation is written as `(-x, y, z)` to `localPosition` (times the editor import scale factor),
+  rotation as `(x, -y, -z, w)` to `localRotation`, keeping UnityGLTF's 180° turn on camera and light nodes, and scale
+  to `localScale`. Morph weights are the node's complete vector, written as `SetBlendShapeWeight(j, w * frameWeight)`
+  for every element and never clamped. Unity clamps blendshape weights to `[0, 100]` unless
+  `PlayerSettings.legacyClampBlendShapeWeights` is off, so turn it off to see weights outside `[0, 1]`. A
+  `KHR_texture_transform`'s offset, scale and rotation go to a `MaterialPropertyBlock` per renderer and material
+  slot: `<texture>_ST` with the importer's conversion (V flip, and the mirrored form for flipped textures) and
+  `<texture>Rotation` when the material has one.
+- **Ownership.** `ExpressionControllerOwnershipMode.Standalone` (the default) owns the bound targets: a property
+  without a record returns to its authored initial value. `Integrated` leaves a property without a record, and a
+  morph weight no record covers, to an earlier writer such as an Animator. Because a texture's offset and scale share
+  one `_ST` vector, when only one of them has a record the other keeps the earlier writer's value, read back from the
+  slot's property block or else from the material. In both modes, a property with a record replaces the earlier
+  writer's value with the composed result; it is not layered on top of it.
+- **Export.** The exporter writes authored sets. Export of imported expressions still fails closed
+  (`RejectPassiveExpressionData`): a character with an `ExpressionResponseSet` aborts the export rather than
+  re-exporting the legacy projection.
 
 Using Unity material instances, `MaterialPropertyBlock`, shader parameters, or a separate texture-transform layer
-are all valid host implementations. The wire contract identifies distinct glTF target properties and returns their
-absolute samples; it does not require Unity materials. An adapter must keep separately addressed texture-info
-properties independent and must not mistake its application or mixing policy for normative extension behavior.
-
-### Known limitations
-
-These are honest, documented gaps (raised in the glTF PR #2512 discussion):
-
-1. **The optional controller is not the passive wire evaluator.** Its baked tracks are an older delta-oriented
-   Unity representation and typed classifiers select the subset it can apply. Required expression-family use is
-   conservatively rejected until every required target, classifier, mapping, mask, and provenance rule is supported.
-2. **Joint / texture absolute-pose expressions assume additive-authored deltas.** Two *absolute-pose*
-   expressions on one bone composed additively will **over-rotate**. Author conflicting absolute poses as
-   `Override` (with priorities), or keep deltas additive. The spec carries no `blendMode` yet, so the baker
-   always emits `Additive`; `Override` is currently a **runtime-selectable** policy.
-3. **Joint expressions compose over the baked node neutral, not the live Animator pose.** A joint
-   expression resolves to `delta * nodeNeutral` (the node's authored local TRS captured at bake), so on a
-   humanoid muscle bone it does **not** layer on top of the current Animator pose — it replaces it. Safe
-   "delta over current pose" needs humanoid muscle-bone detection (opt-in Avatars only) and risks per-frame
-   drift, so it is intentionally **not** done this phase.
-
-The joint additive rest is the **node neutral** local TRS — **not** `reference_pose` (a retarget pose) and
-not the skin bind pose.
+are all valid host implementations. The wire contract identifies distinct glTF target properties and their composed
+values; it does not require Unity materials.
 
 ## Skeleton mapping
 
-`KHR_character_skeleton_mapping` is `rigName -> { vocabularyJoint -> { node, name? } }`: the key is a known
-vocabulary joint (`hips`, `head`, …), and `node` is a glTF node index (a `glTFid` into the document's global
-`nodes[]`), exactly like `KHR_character.rootNode`. The optional `name` must exactly match the referenced node
-name. The baker (`KhrCharacterSkeletonBaker`) resolves each joint via the node index and reports mismatched
-labels without changing resolution. When more than one rig is present, it keeps the rig that resolves the most bones.
+`KHR_character_skeleton_mapping` is `identifier -> { role -> { node, name? } }`: the identifier is any nonempty
+mapping-set key, the role is a vocabulary role (`hips`, `head`, …), and `node` is a glTF node index (a `glTFid` into
+the document's global `nodes[]`). The optional `name` is a diagnostic copy of the referenced node name. The baker
+(`KhrCharacterSkeletonBaker`) resolves each role via the node index and reports mismatched names without changing
+resolution.
+
+Every mapping set is exposed on `SkeletonMap.Result.MappingSets`. Each set's `NodeIndices` maps every role to its node
+index; `Associations` maps the roles whose node was instantiated to its `Transform` (`TryGetAssociation`,
+`TryGetAssociationNodeIndex`). An association to a node outside the imported scene keeps its index and only warns; an
+index outside the `nodes` array makes the set's report invalid. Choosing a set and applying it to a skin is host
+logic: when more than one mapping set is present, the Unity humanoid adapter selects the one that resolves the most
+bones. With the plugin enabled, `KHR_character_skeleton_mapping` in `extensionsRequired` is supported; without it the
+asset is rejected.
 
 Building a Unity **humanoid Avatar** is opt-in (`SkeletonMap.BuildHumanoidOnAwake`); it self-validates
 required bones and falls back to the generic rig.
@@ -211,6 +343,62 @@ at pure edit time (no need to enter Play). At runtime, `SkeletonMap` treats an a
 `Animator.avatar` as authoritative: the runtime build path only runs when the slot is empty, so a manually-
 or importer-assigned Avatar wins. Runtime `GLTFSceneImporter` loads (no editor import context) fall through
 to the existing runtime build path unchanged.
+
+## Reference poses
+
+`SkeletonMap.ReferencePoses` lists every animation tagged with `KHR_character_reference_pose`, in animation order,
+with its exact `poseType` (`t_pose` when omitted). Each node of the asset has a resolved value per tagged animation:
+the properties the animation targets come from its single key, and every other node and property comes from the
+node's authored `matrix` (decomposed as the importer does) or its TRS with the core defaults. Live transforms are
+never read, so a node moved at runtime still resolves to its authored value. The values are on `ReferencePose`
+(`ResolvedNodeIndices`, `ResolvedNodes` (null for a node outside the imported scene), `ResolvedLocalPositions`,
+`ResolvedLocalRotations`, `ResolvedLocalScales`, `ParentIndices`). `Bones` and the `Local*` arrays keep the
+instantiated targeted nodes, which is what export writes. Translations are in the imported scene's units: like node
+positions, they include the scale factor of the editor importer.
+
+Import checks each tagged animation: at least one channel, ordinary node TRS targets only (no matrix nodes), one
+key per input, `LINEAR` or `STEP`, the core output type, count, and component type, decoded outputs (sparse
+included) that are finite with unit rotations, and `extensionsUsed` listing both `KHR_character_reference_pose`
+and `KHR_character`. An invalid animation stays in the list with `IsValid == false` and its `Errors`, and carries no
+values.
+
+`ApplyReferencePose(animationIndex)` writes the resolved values to every instantiated node, ancestors included;
+the parameterless overload applies the first valid pose, which `BuildHumanoidAvatar` also uses.
+`TryGetGlobalReferencePose(animationIndex, nodeIndex, out Matrix4x4)` composes the resolved locals along the glTF
+parent chain, relative to the imported scene root in Unity coordinates. UnityGLTF turns camera and light GameObjects
+180° about Y; resolved rotations exclude that turn and `ApplyReferencePose` adds it back. Playing the
+`ReferencePose_<label>` clip through core animation is only a preview: it leaves untargeted properties at their live
+values. With the plugin enabled, `KHR_character_reference_pose` in `extensionsRequired` is supported; without it the
+asset is rejected.
+
+## Camera hints
+
+`CameraHintSet` exposes every imported `KHR_node_camera_hint` with its glTF node index (`CameraHint.NodeIndex`),
+role, label, projection, and target.
+
+- **Initial camera pose.** For every role, the pose is the hint node's position and the rotation `R` that
+  `ComputeAuthoredRotation(hint, hierarchyRoot)` builds along the node path: each TRS node contributes its rotation
+  times the signs of its scale (with the zero-scale rules), each matrix node its normalized authored columns (with
+  the zero-column rules), and a reflection in the product is removed by negating its first column. Matrix nodes are
+  recorded at import, because Unity's decomposition can lose their signs and zero columns. `Apply` composes `R` with
+  the imported scene root's rotation (host placement) and uses this host's camera axes: the camera looks along the
+  hint's -Z with +Y up, and the forward-axis turn UnityGLTF gives a node with a core camera or light is removed first.
+- **Subject point.** `targetNode` never aims the camera. Import keeps it only when it names a different node that
+  resolves, and `TryGetSubjectPoint` returns its position for framing, orbit, or look-at logic.
+- **Projection.** It comes only from the hint's `camera`; a `node.camera` on the hint node never supplies it.
+- **Roles.** `CameraHintRoles` lists the eight standard roles (`default_view`, `detail`, `first_person`,
+  `framing_view`, `full_body`, `orbit_view`, `portrait`, `third_person`), compared exactly. Any other string,
+  including `Default_View` or the former `framing_target` and `orbit_center`, is custom. A host recognizes a custom
+  role by adding it to `RegisteredCustomRoles`. `GetPresentableHints()` returns only hints with recognized roles,
+  for menus and other default affordances; every hint is still imported, exported, and shown in the inspector.
+- **Default view.** `TrySelectDefaultView` picks, among hints whose role is exactly `default_view`, the one on the node
+  with the lowest index. Otherwise list order, node order, and role imply no priority; `TryGetByRole` returns the
+  first match without ranking.
+- **Names.** `GetDisplayName(hint)` uses the label, else a nonempty node name, else the role, and accepts an optional
+  provider of display names (for example localized ones) for recognized roles. A hint imported from an unnamed node
+  has `NodeUnnamed` set, so the `GLTFNode<index>` name UnityGLTF gives its GameObject is never shown as a node name.
+
+Assets must not require `KHR_node_camera_hint`, so the plugin never claims it for required use.
 
 ## Runtime rig switching
 
@@ -242,7 +430,9 @@ the character stays in Generic mode and `HumanoidAvailable` remains false.
 `KHR_node_lookat_target` is implemented by `LookAtTargetSet`, a passive collection that exposes each evaluated
 marker instance and reads its current global position. Importing a marker never creates `GazeSolver`, assigns a
 consumer, or writes expression weights. Parent transforms and host-selected animation state naturally affect the
-reported point through the live Unity `Transform`.
+reported point through the live Unity `Transform`. A marker node that was not instantiated has no entry. Hints are
+exact, case-sensitive labels (`ACME_eye_target` and `acme_eye_target` differ); `GetByHint` returns every marker
+with a hint, and list or node order implies no priority among them.
 
 `GazeSolver` is a separate, explicitly configured Unity host adapter. It maps the angle between a host-selected
 origin and target onto four configured expression names, using this adapter's 90° saturation response. The marker
@@ -271,8 +461,8 @@ expression set as **scene-independent bindings** (`Authoring/CharacterExpression
 `ExpressionController` inspector, **Extract to ScriptableObject** calls `CharacterExpressionSetAsset.Extract(baked,
 root)` to convert the baked `CharacterExpressionSet` into an `ExpressionBindingSet`: each driver's live scene
 reference (SkinnedMeshRenderer / Transform / Renderer) becomes a stable hierarchy path, each morph's blendshape
-index becomes its name, and the sampler/curve/base/priority data plus per-expression metadata (name, `BlendMode`,
-domains, masks, mapping sets) are carried verbatim. Because the asset holds no live scene refs and no `Quaternion[]`
+index becomes its name, and the sampler/curve/base data plus per-expression metadata (name, domains, suppressions
+with their presence flags, mapping sets) are carried verbatim. Because the asset holds no live scene refs and no `Quaternion[]`
 rotation curves on live drivers, it serializes cleanly into a project asset (the eye joint-rotation drivers that
 previously broke extraction now round-trip). `CharacterExpressionSetAsset.Resolve(bindings, root)` is the inverse:
 it re-resolves each path/name under a character root back into live runtime drivers (unresolved paths/names are
@@ -287,32 +477,36 @@ dropped with a warning).
 `CharacterHealthReport` (`Components/CharacterHealth.cs`) reports, per capability/expression, whether it is
 **Active / Degraded / Inert**, plus the expression count. This surfaces the "loads but is silently wrong"
 states (inert sliders when `KHR_animation_pointer` is unavailable, unresolved skeleton joints,
-humanoid-available-but-not-built, over-driven targets). `KhrCharacterDebugHUD` renders it.
+humanoid-available-but-not-built, over-driven targets). The `KhrCharacter` inspector shows it.
 
 ## Serialize → rehydrate
 
 The baked data is import-time only, but the components survive being saved as a prefab:
 
-- `ExpressionController` persists the baked `CharacterExpressionSet` in a hidden serialized field and
-  rehydrates it in `Awake` (a live import calls `Initialize` directly).
+- `ExpressionResponseSet` persists its decoded entries, suppressions, mapping sets and validation status, so a
+  rehydrated prefab builds snapshots and composes like a live import.
+- `ExpressionController` persists its authoring set and, for an imported character, its response set and target
+  bindings in hidden serialized fields, and rehydrates them in `Awake` (a live import calls `Initialize` directly).
 - `SkeletonMap` persists a `SerializableSkeletonMapping` (Unity cannot serialize the
   `Dictionary<string,Transform>`) and converts back to the runtime `SkeletonMappingResult` on load.
 - `CameraHintSet` and `LookAtTargetSet` persist passive descriptors and intra-hierarchy `Transform` references;
-  `KhrCharacter` rehydrates both hub links without creating a gaze consumer.
+  `CameraHintSet` also persists the authored matrices on its hints' paths. `KhrCharacter` rehydrates both hub links
+  without creating a gaze consumer.
 
 ## Key files
 
-- Contracts (import↔runtime boundary): `Contracts/KhrCharacter.Contracts.cs`
+- Contracts (import↔runtime boundary): `Contracts/KhrCharacter.Contracts.cs`, `Contracts/ExpressionTargetBinding.cs`
 - Import/baking: `Import/KhrCharacterImportPlugin.cs`, `Import/KhrCharacterBaker.cs`,
-  `Import/KhrCharacterSkeletonBaker.cs`
+  `Import/ExpressionTargetBindingBaker.cs`, `Import/KhrCharacterSkeletonBaker.cs`
 - Export: `Export/KhrCharacterExportPlugin.cs`, `Export/KhrCharacterExportContext.cs`
 - Passive expression wire path: `Components/ExpressionResponseSet.cs`,
-  `Evaluation/ExpressionResponseEvaluator.cs`, `Evaluation/ExpressionInitialValueValidation.cs`, and
+  `Evaluation/ExpressionResponseEvaluator.cs`, `Evaluation/ExpressionDriverPipeline.cs`,
+  `Evaluation/ExpressionComposer.cs`, `Evaluation/ExactBinary64Sum.cs`,
+  `Evaluation/ExpressionInitialValueValidation.cs`, `Evaluation/ExpressionDerivedExtensionRegistry.cs`, and
   `Import/KhrCharacterResponseBaker.cs`
 - Runtime host adapters: `Components/ExpressionController.cs`, `Components/SkeletonMap.cs`, `Components/CameraHintSet.cs`,
   `Components/LookAtTargetSet.cs`, `Components/GazeSolver.cs` (optional host adapter), and
   `Components/EyeAimConstraint.cs` (non-spec, opt-in eye aiming)
-- Authoring: `Authoring/CharacterExpressionSetAsset.cs`
-- Evaluation policy: `Evaluation/AdditiveExpressionSemantics.cs`
-- Schema + name aliasing: `Schema/` (`KhrCharacterExtensionNames.cs` holds the closed alias table)
+- Authoring: `Authoring/CharacterExpressionSetAsset.cs`, `Authoring/AuthoredExpressionCurves.cs`
+- Schema: `Schema/` (`KhrCharacterExtensionNames.cs` holds the exact extension names)
 - Tests: `Tests/Runtime/KhrCharacter/`

@@ -3,9 +3,10 @@ using GLTF.Schema;
 namespace UnityGLTF.VisibilityHints
 {
     /// <summary>
-    /// Canonical identifiers for the view-context visibility-hint extensions and the standard <c>role</c>
-    /// vocabulary. Custom role strings are allowed by the spec; the runtime treats any unrecognized role as
-    /// <c>always</c> (see <see cref="VisibilityHintEvaluator.IsRoleVisible"/>).
+    /// Canonical identifiers for the visibility-hint extensions, the standard <c>role</c> vocabulary and the standard
+    /// view tags. Roles and tags are exact and case-sensitive. Any other role, including a differently cased standard
+    /// token such as <c>"First_Person"</c>, is a custom role; a consumer that does not support it hides its content by
+    /// default (see <see cref="VisibilityHintEvaluator.IsRoleVisible"/>).
     /// </summary>
     public static class VisibilityHintExtensionNames
     {
@@ -16,5 +17,11 @@ namespace UnityGLTF.VisibilityHints
         public const string RoleAlways = "always";
         public const string RoleFirstPerson = "first_person";
         public const string RoleThirdPerson = "third_person";
+
+        /// <summary>Standard view tag for a view presented from the character's own viewpoint.</summary>
+        public const string ViewTagFirstPerson = "first_person";
+
+        /// <summary>Standard view tag for a third-person view of the character, such as a spectator or mirror view.</summary>
+        public const string ViewTagThirdPerson = "third_person";
     }
 }

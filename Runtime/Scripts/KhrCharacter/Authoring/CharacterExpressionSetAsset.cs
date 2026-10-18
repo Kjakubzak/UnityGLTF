@@ -31,7 +31,8 @@ namespace UnityGLTF.KhrCharacter
         /// Convert a baked runtime set (live scene refs + curves) into a scene-independent binding set: each
         /// driver's live target becomes a hierarchy path relative to <paramref name="root"/>, and each morph's
         /// blendshape index becomes its stable name. Curve/base/priority/sampler data and per-expression metadata
-        /// (name, blend mode, domains, binary flag, masks) plus the vocabulary mapping sets are carried verbatim.
+        /// (name, blend mode, domains, binary flag, suppressions with their amount/threshold presence flags) plus
+        /// the vocabulary mapping sets are carried verbatim.
         /// Drivers whose target is null or not under <paramref name="root"/> (or whose blendshape index cannot be
         /// named) are skipped with a warning. The result is serializable into a project asset.
         /// </summary>
@@ -56,13 +57,12 @@ namespace UnityGLTF.KhrCharacter
                 {
                     Name = src.Name,
                     Domains = src.Domains,
-                    BlendMode = src.BlendMode,
                     IsBinary = src.IsBinary,
-                    Masks = src.Masks,
-                    MaskExtensionsJson = src.MaskExtensionsJson,
-                    MaskExtrasJson = src.MaskExtrasJson,
-                    MaskAdditionalPropertiesJson = src.MaskAdditionalPropertiesJson,
-                    MaskRequiredCompanionExtensions = src.MaskRequiredCompanionExtensions,
+                    Suppressions = CopySuppressions(src.Suppressions),
+                    SuppressionExtensionsJson = src.SuppressionExtensionsJson,
+                    SuppressionExtrasJson = src.SuppressionExtrasJson,
+                    SuppressionAdditionalPropertiesJson = src.SuppressionAdditionalPropertiesJson,
+                    SuppressionRequiredCompanionExtensions = src.SuppressionRequiredCompanionExtensions,
                 };
 
                 // Morph drivers → renderer path + blendshape name.
@@ -94,7 +94,6 @@ namespace UnityGLTF.KhrCharacter
                             Sampler = d.Sampler,
                             DeltaValues = d.DeltaValues,
                             BaseValue = d.BaseValue,
-                            Priority = d.Priority,
                         });
                     }
                     binding.MorphBindings = morphs.ToArray();
@@ -126,7 +125,6 @@ namespace UnityGLTF.KhrCharacter
                             DeltaQuat = d.DeltaQuat,
                             BaseVec = d.BaseVec,
                             BaseQuat = d.BaseQuat,
-                            Priority = d.Priority,
                         });
                     }
                     binding.JointBindings = joints.ToArray();
@@ -162,7 +160,6 @@ namespace UnityGLTF.KhrCharacter
                             BaseSt = d.BaseSt,
                             Frame0St = d.Frame0St,
                             HasFrame0St = d.HasFrame0St,
-                            Priority = d.Priority,
                         });
                     }
                     binding.TextureBindings = textures.ToArray();
@@ -202,13 +199,12 @@ namespace UnityGLTF.KhrCharacter
                 {
                     Name = src.Name,
                     Domains = src.Domains,
-                    BlendMode = src.BlendMode,
                     IsBinary = src.IsBinary,
-                    Masks = src.Masks,
-                    MaskExtensionsJson = src.MaskExtensionsJson,
-                    MaskExtrasJson = src.MaskExtrasJson,
-                    MaskAdditionalPropertiesJson = src.MaskAdditionalPropertiesJson,
-                    MaskRequiredCompanionExtensions = src.MaskRequiredCompanionExtensions,
+                    Suppressions = CopySuppressions(src.Suppressions),
+                    SuppressionExtensionsJson = src.SuppressionExtensionsJson,
+                    SuppressionExtrasJson = src.SuppressionExtrasJson,
+                    SuppressionAdditionalPropertiesJson = src.SuppressionAdditionalPropertiesJson,
+                    SuppressionRequiredCompanionExtensions = src.SuppressionRequiredCompanionExtensions,
                 };
 
                 // Morph bindings → live SkinnedMeshRenderer + blendshape index.
@@ -238,7 +234,6 @@ namespace UnityGLTF.KhrCharacter
                             Sampler = b.Sampler,
                             DeltaValues = b.DeltaValues,
                             BaseValue = b.BaseValue,
-                            Priority = b.Priority,
                         });
                     }
                     track.MorphDrivers = morphs.ToArray();
@@ -266,7 +261,6 @@ namespace UnityGLTF.KhrCharacter
                             DeltaQuat = b.DeltaQuat,
                             BaseVec = b.BaseVec,
                             BaseQuat = b.BaseQuat,
-                            Priority = b.Priority,
                         });
                     }
                     track.JointDrivers = joints.ToArray();
@@ -299,7 +293,6 @@ namespace UnityGLTF.KhrCharacter
                             BaseSt = b.BaseSt,
                             Frame0St = b.Frame0St,
                             HasFrame0St = b.HasFrame0St,
-                            Priority = b.Priority,
                         });
                     }
                     track.TextureDrivers = textures.ToArray();
@@ -309,6 +302,32 @@ namespace UnityGLTF.KhrCharacter
             }
             result.Expressions = expressions.ToArray();
             return result;
+        }
+
+        private static SuppressionEntry[] CopySuppressions(SuppressionEntry[] source)
+        {
+            if (source == null) return null;
+            var copy = new SuppressionEntry[source.Length];
+            for (int i = 0; i < source.Length; i++)
+            {
+                var entry = source[i];
+                if (entry == null) continue;
+                copy[i] = new SuppressionEntry
+                {
+                    TargetIndex = entry.TargetIndex,
+                    SourceIndex = entry.SourceIndex,
+                    Type = entry.Type,
+                    CustomType = entry.CustomType,
+                    RawExtensionsJson = entry.RawExtensionsJson,
+                    RawExtrasJson = entry.RawExtrasJson,
+                    RawAdditionalPropertiesJson = entry.RawAdditionalPropertiesJson,
+                    Amount = entry.Amount,
+                    HasAmount = entry.HasAmount,
+                    Threshold = entry.Threshold,
+                    HasThreshold = entry.HasThreshold,
+                };
+            }
+            return copy;
         }
 
         // Hierarchy path of `self` relative to `root` ("" when self == root). Mirrors the importer's private

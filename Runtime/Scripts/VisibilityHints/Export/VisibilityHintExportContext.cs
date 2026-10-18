@@ -7,7 +7,7 @@ using UnityGLTF.Plugins;
 namespace UnityGLTF.VisibilityHints
 {
     /// <summary>
-    /// Export context for the view-context visibility hints. On the first callback it collects the authored hint
+    /// Export context for the visibility hints. On the first callback it collects the authored hint
     /// entries from all <see cref="NodeVisibilityHintSet"/> / <see cref="PrimitiveVisibilityHintSet"/> components
     /// under the export roots, then:
     /// <list type="bullet">

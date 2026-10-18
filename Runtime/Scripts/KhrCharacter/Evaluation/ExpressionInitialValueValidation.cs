@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace UnityGLTF.KhrCharacter
 {
@@ -48,9 +49,37 @@ namespace UnityGLTF.KhrCharacter
             return new float[morphTargetCount];
         }
 
+        /// <summary>
+        /// Resolves the instantiated morph-weight vector from node weights, then mesh weights, then one zero per morph
+        /// target, keeping the authored JSON doubles.
+        /// </summary>
+        public static double[] ResolveAuthoredMorphWeights(
+            IReadOnlyList<double> nodeWeights,
+            IReadOnlyList<double> meshWeights,
+            int morphTargetCount)
+        {
+            if (morphTargetCount < 0) throw new ArgumentOutOfRangeException(nameof(morphTargetCount));
+            var source = nodeWeights ?? meshWeights;
+            if (source == null) return new double[morphTargetCount];
+            if (source.Count != morphTargetCount)
+                throw new ExpressionResponseEvaluationException(
+                    $"{(nodeWeights != null ? "node.weights" : "mesh.weights")} contains {source.Count} weights; " +
+                    $"expected {morphTargetCount}.");
+            var result = new double[morphTargetCount];
+            for (int index = 0; index < result.Length; index++) result[index] = source[index];
+            return result;
+        }
+
         /// <summary>Compares floating-point components using the extension-defined accessor allowance.</summary>
         public static bool ComponentsEquivalent(
             float[] authored,
+            float[] sampled,
+            ExpressionAccessorComponentEncoding outputEncoding)
+            => ComponentsEquivalent(ToDoubles(authored), sampled, outputEncoding);
+
+        /// <summary>Compares authored doubles with decoded components using the accessor allowance.</summary>
+        public static bool ComponentsEquivalent(
+            double[] authored,
             float[] sampled,
             ExpressionAccessorComponentEncoding outputEncoding)
         {
@@ -74,11 +103,18 @@ namespace UnityGLTF.KhrCharacter
             float[] authored,
             float[] sampled,
             ExpressionAccessorComponentEncoding outputEncoding)
+            => QuaternionsEquivalent(ToDoubles(authored), sampled, outputEncoding);
+
+        /// <summary>Compares an authored double quaternion with a decoded one; see the float overload.</summary>
+        public static bool QuaternionsEquivalent(
+            double[] authored,
+            float[] sampled,
+            ExpressionAccessorComponentEncoding outputEncoding)
         {
             if (authored == null || sampled == null || authored.Length != 4 || sampled.Length != 4)
                 return false;
             if (!TryNormalize(authored, out double[] normalizedAuthored) ||
-                !TryNormalize(sampled, out double[] normalizedSampled))
+                !TryNormalize(ToDoubles(sampled), out double[] normalizedSampled))
                 return false;
 
             double dot = 0d;
@@ -93,6 +129,14 @@ namespace UnityGLTF.KhrCharacter
         /// <summary>Compares an authored value to a decoded sampler's endpoint-clamped sample at time zero.</summary>
         public static bool MatchesTimeZeroSample(
             float[] authored,
+            ExpressionResponseSampler sampler,
+            ExpressionResponseTarget target,
+            ExpressionAccessorComponentEncoding outputEncoding)
+            => MatchesTimeZeroSample(ToDoubles(authored), sampler, target, outputEncoding);
+
+        /// <summary>Compares authored doubles to a decoded sampler's endpoint-clamped sample at time zero.</summary>
+        public static bool MatchesTimeZeroSample(
+            double[] authored,
             ExpressionResponseSampler sampler,
             ExpressionResponseTarget target,
             ExpressionAccessorComponentEncoding outputEncoding)
@@ -154,7 +198,7 @@ namespace UnityGLTF.KhrCharacter
                     $"{source} contains {weights.Length} weights; expected {morphTargetCount}.");
         }
 
-        private static bool MatchingFiniteDimensions(float[] authored, float[] sampled)
+        private static bool MatchingFiniteDimensions(double[] authored, float[] sampled)
         {
             if (authored == null || sampled == null || authored.Length == 0 || authored.Length != sampled.Length)
                 return false;
@@ -163,7 +207,7 @@ namespace UnityGLTF.KhrCharacter
             return true;
         }
 
-        private static bool TryNormalize(float[] value, out double[] normalized)
+        private static bool TryNormalize(double[] value, out double[] normalized)
         {
             normalized = null;
             double lengthSquared = 0d;
@@ -185,6 +229,19 @@ namespace UnityGLTF.KhrCharacter
         private static bool IsFinite(float value)
         {
             return !float.IsNaN(value) && !float.IsInfinity(value);
+        }
+
+        private static bool IsFinite(double value)
+        {
+            return !double.IsNaN(value) && !double.IsInfinity(value);
+        }
+
+        private static double[] ToDoubles(float[] values)
+        {
+            if (values == null) return null;
+            var result = new double[values.Length];
+            for (int index = 0; index < result.Length; index++) result[index] = values[index];
+            return result;
         }
 
         private static float[] Copy(float[] value)

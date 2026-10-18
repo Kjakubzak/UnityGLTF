@@ -1,5 +1,8 @@
 using System;
+using System.Text.RegularExpressions;
 using NUnit.Framework;
+using UnityEngine;
+using UnityEngine.TestTools;
 
 namespace UnityGLTF.KhrCharacter.Tests
 {
@@ -162,25 +165,44 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void EverySupportedChannelProducesARecordWithoutTypedClassification()
+        public void UnlistedChannelsEmitNoRecordsButStillSetTheDuration()
         {
+            var unlisted = Channel(1, "/nodes/0/translation/0", 1);
+            unlisted.ListedBy = null;
+            unlisted.EmitsRecords = false;
             var animation = Animation(
                 new[]
                 {
                     Linear(new[] { 0f, 1f }, Scalar(0f), Scalar(1f)),
-                    Linear(new[] { 0f, 1f }, Scalar(10f), Scalar(20f)),
+                    Linear(new[] { 0f, 4f }, Scalar(10f), Scalar(20f)),
                     Linear(new[] { 0f, 1f }, Scalar(30f), Scalar(40f)),
                 },
                 Channel(0, "/nodes/0/weights/0", 1),
-                Channel(1, "/nodes/0/translation/0", 1),
+                unlisted,
                 Channel(2, "/materials/0/pbrMetallicRoughness/baseColorFactor/0", 1));
 
             var response = ExpressionResponseEvaluator.Evaluate(animation, 0.5f);
 
-            Assert.That(response.Records.Count, Is.EqualTo(3));
+            Assert.That(response.Duration, Is.EqualTo(4f), "an unlisted channel still counts toward T");
+            Assert.That(response.SampleTime, Is.EqualTo(2f));
+            Assert.That(response.Records.Count, Is.EqualTo(2));
             Assert.That(response.Records[0].ChannelIndex, Is.EqualTo(0));
-            Assert.That(response.Records[1].ChannelIndex, Is.EqualTo(1));
-            Assert.That(response.Records[2].ChannelIndex, Is.EqualTo(2));
+            Assert.That(response.Records[1].ChannelIndex, Is.EqualTo(2));
+        }
+
+        [Test]
+        public void UnevaluableExpressionReturnsNoRecordsAndNoDuration()
+        {
+            var animation = Animation(
+                new[] { new ExpressionResponseSampler { Interpolation = ExpressionResponseInterpolation.Linear } },
+                Channel(0, "/nodes/0/translation/0", 1));
+            animation.UnevaluableReason = "input data cannot be decoded";
+
+            var response = ExpressionResponseEvaluator.Evaluate(animation, 1f);
+
+            Assert.IsFalse(response.IsEvaluable);
+            Assert.That(response.Records, Is.Empty);
+            Assert.That(float.IsNaN(response.Duration));
         }
 
         [Test]
@@ -462,6 +484,86 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.That(value[3], Is.EqualTo(expected).Within(1e-6f));
         }
 
+        [Test]
+        public void StepRotationKeyFromNormalizedUnsignedBytesIsNormalized()
+        {
+            float component = 180f / 255f;
+            var sampler = new ExpressionResponseSampler
+            {
+                InputTimes = new[] { 0f, 1f },
+                OutputValues = new[] { Vector(0f, 0f, 0f, 1f), Vector(0f, 0f, component, component) },
+                Interpolation = ExpressionResponseInterpolation.Step,
+                OutputEncoding = ExpressionAccessorComponentEncoding.NormalizedUnsignedByte,
+            };
+            var animation = Animation(
+                new[] { sampler },
+                Channel(0, "/nodes/0/rotation", 4, ExpressionResponseValueKind.Quaternion));
+
+            var value = ExpressionResponseEvaluator.Evaluate(animation, 1d).Records[0].Value;
+            float length = (float)Math.Sqrt(value[0] * value[0] + value[1] * value[1] + value[2] * value[2] + value[3] * value[3]);
+
+            Assert.That(component * component * 2f, Is.Not.EqualTo(1f).Within(1e-3f), "the decoded key is not unit");
+            Assert.That(length, Is.EqualTo(1f).Within(1e-6f));
+            Assert.That(value[2], Is.EqualTo((float)Math.Sqrt(0.5d)).Within(1e-6f));
+            Assert.That(value[3], Is.EqualTo((float)Math.Sqrt(0.5d)).Within(1e-6f));
+        }
+
+        [Test]
+        public void ZeroLengthCubicSplineRotationFailsOnlyThatProperty()
+        {
+            var zero = Vector(0f, 0f, 0f, 0f);
+            var rotation = Cubic(
+                new[] { 0f, 2f },
+                zero, Vector(0f, 0f, 0f, 1f), zero,
+                zero, Vector(0f, 0f, 0f, -1f), zero);
+            var translation = Linear(new[] { 0f, 2f }, Scalar(0f), Scalar(4f));
+            var animation = Animation(
+                new[] { rotation, translation },
+                Channel(0, "/nodes/0/rotation", 4, ExpressionResponseValueKind.Quaternion),
+                Channel(1, "/nodes/1/translation/0", 1));
+
+            LogAssert.Expect(LogType.Error, new Regex("evaluation failed for channel 0 .*zero or nonfinite length"));
+            var response = ExpressionResponseEvaluator.Evaluate(animation, 0.5d);
+
+            Assert.That(response.Records.Count, Is.EqualTo(1), "the other channel still produces its record");
+            Assert.That(response.Records[0].ChannelIndex, Is.EqualTo(1));
+            Assert.That(response.Records[0].Value[0], Is.EqualTo(2f).Within(1e-6f));
+            Assert.That(response.Failures.Count, Is.EqualTo(1));
+            Assert.That(response.Failures[0].ChannelIndex, Is.EqualTo(0));
+            Assert.That(response.Failures[0].Property, Is.EqualTo("/nodes/0/rotation"));
+            Assert.That(response.Failures[0].ExpressionIndex, Is.EqualTo(-1));
+        }
+
+        [Test]
+        public void RecordsCarryTheTimeZeroSampleAsTheirNeutralValue()
+        {
+            var animation = Animation(
+                new[] { Linear(new[] { 1f, 3f }, Vector(4f, -1f), Vector(9f, 1f)) },
+                Channel(0, "/nodes/0/translation", 2));
+
+            var full = ExpressionResponseEvaluator.Evaluate(animation, 1d).Records[0];
+            var early = ExpressionResponseEvaluator.Evaluate(animation, 0.25d).Records[0];
+
+            Assert.That(full.Value, Is.EqualTo(new[] { 9f, 1f }));
+            Assert.That(full.NeutralValue, Is.EqualTo(new[] { 4f, -1f }), "t = 0 clamps to the delayed first key");
+            Assert.That(early.Value, Is.EqualTo(new[] { 4f, -1f }));
+            Assert.That(early.NeutralValue, Is.EqualTo(new[] { 4f, -1f }), "the neutral value ignores the driver");
+        }
+
+        [Test]
+        public void TinyPositiveBinary64DriverStillProducesRecords()
+        {
+            var animation = Animation(
+                new[] { Linear(new[] { 0f, 2f }, Scalar(4f), Scalar(9f)) },
+                Channel(0, "/nodes/0/translation/0", 1));
+
+            var response = ExpressionResponseEvaluator.Evaluate(animation, 1e-60d);
+
+            Assert.That(response.EffectiveDriver, Is.EqualTo(1e-60d));
+            Assert.That(response.Records.Count, Is.EqualTo(1));
+            Assert.That(response.Records[0].Value[0], Is.EqualTo(4f));
+        }
+
         private static ExpressionResponseAnimation Animation(
             ExpressionResponseSampler[] samplers,
             params ExpressionResponseChannel[] channels)
@@ -479,6 +581,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             {
                 SamplerIndex = samplerIndex,
                 Target = new ExpressionResponseTarget(property, components, kind),
+                ListedBy = KhrCharacterExtensionNames.ExpressionJoint,
+                EmitsRecords = true,
             };
         }
 
@@ -492,6 +596,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             {
                 SamplerIndex = samplerIndex,
                 Target = new ExpressionResponseTarget(identity, components, kind),
+                ListedBy = KhrCharacterExtensionNames.ExpressionJoint,
+                EmitsRecords = true,
             };
         }
 

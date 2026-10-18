@@ -5,7 +5,7 @@ namespace GLTF.Schema
 {
     /// <summary>
     /// glTF root extension <c>KHR_character_skeleton_mapping</c>: associates roles from one or more externally
-    /// defined skeletal vocabularies with glTF nodes. Per the spec: absolute vocabulary URI -&gt;
+    /// defined skeletal vocabularies with glTF nodes. Per the spec: nonempty mapping-set identifier -&gt;
     /// { role identifier -&gt; { node, name? } }.
     /// </summary>
     public class KHR_character_skeleton_mapping : IExtension
@@ -18,7 +18,7 @@ namespace GLTF.Schema
             public string Name;
         }
 
-        // Absolute vocabulary URI -> (role identifier -> node association), kept verbatim.
+        // Mapping-set identifier -> (role identifier -> node association), kept verbatim.
         public Dictionary<string, Dictionary<string, JointAssociation>> SkeletalRigMappings
             = new Dictionary<string, Dictionary<string, JointAssociation>>();
 
@@ -55,7 +55,11 @@ namespace GLTF.Schema
     public class KHR_character_skeleton_mapping_Factory : ExtensionFactory
     {
         public const string EXTENSION_NAME = KHR_character_skeleton_mapping.EXTENSION_NAME;
-        public KHR_character_skeleton_mapping_Factory() { ExtensionName = EXTENSION_NAME; }
+        public KHR_character_skeleton_mapping_Factory()
+        {
+            ExtensionName = EXTENSION_NAME;
+            RequiresRuntimeSupportForRequiredUse = true;
+        }
 
         public override IExtension Deserialize(GLTFRoot root, JProperty token)
         {
