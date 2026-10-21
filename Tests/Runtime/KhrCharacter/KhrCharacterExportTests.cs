@@ -81,6 +81,59 @@ namespace UnityGLTF.KhrCharacter.Tests
                && channel.Target.Extensions.TryGetValue(KHR_animation_pointer.EXTENSION_NAME, out var ext)
                && ext is KHR_animation_pointer p ? p.path : null;
 
+        [TestCase(false)]
+        [TestCase(true)]
+        public void CoreVisibilityExportsOwnStateAndBooleanPointerOutput(bool floatCurveValues)
+        {
+            var root = new GameObject("root"); _created.Add(root);
+            var parent = new GameObject("parent"); parent.transform.SetParent(root.transform, false);
+            var child = new GameObject("child"); child.transform.SetParent(parent.transform, false);
+            var hidden = parent.AddComponent<CoreNodeVisibility>();
+            hidden.Bind(new KHR_node_visibility { visible = false, AdditionalProperties = new JObject
+                { { "extras", new JObject { { "origin", "authored" } } } } });
+            child.AddComponent<CoreNodeVisibility>().Visible = true;
+            child.AddComponent<Camera>();
+            var settings = GLTFSettings.GetDefaultSettings();
+            foreach (var plugin in settings.ExportPlugins)
+                if (plugin is AnimationPointerExport) plugin.Enabled = true;
+            var context = new ExportContext(settings);
+            var exporter = new GLTFSceneExporter(new[] { root.transform }, context);
+            context.AfterSceneExport += (scene, gltf) =>
+            {
+                var animation = new GLTFAnimation { Name = "CoreVisibility" };
+                gltf.Animations.Add(animation);
+                exporter.AddAnimationData(hidden, nameof(CoreNodeVisibility.Visible), animation,
+                    new[] { 0f, 1f }, floatCurveValues ? new object[] { 0f, 1f } : new object[] { false, true });
+            };
+            var bytes = exporter.SaveGLBToByteArray("core-visibility");
+            var exported = exporter.GetRoot();
+            var parentNode = exported.Nodes.Find(node => node.Name == "parent");
+            var childNode = exported.Nodes.Find(node => node.Name == "child");
+            var parentValue = (KHR_node_visibility)parentNode.Extensions[KHR_node_visibility_Factory.EXTENSION_NAME];
+            var childValue = (KHR_node_visibility)childNode.Extensions[KHR_node_visibility_Factory.EXTENSION_NAME];
+            Assert.IsFalse(parentValue.visible);
+            Assert.IsTrue(childValue.visible, "a true child exports own true beneath false parent");
+            Assert.AreEqual("authored", parentValue.Serialize().Value["extras"]["origin"].Value<string>());
+            Assert.IsTrue(child.activeInHierarchy);
+            Assert.IsNotNull(childNode.Camera, "core false does not remove the descendant camera");
+            var animationResult = exported.Animations.Find(animation => animation.Name == "CoreVisibility");
+            Assert.AreEqual(1, animationResult.Channels.Count);
+            var channel = animationResult.Channels[0];
+            Assert.AreEqual("/nodes/" + exported.Nodes.IndexOf(parentNode) + "/extensions/KHR_node_visibility/visible",
+                PointerPath(channel));
+            var sampler = animationResult.Samplers[channel.Sampler.Id];
+            Assert.AreEqual(InterpolationType.STEP, sampler.Interpolation);
+            var output = sampler.Output.Value;
+            Assert.AreEqual(5121, (int)output.ComponentType, "Boolean output uses UNSIGNED_BYTE");
+            Assert.AreEqual(GLTFAccessorAttributeType.SCALAR, output.Type);
+            Assert.AreEqual(2, output.Count);
+            Assert.IsFalse(output.Normalized);
+            int binaryStart = 28 + System.BitConverter.ToInt32(bytes, 12);
+            int valueStart = binaryStart + (int)output.BufferView.Value.ByteOffset + (int)output.ByteOffset;
+            Assert.AreEqual(0, bytes[valueStart]);
+            Assert.AreEqual(1, bytes[valueStart + 1]);
+        }
+
         // A minimal single-key joint rotation driver: enough to make an expression emit one channel so the
         // expression item is kept (the exporter drops expressions with zero channels).
         private static JointDriver RotationDriver(Transform target) => new JointDriver
@@ -90,7 +143,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             DeltaQuat = new[] { Quaternion.Euler(10f, 0f, 0f) }, BaseQuat = Quaternion.identity,
         };
 
-        // Translation is additive, so several expressions may move the same node; node rotation is single-writer.
+        // Translation aggregates additively; shared rotation uses the documented host composition policy.
         private static JointDriver TranslationDriver(Transform target) => new JointDriver
         {
             Target = target, Channel = TrsChannel.Translation,
