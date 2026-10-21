@@ -140,6 +140,9 @@ namespace UnityGLTF.KhrCharacter.Tests
                 ThrowOnLowMemory = false,
                 ImportContext = new GLTFImportContext(settings),
             };
+            fixture.ToGlb(); // Materialize buffer/accessor tables before adding required POSITION bounds.
+            fixture.Json["accessors"][position]["min"] = new JArray(0, 0, 0);
+            fixture.Json["accessors"][position]["max"] = new JArray(1, 1, 0);
             using (var stream = new MemoryStream(fixture.ToGlb()))
             using (var importer = new GLTFSceneImporter(stream, options))
             {
