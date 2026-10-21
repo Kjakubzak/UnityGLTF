@@ -1,9 +1,14 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.IO;
+using System.Threading;
 using GLTF.Schema;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.TestTools;
+using UnityGLTF.Plugins;
 using UnityGLTF.VisibilityHints;
 
 namespace UnityGLTF.KhrCharacter.Tests
@@ -69,6 +74,112 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.That(ExpressionDriverPipeline.EvaluateExpressionSetMapping(set, inputs, 1), Is.EqualTo(new[] { 0d }));
             inputs["unknown"] = double.NaN;
             Assert.Throws<ArgumentOutOfRangeException>(() => ExpressionDriverPipeline.EvaluateExpressionSetMapping(set, inputs, 1));
+        }
+
+        [Test]
+        public void CurrentMappingCompatibilityApiUsesTheSameFiniteInputContract()
+        {
+            var set = new ExpressionMappingSet { SetName = "demo_v1", Targets = new[]
+            {
+                new MappingTarget { TargetName = "Smile", Contributions = new[]
+                { new MappingContribution { SourceIndex = 0, Weight = 1 } } },
+            } };
+            var responses = Object("responses").AddComponent<ExpressionResponseSet>();
+            responses.Bind(new ExpressionResponseSetEntry[1], false, forwardMappingSets: new[] { set });
+            var supplied = new Dictionary<string, double> { { "unknown", double.NaN } };
+            Assert.Throws<ArgumentOutOfRangeException>(() => responses.EvaluateExpressionSetMapping("demo_v1", supplied));
+            Assert.Throws<ArgumentOutOfRangeException>(() => responses.EvaluateInputMapping("demo_v1", supplied));
+            supplied["unknown"] = .5;
+            Assert.That(responses.EvaluateInputMapping("demo_v1", supplied), Is.EqualTo(new[] { 0d }));
+        }
+
+        [UnityTest]
+        public IEnumerator LoadNodeAsyncOwnFalseFiltersVisualsWithoutDeactivatingHierarchy()
+            => AssertNodeLoadCoreVisibility(1);
+
+        [UnityTest]
+        public IEnumerator LoadNodeAsyncAncestorFalseFiltersTrueChildrenWithoutDeactivatingHierarchy()
+            => AssertNodeLoadCoreVisibility(0);
+
+        private IEnumerator AssertNodeLoadCoreVisibility(int nodeIndex)
+        {
+            var fixture = new CharacterGlbBuilder();
+            int position = fixture.AddFloatAccessor("VEC3", 3,
+                new[] { 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f, 0f });
+            fixture.Json["extensionsUsed"] = new JArray("KHR_node_visibility", "KHR_lights_punctual");
+            fixture.Json["extensions"] = new JObject { { "KHR_lights_punctual", new JObject
+            {
+                { "lights", new JArray(new JObject { { "type", "point" } }) },
+            } } };
+            fixture.Json["meshes"] = new JArray(new JObject { { "primitives", new JArray(new JObject
+            {
+                { "attributes", new JObject { { "POSITION", position } } },
+            }) } });
+            fixture.Json["cameras"] = new JArray(new JObject
+            {
+                { "type", "perspective" },
+                { "perspective", new JObject { { "yfov", 1 }, { "znear", .1 } } },
+            });
+            JObject Visibility(bool value) => new JObject
+            {
+                { "KHR_node_visibility", new JObject { { "visible", value } } },
+                { "KHR_lights_punctual", new JObject { { "light", 0 } } },
+            };
+            fixture.Json["nodes"] = new JArray(
+                new JObject { { "name", "instance" }, { "children", new JArray(1) } },
+                new JObject { { "name", "falseParent" }, { "children", new JArray(2) },
+                    { "mesh", 0 }, { "camera", 0 }, { "extensions", Visibility(false) } },
+                new JObject { { "name", "trueChild" }, { "mesh", 0 }, { "camera", 0 },
+                    { "extensions", Visibility(true) } });
+            var settings = GLTFSettings.GetDefaultSettings();
+            foreach (var plugin in settings.ImportPlugins)
+                if (plugin is LightsPunctualImport) plugin.Enabled = true;
+            var options = new ImportOptions
+            {
+                AnimationMethod = AnimationMethod.None,
+                ThrowOnLowMemory = false,
+                ImportContext = new GLTFImportContext(settings),
+            };
+            using (var stream = new MemoryStream(fixture.ToGlb()))
+            using (var importer = new GLTFSceneImporter(stream, options))
+            {
+                var loading = importer.LoadNodeAsync(nodeIndex, CancellationToken.None);
+                while (!loading.IsCompleted) yield return null;
+                Assert.IsFalse(loading.IsFaulted, loading.Exception?.Flatten().ToString());
+                var root = importer.CreatedObject;
+                _objects.Add(root);
+                Assert.AreEqual(1, root.GetComponentsInChildren<CoreVisibilityController>(true).Length,
+                    "the public node route must attach exactly one default rendering adapter");
+                var controller = root.GetComponent<CoreVisibilityController>();
+                Assert.IsNotNull(controller);
+                var falseNode = importer.NodeCache[1];
+                var trueNode = importer.NodeCache[2];
+                Assert.IsFalse(falseNode.GetComponent<CoreNodeVisibility>().Visible);
+                Assert.IsTrue(trueNode.GetComponent<CoreNodeVisibility>().Visible,
+                    "ancestor filtering must not overwrite the child's authored own Boolean");
+                var renderers = root.GetComponentsInChildren<Renderer>(true);
+                var lights = root.GetComponentsInChildren<Light>(true);
+                var cameras = root.GetComponentsInChildren<Camera>(true);
+                Assert.AreEqual(2, renderers.Length);
+                Assert.AreEqual(2, lights.Length);
+                Assert.AreEqual(2, cameras.Length);
+                foreach (var renderer in renderers) Assert.IsFalse(renderer.enabled,
+                    "filtering must already apply on return from LoadNodeAsync");
+                foreach (var light in lights) Assert.IsFalse(light.enabled);
+                foreach (var camera in cameras) camera.enabled = true; // Host selects imported cameras.
+                controller.ApplyVisibility();
+                foreach (var camera in cameras) Assert.IsTrue(camera.enabled);
+                foreach (var transform in root.GetComponentsInChildren<Transform>(true))
+                    Assert.IsTrue(transform.gameObject.activeInHierarchy,
+                        "visibility must preserve camera, animation and interaction hierarchy");
+                Assert.AreSame(root, nodeIndex == 1 ? falseNode : falseNode.transform.parent.gameObject);
+                Assert.IsNull(root.transform.parent, "the partial load does not instantiate omitted source ancestors");
+                falseNode.GetComponent<CoreNodeVisibility>().Visible = true;
+                controller.ApplyVisibility();
+                foreach (var renderer in renderers) Assert.IsTrue(renderer.enabled);
+                foreach (var light in lights) Assert.IsTrue(light.enabled);
+                foreach (var camera in cameras) Assert.IsTrue(camera.enabled);
+            }
         }
 
         [Test]

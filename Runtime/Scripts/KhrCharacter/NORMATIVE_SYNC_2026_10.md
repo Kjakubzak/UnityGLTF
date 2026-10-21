@@ -75,7 +75,9 @@ current Boolean. `IsVisibleInHierarchy(node, instanceRoot)` combines own and anc
 to this component, not `GameObject.activeSelf`. Export writes the own Boolean, preserving a true child beneath a
 false ancestor and retaining extension payloads. Boolean pointer export uses unsigned-byte outputs and STEP.
 
-The default `CoreVisibilityController` disables descendant Renderers and Lights while core visibility is false,
+Both scene imports and `LoadNodeAsync` attach one default `CoreVisibilityController` at the imported instance root
+when core visibility is present. A partial node-tree load evaluates only its instantiated hierarchy; source ancestors
+outside that subtree are not imported or inferred. The controller disables descendant Renderers and Lights while core visibility is false,
 restoring their captured enabled state when visible again or when the controller is disabled. It never deactivates
 GameObjects or Cameras: ordinary animation and interaction remain active. This is a global Boolean adapter; per-view
 hints still use the scoped material adapter. Hosts with another renderer-state owner should use the core query in

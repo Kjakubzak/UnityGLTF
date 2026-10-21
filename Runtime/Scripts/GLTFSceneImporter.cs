@@ -712,6 +712,12 @@ namespace UnityGLTF
 				_assetCache.AnimationCache,
 				GenericObjectReferences.ToArray()
 			);
+
+            // Both scene and public node-tree imports complete through this ownership seam.
+            // Core visibility suppresses visual content without deactivating the imported hierarchy.
+            if (CreatedObject.GetComponentInChildren<CoreNodeVisibility>(true) != null
+                && CreatedObject.GetComponent<CoreVisibilityController>() == null)
+                CreatedObject.AddComponent<CoreVisibilityController>();
 		}
 
 		private GameObject NoSceneRoot;
@@ -844,10 +850,6 @@ namespace UnityGLTF
 			{
 				CreatedObject.transform.SetParent(SceneParent, false);
 			}
-
-            if (CreatedObject != null && CreatedObject.GetComponentInChildren<CoreNodeVisibility>(true) != null
-                && CreatedObject.GetComponent<CoreVisibilityController>() == null)
-                CreatedObject.AddComponent<CoreVisibilityController>();
 
 			_lastLoadedScene = CreatedObject;
 

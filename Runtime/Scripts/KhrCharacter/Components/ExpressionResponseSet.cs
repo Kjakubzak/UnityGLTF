@@ -348,6 +348,8 @@ namespace UnityGLTF.KhrCharacter
         /// <exception cref="ArgumentException">The asset has no such input mapping set.</exception>
         public double[] EvaluateInputMapping(string identifier, IReadOnlyDictionary<string, double> commands)
         {
+            if (TryGetForwardMappingSet(identifier, out var currentSet))
+                return ExpressionDriverPipeline.EvaluateExpressionSetMapping(currentSet, commands, Count);
             if (!TryGetInputMappingSet(identifier, out var set))
                 throw new ArgumentException(
                     $"The asset has no expressionSetMappings set '{identifier}'.", nameof(identifier));
