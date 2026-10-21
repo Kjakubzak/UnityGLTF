@@ -110,6 +110,8 @@ is requested.
   `MappingSets`, with `InputMappingSets` as input-oriented adapters) with expression-array indices. An empty mapping-set identifier drops only
   that set, with an error.
 
+See [October 2026 migration notes](NORMATIVE_SYNC_2026_10.md) for the current wire contract and host policies.
+
 ## Expression pipeline and composition
 
 `ExpressionResponseSet` implements the normative pipeline as pure code over the imported data. It returns glTF-space
@@ -211,7 +213,7 @@ When enabled, the plugin writes the following extensions from a Unity character 
 ### Listing and shared-target rules
 
 - **Constant channels are not listed.** A channel whose exported keys all equal the authored initial value would
-  still produce records and count for conflicts, so the exporter omits it. Every exported channel ends at normalized
+  still produce records, so the exporter omits it as an authoring choice. Every exported channel ends at normalized
   time `1`, so omitting one never shortens the duration. When every channel of an expression is constant, the
   exporter keeps one unlisted channel so the entry still has a duration, and warns that the expression produces no
   records. A missing `KHR_texture_transform` is authored only on textureInfos an exported channel points at.
@@ -273,8 +275,8 @@ adds it only when `CreateExpressionController` is enabled.
   drivers: the direct weights (`SetWeight`), or the output of the selected input mapping set
   (`SelectVocabularyInputSet`, `SetWeightByVocabulary`). It then builds the driver snapshot, composes every entry at
   `t = v[i] * T` and writes the aggregate records. Drivers and endpoint commands must be finite and are clamped to
-  `[0, 1]`. `EvaluateVocabularyOutputs` computes the forward mapping from `u`, so a suppressed source keeps its
-  endpoint output. `Snapshot` and `Composition` expose the last step's `u`, `v` and failures, which the inspector
+  `[0, 1]`. `EvaluateVocabularyOutputs` computes an optional host projection from `u`, so a suppressed source keeps its
+  projected output. This API is outside the current wire contract. `Snapshot` and `Composition` expose the last step's `u`, `v` and failures, which the inspector
   shows.
 - **Imported characters** evaluate their `ExpressionResponseSet`. Import binds every property a channel can write
   to the imported Unity objects (`ExpressionTargetBinding`), with its authored initial value `b`; the legacy bake is
@@ -311,9 +313,9 @@ values; it does not require Unity materials.
 
 `KHR_character_skeleton_mapping` is `identifier -> { role -> { node, name? } }`: the identifier is any nonempty
 mapping-set key, the role is a vocabulary role (`hips`, `head`, …), and `node` is a glTF node index (a `glTFid` into
-the document's global `nodes[]`). The optional `name` is a diagnostic copy of the referenced node name. The baker
-(`KhrCharacterSkeletonBaker`) resolves each role via the node index and reports mismatched names without changing
-resolution.
+the document's global `nodes[]`). The optional `name` is an independent label, including an empty string. The baker
+(`KhrCharacterSkeletonBaker`) resolves each role only via the node index and preserves labels and association
+payloads; label differences produce no warning.
 
 Every mapping set is exposed on `SkeletonMap.Result.MappingSets`. Each set's `NodeIndices` maps every role to its node
 index; `Associations` maps the roles whose node was instantiated to its `Transform` (`TryGetAssociation`,
