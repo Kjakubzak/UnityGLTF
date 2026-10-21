@@ -274,6 +274,9 @@ namespace UnityGLTF.KhrCharacter.Tests
                 Expressions = new[]
                 {
                     new ExpressionTrack { Name = "smileLeft", Domains = ExpressionDomain.Morph, MorphDrivers = new[] { LinearMorph(smr) } },
+                },
+                MappingSets = new[]
+                {
                     new ExpressionMappingSet
                     {
                         SetName = "out",
