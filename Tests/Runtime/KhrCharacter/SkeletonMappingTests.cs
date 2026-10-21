@@ -562,7 +562,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             var pose = fixture.Bake()[0];
 
             Assert.IsTrue(pose.IsValid, string.Join(" ", pose.Errors));
-            Assert.IsNull(pose.PoseType, "an imported missing required label is not invented");
+            Assert.AreEqual(ReferencePoseLabels.TPose, pose.PoseType, "the explicit imported label remains exact");
             CollectionAssert.AreEqual(new[] { 0, 1, 2, 3 }, pose.ResolvedNodeIndices);
             CollectionAssert.AreEqual(new[] { -1, 0, 0, 1 }, pose.ParentIndices);
             Assert.AreSame(prop, pose.ResolvedNodes[2]);

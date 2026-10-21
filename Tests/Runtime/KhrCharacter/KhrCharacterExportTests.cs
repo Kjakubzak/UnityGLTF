@@ -2270,8 +2270,8 @@ namespace UnityGLTF.KhrCharacter.Tests
                 "duplicate poseType labels do not collapse distinct animation-indexed reference poses");
         }
 
-        [TestCase(null, "t_pose")]
-        [TestCase("", "t_pose")]
+        [TestCase(null, null)]
+        [TestCase("", null)]
         [TestCase("T_POSE", "T_POSE")]
         [TestCase("TPose", "TPose")]
         public void ReferencePoseExport_WritesResolvedLabelExplicitly(string authoredLabel, string expectedLabel)
@@ -2289,6 +2289,12 @@ namespace UnityGLTF.KhrCharacter.Tests
                 },
             });
 
+            if (expectedLabel == null)
+            {
+                var error = Assert.Throws<System.InvalidOperationException>(() => ExportToGltfRoot(root));
+                StringAssert.Contains("requires a nonempty poseType", error.Message);
+                return;
+            }
             var gltf = ExportToGltfRoot(root);
 
             GLTFAnimation refAnim = null;
@@ -2299,7 +2305,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsNotNull(refAnim);
             var poseJson = (JObject)refAnim.Extensions[KHR_character_reference_pose.EXTENSION_NAME].Serialize().Value;
             Assert.AreEqual(expectedLabel, poseJson["poseType"].Value<string>(),
-                "an unset label resolves to t_pose; any other label is written verbatim");
+                "a provided label is written verbatim; no missing label is invented");
             Assert.AreEqual("ReferencePose_" + expectedLabel, refAnim.Name);
         }
 

@@ -1306,22 +1306,22 @@ namespace UnityGLTF.KhrCharacter.Tests
             };
             var inputSets = new[]
             {
-                new ExpressionInputMappingSet
+                new ExpressionMappingSet
                 {
                     SetName = "relative/v1",
-                    Commands = new[]
+                    Targets = new[]
                     {
-                        new InputMappingCommand
+                        new MappingTarget
                         {
-                            CommandName = "happy",
-                            Contributions = new[] { new InputMappingContribution { TargetIndex = 0, Weight = 0.25 } },
+                            TargetName = "happy",
+                            Contributions = new[] { new MappingContribution { SourceIndex = 0, Weight = 0.25 } },
                         },
                     },
                 },
             };
 
             var source = CreateGameObject("source").AddComponent<ExpressionResponseSet>();
-            source.Bind(entries, true, new ExpressionValidationStatus(new[] { "partial" }), forward, inputSets);
+            source.Bind(entries, true, new ExpressionValidationStatus(new[] { "partial" }), new[] { forward[0], inputSets[0] });
             string json = JsonUtility.ToJson(source);
             var restored = CreateGameObject("restored").AddComponent<ExpressionResponseSet>();
             JsonUtility.FromJsonOverwrite(json, restored);

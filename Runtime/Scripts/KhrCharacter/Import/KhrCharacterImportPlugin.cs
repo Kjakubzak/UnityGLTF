@@ -323,8 +323,7 @@ namespace UnityGLTF.KhrCharacter
                     void DropSet(string message) =>
                         Debug.LogError($"[KHR_character] Expression mapping set dropped: {message}");
                     forward = KhrCharacterBaker.BuildMappingSets(mappingExt, identity, expressionExt.Expressions, DropSet);
-                    input = KhrCharacterBaker.BuildInputMappingSets(
-                        mappingExt, identity, expressionExt.Expressions, DropSet);
+                    input = ExpressionDriverPipeline.ToInputMappingSets(forward);
                 }
 
                 var responses = sceneObject.GetComponent<ExpressionResponseSet>();

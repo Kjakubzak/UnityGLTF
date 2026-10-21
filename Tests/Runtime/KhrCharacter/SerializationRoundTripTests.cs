@@ -1223,7 +1223,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                         LocalMatrix = Matrix4x4.TRS(Vector3.zero, rotation, new Vector3(-1f, 1f, 0f)),
                     },
                 });
-            var sourceRotation = set.ComputeAuthoredRotation(set.Hints[0], src.transform);
+            Assert.IsFalse(set.TryGetInitialCameraFrame(set.Hints[0], src.transform, out _));
             Assert.IsTrue(set.TrySelectDefaultView(out var sourceDefault));
             Assert.AreEqual(2, sourceDefault.NodeIndex);
 
@@ -1237,10 +1237,9 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(3, cloneSet.Hints.Count);
             Assert.AreEqual(1, cloneSet.AuthoredMatrices.Count);
             Assert.AreSame(cloneFlat, cloneSet.AuthoredMatrices[0].Node);
-            var cloneRotation = cloneSet.ComputeAuthoredRotation(cloneSet.Hints[0], clone.transform);
-            Assert.Less(Quaternion.Angle(sourceRotation, cloneRotation), 0.01f);
-            Assert.Less(Quaternion.Angle(rotation * Quaternion.Euler(0f, 180f, 0f), cloneRotation), 0.01f,
-                "the authored matrix keeps the scale sign that the clone's decomposed transform lost");
+            Assert.AreEqual(set.AuthoredMatrices[0].LocalMatrix, cloneSet.AuthoredMatrices[0].LocalMatrix);
+            Assert.IsFalse(cloneSet.TryGetInitialCameraFrame(cloneSet.Hints[0], clone.transform, out _),
+                "a zero-scale authored matrix remains undefined after rehydration");
             Assert.IsTrue(cloneSet.TrySelectDefaultView(out var cloneDefault));
             Assert.AreEqual(2, cloneDefault.NodeIndex, "node indices survive, so the lowest index still wins");
             Assert.AreSame(clone.transform.Find("Early"), cloneDefault.Node);
