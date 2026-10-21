@@ -137,6 +137,18 @@ namespace UnityGLTF
 			
 			switch (animatedObject)
 			{
+                case CoreNodeVisibility visibility:
+                    if (!UseAnimationPointer) return;
+                    if (propertyName != nameof(CoreNodeVisibility.Visible)) return;
+                    var visibilityNode = _root.Nodes[GetTransformIndex(visibility.transform)];
+                    if (visibilityNode.Extensions == null || !visibilityNode.Extensions.ContainsKey(KHR_node_visibility_Factory.EXTENSION_NAME))
+                        visibilityNode.AddExtension(KHR_node_visibility_Factory.EXTENSION_NAME, visibility.ExportOwnState());
+                    DeclareExtensionUsage(KHR_node_visibility_Factory.EXTENSION_NAME, false);
+                    propertyName = $"extensions/{KHR_node_visibility_Factory.EXTENSION_NAME}/{nameof(KHR_node_visibility.visible)}";
+                    extensionName = KHR_node_visibility_Factory.EXTENSION_NAME;
+                    isBoolean = true;
+                    interpolation = InterpolationType.STEP;
+                    break;
 				case GameObject gameObject:
 					if (propertyName == "activeSelf")
 					{
@@ -365,7 +377,7 @@ namespace UnityGLTF
 			var val = values[0];
 			if (isBoolean)
 			{
-				Tsampler.Output = ExportAccessor(Array.ConvertAll(values, e => (float)e >= 0.5f ? (byte)1 : Byte.MinValue));
+				Tsampler.Output = ExportAccessor(Array.ConvertAll(values, e => (e is bool boolean ? boolean : (float)e >= 0.5f) ? (byte)1 : Byte.MinValue));
 			}
 			else
 			{

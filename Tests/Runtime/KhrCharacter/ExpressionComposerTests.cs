@@ -211,7 +211,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsTrue(scaleRecord.IsSingleWriter);
             Assert.That(scaleRecord.Value, Is.EqualTo(new[] { 3d, 4d, 5d }), "not b + (s - n)");
             Assert.IsTrue(composition.TryGetRecord("/nodes/0/rotation", out var rotationRecord));
-            Assert.That(rotationRecord.Value, Is.EqualTo(new double[] { 0f, half, 0f, half }));
+            Assert.That(rotationRecord.Value, Is.EqualTo(new double[] { 0f, half, 0f, half }).Within(1e-6));
         }
 
         [Test]
@@ -254,24 +254,23 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void SingleWriterRecordsFromTwoEntriesAreReportedAndNotEmitted()
+        public void SharedScaleUsesHighestActiveExpressionIndex()
         {
             var scale = Target("/nodes/0/scale", ExpressionPropertyKind.NodeScale, new[] { 1d, 1d, 1d });
 
-            LogAssert.Expect(LogType.Error, new Regex("composition failed for '/nodes/0/scale'.*entries 0, 1"));
             var composition = ExpressionComposer.Compose(new[]
             {
                 Response(Record(scale, new[] { 2f, 2f, 2f }, new[] { 1f, 1f, 1f })),
                 Response(Record(scale, new[] { 3f, 3f, 3f }, new[] { 1f, 1f, 1f })),
             });
 
-            Assert.That(composition.Records, Is.Empty);
-            Assert.That(composition.Failures.Count, Is.EqualTo(1));
-            Assert.That(composition.Failures[0].Property, Is.EqualTo("/nodes/0/scale"));
+            Assert.IsTrue(composition.TryGetRecord("/nodes/0/scale", out var selected));
+            Assert.That(selected.Value, Is.EqualTo(new[] { 3d, 3d, 3d }));
+            Assert.That(composition.Failures, Is.Empty);
         }
 
         [Test]
-        public void OnlySupportedDerivedExtensionsDeclareSingleWriterProperties()
+        public void LegacyVendorDeclarationsCannotDisableMandatoryAddition()
         {
             var registry = new ExpressionDerivedExtensionRegistry();
             registry.Register("ACME_supported", true, isSupported: true,
@@ -291,10 +290,9 @@ namespace UnityGLTF.KhrCharacter.Tests
                 responses, ExpressionComposer.SingleWriterPredicate(new[] { unsupported }));
             Assert.That(additive.Records[0].Value[0], Is.EqualTo(3d));
 
-            LogAssert.Expect(LogType.Error, new Regex("composition failed for '/nodes/0/translation'"));
             var declared = ExpressionComposer.Compose(
                 responses, ExpressionComposer.SingleWriterPredicate(new[] { supported }));
-            Assert.That(declared.Records, Is.Empty);
+            Assert.That(declared.Records[0].Value[0], Is.EqualTo(3d));
         }
 
         [Test]

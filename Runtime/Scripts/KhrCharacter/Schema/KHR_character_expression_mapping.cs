@@ -4,8 +4,8 @@ using Newtonsoft.Json.Linq;
 namespace GLTF.Schema
 {
     /// <summary>
-    /// glTF root extension <c>KHR_character_expression_mapping</c>. The forward and input directions are
-    /// separately authored operations and are never inferred from one another.
+    /// glTF root extension <c>KHR_character_expression_mapping</c>. The current dictionary maps external input keys to native expression indices (wire source).
+    /// The former input property is retained only for explicit migration and never emitted as a current operation.
     /// </summary>
     public class KHR_character_expression_mapping : IExtension
     {
@@ -31,7 +31,7 @@ namespace GLTF.Schema
             public JObject AdditionalProperties;
         }
 
-        // setName -> (targetExpression -> contributions)
+        // set identifier -> (external input key -> driven native expressions)
         public Dictionary<string, Dictionary<string, List<SourceWeight>>> ExpressionSetMappings
             = new Dictionary<string, Dictionary<string, List<SourceWeight>>>();
 
@@ -62,13 +62,7 @@ namespace GLTF.Schema
                 else value.Remove("expressionSetMappings");
             }
             else value.Remove("expressionSetMappings");
-            if (ExpressionSetInputMappings != null && ExpressionSetInputMappings.Count > 0)
-            {
-                var mappings = SerializeInputSets(ExpressionSetInputMappings);
-                if (mappings.HasValues) value["expressionSetInputMappings"] = mappings;
-                else value.Remove("expressionSetInputMappings");
-            }
-            else value.Remove("expressionSetInputMappings");
+            value.Remove("expressionSetInputMappings");
             if (Extensions != null && Extensions.HasValues) value["extensions"] = Extensions.DeepClone();
             else value.Remove("extensions");
             if (Extras != null) value["extras"] = Extras.DeepClone();

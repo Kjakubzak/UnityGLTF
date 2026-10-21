@@ -19,7 +19,7 @@ namespace GLTF.Schema
 {
     /// <summary>
     /// glTF animation extension <c>KHR_character_reference_pose</c>: marks an animation as a canonical
-    /// reference (retarget) pose. An omitted <c>poseType</c> resolves to <c>t_pose</c>. Retarget-only — NOT the
+    /// reference (retarget) pose. <c>poseType</c> is required and nonempty. Retarget-only — NOT the
     /// additive base.
     /// </summary>
     public class KHR_character_reference_pose : IExtension
@@ -51,9 +51,9 @@ namespace GLTF.Schema
         }
         public override IExtension Deserialize(GLTFRoot root, JProperty token)
         {
-            var ext = new KHR_character_reference_pose { RawData = token };
+            var ext = new KHR_character_reference_pose { RawData = token, PoseType = null };
             if (token.Value is JObject obj)
-                ext.PoseType = obj["poseType"]?.Value<string>() ?? ReferencePoseLabels.TPose;
+                ext.PoseType = obj["poseType"]?.Value<string>();
             return ext;
         }
     }

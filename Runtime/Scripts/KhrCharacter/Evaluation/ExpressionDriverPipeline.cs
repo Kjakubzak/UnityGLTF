@@ -16,8 +16,7 @@ namespace UnityGLTF.KhrCharacter
         }
 
         /// <summary>
-        /// The host's final native drivers clamped to [0, 1], with 0 for an absent driver. The native-to-endpoint
-        /// mapping reads this vector.
+        /// The host's final native drivers clamped to [0, 1], with 0 for an absent driver. Input mapping and host arbitration precede this vector.
         /// </summary>
         public IReadOnlyList<double> U { get; }
 
@@ -30,8 +29,8 @@ namespace UnityGLTF.KhrCharacter
 
     /// <summary>
     /// The driver stages of the KHR_character_expression pipeline as pure functions: the host's final native drivers
-    /// become <c>u</c>, suppression turns <c>u</c> into <c>v</c>, and the two mapping operations convert between native
-    /// drivers and an endpoint vocabulary. Nothing here reads or writes Unity scene objects.
+    /// become <c>u</c>, suppression turns <c>u</c> into <c>v</c>, and input mappings drive native
+    /// expressions from an external vocabulary. Nothing here reads or writes Unity scene objects.
     /// </summary>
     public static class ExpressionDriverPipeline
     {
@@ -129,7 +128,7 @@ namespace UnityGLTF.KhrCharacter
         }
 
         /// <summary>
-        /// Computes the endpoint outputs of an <c>expressionSetMappings</c> set from <c>u</c>, never from <c>v</c>.
+        /// Optional host projection from native drivers to keys. This is not a standardized mapping operation or inverse.
         /// Each input is clamped to [0, 1] and a missing one is 0; each <c>weight * value</c> is one binary64
         /// product, the products are summed exactly and the sum is clamped once.
         /// </summary>
@@ -183,7 +182,7 @@ namespace UnityGLTF.KhrCharacter
                 foreach (var command in set.Commands)
                 {
                     if (command?.CommandName == null || command.Contributions == null) continue;
-                    double value = commands != null && commands.TryGetValue(command.CommandName, out double supplied)
+                    double value = commands != null && TryGetExactInput(commands, command.CommandName, out double supplied)
                         ? ClampFinite(supplied, nameof(commands), "Endpoint commands")
                         : 0d;
                     foreach (var contribution in command.Contributions)
@@ -200,6 +199,94 @@ namespace UnityGLTF.KhrCharacter
             for (int index = 0; index < nativeCount; index++)
                 if (products[index] != null) native[index] = ClampedSum(products[index]);
             return native;
+        }
+
+        /// <summary>Evaluates the current external-input to native-driver table, preserving the full native count.</summary>
+        public static double[] EvaluateExpressionSetMapping(
+            ExpressionMappingSet set, IReadOnlyDictionary<string, double> inputs, int nativeCount)
+        {
+            if (inputs != null)
+                foreach (var supplied in inputs) ClampFinite(supplied.Value, nameof(inputs), "External inputs");
+            if (set?.Targets != null)
+                foreach (var input in set.Targets)
+                    if (input?.Contributions != null)
+                        foreach (var term in input.Contributions)
+                            if (double.IsNaN(term.Weight) || term.Weight < 0d || term.Weight > 1d)
+                                throw new ArgumentOutOfRangeException(nameof(set), "Mapping coefficients must be in [0, 1].");
+            return EvaluateInputMapping(ToInputMappingSet(set), inputs, nativeCount);
+        }
+
+        /// <summary>Adapts the current table to the controller's input-oriented representation without changing indices.</summary>
+        public static ExpressionInputMappingSet ToInputMappingSet(ExpressionMappingSet set)
+        {
+            if (set == null) return null;
+            var commands = new List<InputMappingCommand>();
+            if (set.Targets != null)
+                foreach (var input in set.Targets)
+                {
+                    if (input == null) continue;
+                    var terms = new List<InputMappingContribution>();
+                    if (input.Contributions != null)
+                        foreach (var term in input.Contributions)
+                            terms.Add(new InputMappingContribution
+                            {
+                                TargetIndex = term.SourceIndex, Name = term.Name, Weight = term.Weight,
+                                ExtensionsJson = term.ExtensionsJson, ExtrasJson = term.ExtrasJson,
+                                AdditionalPropertiesJson = term.AdditionalPropertiesJson,
+                            });
+                    commands.Add(new InputMappingCommand { CommandName = input.TargetName, Contributions = terms.ToArray() });
+                }
+            return new ExpressionInputMappingSet { SetName = set.SetName, Commands = commands.ToArray() };
+        }
+
+        public static ExpressionInputMappingSet[] ToInputMappingSets(IReadOnlyList<ExpressionMappingSet> sets)
+        {
+            if (sets == null) return null;
+            var result = new ExpressionInputMappingSet[sets.Count];
+            for (int i = 0; i < result.Length; i++) result[i] = ToInputMappingSet(sets[i]);
+            return result;
+        }
+
+        /// <summary>Explicit migration of the former input-only authored operation into the current wire-shaped table.</summary>
+        public static ExpressionMappingSet[] FromLegacyInputMappingSets(IReadOnlyList<ExpressionInputMappingSet> sets)
+        {
+            if (sets == null) return null;
+            var result = new ExpressionMappingSet[sets.Count];
+            for (int i = 0; i < result.Length; i++)
+            {
+                var set = sets[i];
+                if (set == null) continue;
+                var targets = new List<MappingTarget>();
+                if (set.Commands != null)
+                    foreach (var command in set.Commands)
+                    {
+                        if (command == null) continue;
+                        var terms = new List<MappingContribution>();
+                        if (command.Contributions != null)
+                            foreach (var term in command.Contributions)
+                                terms.Add(new MappingContribution
+                                {
+                                    SourceIndex = term.TargetIndex, Name = term.Name, Weight = term.Weight,
+                                    ExtensionsJson = term.ExtensionsJson, ExtrasJson = term.ExtrasJson,
+                                    AdditionalPropertiesJson = term.AdditionalPropertiesJson,
+                                });
+                        targets.Add(new MappingTarget { TargetName = command.CommandName, Contributions = terms.ToArray() });
+                    }
+                result[i] = new ExpressionMappingSet { SetName = set.SetName, Targets = targets.ToArray() };
+            }
+            return result;
+        }
+
+        private static bool TryGetExactInput(IReadOnlyDictionary<string, double> inputs, string key, out double value)
+        {
+            foreach (var input in inputs)
+                if (string.Equals(input.Key, key, StringComparison.Ordinal))
+                {
+                    value = input.Value;
+                    return true;
+                }
+            value = 0d;
+            return false;
         }
 
         private static double Product(double weight, double value)

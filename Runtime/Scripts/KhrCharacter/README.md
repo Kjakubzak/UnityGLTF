@@ -52,11 +52,11 @@ ordinary content, because additional characters are out of scope for one asset.
   verbatim and never populate `name`. An entry without `name` is invalid expression data.
 - **Mapping-set identifiers are opaque.** `KHR_character_expression_mapping` and `KHR_character_skeleton_mapping`
   accept any nonempty identifier and compare it by code point; nothing parses or dereferences it. Exporters should
-  still prefer a version-pinned identifier, such as the commit-pinned VRM 1.0 URLs. Only an empty identifier is
+  prefer a fixed vocabulary identifier, such as `vrm1_expressions` or `vrm1_humanoid`. Only an empty identifier is
   rejected.
-- **Diagnostic names** on mapping contributions are compared with the referenced entry's `name` by code point
-  (`Smile` and `smile` differ). On import a mismatch only warns, because the index stays authoritative; export
-  rejects a mismatch.
+- **Independent names.** Mapping contribution and skeleton association names are optional labels independent of
+  expression/node names. They never affect resolution, produce mismatch warnings, or require equality. Empty labels
+  remain valid where the schema permits them. Skeleton association labels and payloads survive prefab/export.
 
 ## Suppressions
 
@@ -78,12 +78,12 @@ is requested.
   extension on its entry lists it, this implementation supports that extension, and its target resolves.
   `ExpressionResponseChannel.ListedBy` names the listing extension and `EmitsRecords` says whether the channel
   produces records. An unlisted channel, or one listed only by an unsupported extension, produces none, but it still
-  counts toward the duration `T` and its time-zero value is still checked when its target resolves.
+  counts toward the duration `T`. A time-zero sample different from the authored state is valid.
 - **Derived extensions.** The built-in joint, morphtarget and texture_transform extensions list channels and are
   supported; `KHR_character_expression_suppression` is recognized and lists none. A host registers vendor entry
   extensions in `ExpressionDerivedExtensionRegistry.Default` before import, with whether they list channels, their
-  channel classification, whether the host supports them, and any properties they declare single-writer. A
-  declaration counts only when the host supports the extension. Registered extensions are unsupported by default.
+  channel classification and whether the host supports them. Legacy single-writer declarations remain metadata
+  for compatibility and cannot disable mandatory additive aggregation. Registered extensions are unsupported by default.
 - **Targets.** Node `translation`, `rotation`, `scale` and morph `weights` resolve in core and pointer form, as one
   canonical property. `KHR_texture_transform` `offset`, `scale` and `rotation` resolve on the core texture slots and
   on material-extension textures that the material remapper handles; the textureInfo must author a
@@ -95,12 +95,11 @@ is requested.
   parses; morph weights and texture rotation carry the JSON doubles.
 - **Matrix nodes.** A core channel must not target a node that defines `matrix`, and a pointer must not target its
   `translation`, `rotation` or `scale`. Pointer-form morph weights on such a node are allowed.
-- **Conflicts.** Every listed channel, supported or not, is a possible record. Two entries whose possible records
-  overlap on node `rotation`, node `scale`, `KHR_texture_transform` `scale`, a quaternion, or a property a supported
-  derived extension declares single-writer make the asset invalid; the error names both entries and the property.
-- **Invalid data is rejected as a whole.** A missing `name`, a listed index outside the animation, a channel listed
-  by two derived extensions, a channel outside its extension's classification, a matrix-node target, a time-zero
-  mismatch or a single-writer conflict logs an error and binds no `ExpressionResponseSet`.
+- **Within-animation uniqueness.** A concrete target cannot occur twice in the same animation; whole-array and
+  element targets overlap. Cross-entry shared targets are valid, including rotations and scales.
+- **Invalid data is rejected as a whole.** Missing expression names, out-of-range channel indices, duplicate channel
+  listings, classification errors, invalid sampler/resource data and prohibited matrix-node TRS targets reject the
+  response set. Differing time-zero samples and cross-entry overlaps do not.
 - **Incomplete validation is not a rejection.** `ExpressionResponseSet.Validation` reports, and the import logs as a
   warning, data the importer cannot check: an unrecognized or unsupported entry extension, a target it cannot
   resolve, or compressed buffer data. A bufferView with `KHR_meshopt_compression`, an unknown extension, or
@@ -108,7 +107,7 @@ is requested.
   data: such an output leaves its channel without records, and such an input makes the whole entry unevaluable
   (`ExpressionResponse.IsEvaluable` is false).
 - **Suppressions and mapping sets** are bound to the response set (`ExpressionResponseSetEntry.Suppressions`,
-  `ForwardMappingSets`, `InputMappingSets`) with expression-array indices. An empty mapping-set identifier drops only
+  `MappingSets`, with `InputMappingSets` as input-oriented adapters) with expression-array indices. An empty mapping-set identifier drops only
   that set, with an error.
 
 ## Expression pipeline and composition
@@ -131,18 +130,22 @@ never writes scene objects; applying the results and mixing them with other writ
    translation, texture offset and texture rotation are additive; rotation angles add as raw scalars, so whole turns
    survive. Morph weights fold whole-array and element records into one complete vector per node, whose untouched
    elements keep their authored value (`ExpressionAggregateRecord.Contributed` marks the touched ones). Node rotation
-   and scale, texture scale, quaternions and properties that a supported derived extension carried by an entry declares
-   single-writer keep their single absolute sample.
+   and scale, texture scale, quaternions, Boolean and integer properties use this host's override policy: choose
+   the absolute sample from the highest active expression-array index. Normalize quaternion results, preserve their
+   chosen sign, and validate finite/discrete values. The driver selects sample time and is not applied again as a
+   blend weight. An inactive entry emits no record and cannot override an active entry. Exact binary64 addition is
+   a package guarantee; the current specification does not mandate that precision policy.
 3. **Failures.** A sample that is not finite, a rotation sample of zero length (such as a CUBICSPLINE midpoint) or an
    aggregate that is not finite fails only its property: the property gets no record, the failure is logged as an error
    and listed in `ExpressionResponse.Failures` and `ExpressionComposition.Failures`, and the other properties still
-   compose. A failed element withholds its node's whole morph vector. Records from two entries for one single-writer
-   property can only come from an invalid asset that validation missed; the property is reported and gets no record.
-4. **Mappings.** `EvaluateForwardMapping(identifier, snapshot)` reads `u`, never `v`, so endpoint outputs reflect the
-   requested drivers even while suppression attenuates them. `EvaluateInputMapping(identifier, commands)` maps
-   endpoint commands to native drivers. Both clamp each input to `[0, 1]`, form each `weight * value` as one binary64
-   product, add the products exactly and clamp the sum once, so the mapping README's example gives
-   `Smile = 0.6000000000000001`.
+   compose. A failed element withholds its node's whole morph vector.
+4. **Mappings.** `EvaluateExpressionSetMapping(identifier, inputs)` maps the sole `expressionSetMappings` table
+   from external input keys to an immutable full-count native vector. Wire `source` is the driven native index.
+   Clamp each input, sum all terms including repeats, then clamp each native sum. Unknown keys contribute nothing;
+   comparison is exact even when a host passes a case-insensitive dictionary. Host arbitration precedes `u` and
+   suppression. `EvaluateInputMapping` is a compatibility input API. `EvaluateForwardMapping` and
+   `EvaluateVocabularyOutputs` remain optional host projections of the same coefficients; they are not a standard
+   output mapping, an inverse, or a round-trip guarantee.
 
 `ExpressionDriverPipeline`, `ExpressionComposer` and `ExactBinary64Sum` expose the same stages for hosts that hold
 their own response data.
@@ -199,23 +202,22 @@ When enabled, the plugin writes the following extensions from a Unity character 
 - **`KHR_character_skeleton_mapping`**: Mapping-set identifier → role → glTF node association dictionary
   (`{ role: { node, name? } }`).
 - **`KHR_character_reference_pose`**: Reference pose animation with bone TRS channels. `poseType` is always written
-  explicitly; an unset label resolves to `t_pose`. The standard labels are `t_pose`, `a_pose` and `i_pose`; any other
+  explicitly; missing/empty imported labels are invalid. Newly authored objects default to an explicit `t_pose`. The standard labels are `t_pose`, `a_pose` and `i_pose`; any other
   label, including a legacy `TPose`, is a custom label written verbatim. The animation is named
   `ReferencePose_<label>`.
 - **`KHR_node_camera_hint` / `KHR_node_lookat_target`**: Independent passive node annotations. They export
   from all matching sets under the selected export roots and do not synthesize `KHR_character`.
 
-### Listing and single-writer rules
+### Listing and shared-target rules
 
 - **Constant channels are not listed.** A channel whose exported keys all equal the authored initial value would
   still produce records and count for conflicts, so the exporter omits it. Every exported channel ends at normalized
   time `1`, so omitting one never shortens the duration. When every channel of an expression is constant, the
   exporter keeps one unlisted channel so the entry still has a duration, and warns that the expression produces no
   records. A missing `KHR_texture_transform` is authored only on textureInfos an exported channel points at.
-- **Single-writer properties.** Node `rotation`, node `scale` and `KHR_texture_transform` `scale` may be listed by at
-  most one expression. A second expression listing one aborts the export with the property's name. For a joint,
-  give each expression its own helper node: one ancestor of the joint per expression at the joint's pivot, each
-  rotated or scaled by one expression only. Translation, morph weights and texture offset add up across expressions.
+- **Shared targets are valid.** Every supported channel remains available. Export does not require helper nodes
+  or reject shared rotation/scale targets. Mandatory additive targets accumulate every current contribution;
+  non-additive targets use the documented host composition policy.
 
 ### Response-animation scope
 
@@ -237,8 +239,8 @@ loading in a third-party viewer; they are documented so consumers know what is a
   `[0, 1]`, and expands a legacy single target into an initial-to-target LINEAR response. This guarantees that the
   response reaches its target at progress `1`, independent of the source clip's duration.
 - **UV-transform export is anchored to the authored material rest.** `BaseSt` is the static material transform and
-  every multi-key output is reconstructed as `BaseSt + frameRelativeDelta`. The first exported value must therefore
-  match the static glTF `KHR_texture_transform`. `Frame0St` remains legacy import metadata but is not an export
+  every multi-key output is reconstructed as `BaseSt + frameRelativeDelta`. A differing first value is valid and
+  remains the channel neutral sample used for additive composition. `Frame0St` remains legacy import metadata but is not an export
   baseline: a foreign animation whose first key differs from its static material is rebased to the static value.
 - **A material shared by multiple renderers is one entry on the wire.** UV-transform channels are addressed per
   material via `KHR_animation_pointer` (`/materials/{m}/...`), not per renderer. If two
@@ -282,9 +284,7 @@ adds it only when `CreateExpressionController` is enabled.
   response animation its export would contain (`AuthoredExpressionCurves`), with legacy samplers normalized to
   response progress, values in glTF space and constant channels unlisted, so previewing an authored set matches
   evaluating the exported asset. Their properties are keyed `authored:<instanceId>/<property>`. A track that the
-  exporter would refuse produces no output and one warning, for example one whose joint keys leave the driver's base
-  at time zero, or one that animates a node rotation, node scale or texture scale that an earlier track already
-  animates.
+  exporter would refuse produces no output and one warning, for example a curve with invalid samples. Shared targets and differing time-zero values remain valid.
 - **Application.** Translation is written as `(-x, y, z)` to `localPosition` (times the editor import scale factor),
   rotation as `(x, -y, -z, w)` to `localRotation`, keeping UnityGLTF's 180° turn on camera and light nodes, and scale
   to `localScale`. Morph weights are the node's complete vector, written as `SetBlendShapeWeight(j, w * frameWeight)`
@@ -347,7 +347,7 @@ to the existing runtime build path unchanged.
 ## Reference poses
 
 `SkeletonMap.ReferencePoses` lists every animation tagged with `KHR_character_reference_pose`, in animation order,
-with its exact `poseType` (`t_pose` when omitted). Each node of the asset has a resolved value per tagged animation:
+with its exact required, nonempty `poseType`. Each node of the asset has a resolved value per tagged animation:
 the properties the animation targets come from its single key, and every other node and property comes from the
 node's authored `matrix` (decomposed as the importer does) or its TRS with the core defaults. Live transforms are
 never read, so a node moved at runtime still resolves to its authored value. The values are on `ReferencePose`
@@ -376,13 +376,13 @@ asset is rejected.
 `CameraHintSet` exposes every imported `KHR_node_camera_hint` with its glTF node index (`CameraHint.NodeIndex`),
 role, label, projection, and target.
 
-- **Initial camera pose.** For every role, the pose is the hint node's position and the rotation `R` that
-  `ComputeAuthoredRotation(hint, hierarchyRoot)` builds along the node path: each TRS node contributes its rotation
-  times the signs of its scale (with the zero-scale rules), each matrix node its normalized authored columns (with
-  the zero-column rules), and a reflection in the product is removed by negating its first column. Matrix nodes are
-  recorded at import, because Unity's decomposition can lose their signs and zero columns. `Apply` composes `R` with
-  the imported scene root's rotation (host placement) and uses this host's camera axes: the camera looks along the
-  hint's -Z with +Y up, and the forward-axis turn UnityGLTF gives a node with a core camera or light is removed first.
+- **Initial camera pose.** `TryGetInitialCameraFrame(hint, hierarchyRoot, out frame)` uses the full global node
+  transform before removing global scaling under core camera rules. It retains reflected frames and returns false
+  for singular/zero-scale transforms; such a hint remains valid but defines no initial pose. `Apply` leaves the camera
+  untouched in that case. Otherwise it applies the asset frame plus host placement through `worldToCameraMatrix`,
+  looking along local -Z with +Y up. `TryGetInitialPose` / `ComputeAuthoredRotation` are rigid Unity host adaptations;
+  a quaternion cannot retain reflection or shear. The compatibility wrapper throws for an undefined frame. The old
+  per-local scale-sign/zero-column rotation recipe is no longer the normative camera interpretation.
 - **Subject point.** `targetNode` never aims the camera. Import keeps it only when it names a different node that
   resolves, and `TryGetSubjectPoint` returns its position for framing, orbit, or look-at logic.
 - **Projection.** It comes only from the hint's `camera`; a `node.camera` on the hint node never supplies it.

@@ -77,6 +77,19 @@ namespace UnityGLTF.VisibilityHints
                 resolvedNodeRole, ResolveRole(renderer, subMesh), viewTags, ancestorInclusiveCoreVisible,
                 resolver, renderUnsupportedRoles);
 
+        /// <summary>Uses the cumulative node hint result for the containing instance.</summary>
+        public bool ShouldRenderPrimitiveInstance(
+            Renderer renderer,
+            int subMesh,
+            bool nodeHintVisible,
+            IReadOnlyCollection<string> viewTags,
+            bool ancestorInclusiveCoreVisible,
+            IVisibilityRoleResolver resolver = null,
+            bool renderUnsupportedRoles = false)
+            => VisibilityHintEvaluator.ShouldRenderPrimitiveInstance(
+                nodeHintVisible, ResolveRole(renderer, subMesh), viewTags, ancestorInclusiveCoreVisible,
+                resolver, renderUnsupportedRoles);
+
         /// <summary>Presentation name for an entry: its label, else its role.</summary>
         public static string GetDisplayName(PrimitiveVisibilityEntry entry)
         {

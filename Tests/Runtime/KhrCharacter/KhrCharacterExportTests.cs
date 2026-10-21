@@ -1454,7 +1454,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void TwoTracksRotatingOneBoneAbortWithHelperNodeMessage()
+        public void TwoTracksRotatingOneBoneExportBothResponses()
         {
             var root = new GameObject("char");
             _created.Add(root);
@@ -1469,16 +1469,14 @@ namespace UnityGLTF.KhrCharacter.Tests
                 },
             });
 
-            var exception = Assert.Catch<System.InvalidOperationException>(() => ExportToGltfRoot(root));
-            StringAssert.Contains("'lookLeft'", exception.Message);
-            StringAssert.Contains("'lookRight'", exception.Message);
-            StringAssert.Contains("/rotation', which only one expression may write", exception.Message);
-            StringAssert.Contains("helper node", exception.Message);
+            var exported = ExportToGltfRoot(root);
+            var expressions = (KHR_character_expression)exported.Extensions[KHR_character_expression.EXTENSION_NAME];
+            Assert.That(expressions.Expressions.Count, Is.EqualTo(2));
         }
 
         [TestCase(false)]
         [TestCase(true)]
-        public void TextureScaleConflictsOnlyWhenTwoTracksAnimateIt(bool animateScale)
+        public void SharedTextureScaleExportsBothTracks(bool animateScale)
         {
             var shader = TextureShaderOrFail();
             var root = MakeUvCharacter(shader, out var renderer);
@@ -1510,8 +1508,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                     "constant scale channels are not listed, so two offset expressions do not conflict");
                 return;
             }
-            var exception = Assert.Catch<System.InvalidOperationException>(() => ExportToGltfRoot(root));
-            StringAssert.Contains("/KHR_texture_transform/scale', which only one expression may write", exception.Message);
+            Assert.DoesNotThrow(() => ExportToGltfRoot(root));
         }
 
         [Test]

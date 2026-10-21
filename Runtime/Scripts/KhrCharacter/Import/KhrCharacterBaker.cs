@@ -781,7 +781,7 @@ namespace UnityGLTF.KhrCharacter
         }
 
         /// <summary>
-        /// Builds the forward mapping sets. An empty identifier throws, or, when <paramref name="onInvalidSet"/> is
+        /// Builds current external-input mapping sets. An empty identifier throws, or, when <paramref name="onInvalidSet"/> is
         /// supplied, drops only that set and reports it.
         /// </summary>
         internal static ExpressionMappingSet[] BuildMappingSets(
@@ -815,8 +815,6 @@ namespace UnityGLTF.KhrCharacter
                                     Debug.LogWarning($"[KHR_character] Mapping references invalid expression index {sw.Source}; dropping.");
                                     continue;
                                 }
-                                if (sw.Name != null && !DiagnosticNameMatches(sw.Name, sw.Source, wireExpressions))
-                                    Debug.LogWarning($"[KHR_character] Mapping name '{sw.Name}' does not match the name of expression index {sw.Source}.");
                                 contributions.Add(new MappingContribution
                                 {
                                     SourceIndex = srcIndex,
@@ -849,66 +847,8 @@ namespace UnityGLTF.KhrCharacter
             IReadOnlyList<KHR_character_expression.ExpressionItem> wireExpressions = null,
             Action<string> onInvalidSet = null)
         {
-            if (mappingExt?.ExpressionSetInputMappings == null) return null;
-            var sets = new List<ExpressionInputMappingSet>();
-            foreach (var setKv in mappingExt.ExpressionSetInputMappings)
-            {
-                if (!KHR_character_expression_mapping.IsValidMappingSetIdentifier(setKv.Key))
-                {
-                    if (onInvalidSet == null) throw new InvalidOperationException("A mapping-set identifier is empty.");
-                    onInvalidSet("an expressionSetInputMappings identifier is empty.");
-                    continue;
-                }
-                var commands = new List<InputMappingCommand>();
-                if (setKv.Value != null)
-                    foreach (var commandKv in setKv.Value)
-                    {
-                        var contributions = new List<InputMappingContribution>();
-                        if (commandKv.Value != null)
-                            foreach (var target in commandKv.Value)
-                            {
-                                if (!wireToTrackIndex.TryGetValue(target.Target, out int targetIndex))
-                                {
-                                    Debug.LogWarning($"[KHR_character] Input mapping references invalid expression index {target.Target}; dropping.");
-                                    continue;
-                                }
-                                if (target.Name != null && !DiagnosticNameMatches(target.Name, target.Target, wireExpressions))
-                                    Debug.LogWarning($"[KHR_character] Input mapping name '{target.Name}' does not match the name of expression index {target.Target}.");
-                                contributions.Add(new InputMappingContribution
-                                {
-                                    TargetIndex = targetIndex,
-                                    Name = target.Name,
-                                    Weight = target.Weight,
-                                    ExtensionsJson = target.Extensions?.ToString(Newtonsoft.Json.Formatting.None),
-                                    ExtrasJson = target.Extras?.ToString(Newtonsoft.Json.Formatting.None),
-                                    AdditionalPropertiesJson = target.AdditionalProperties?.ToString(
-                                        Newtonsoft.Json.Formatting.None),
-                                });
-                            }
-                        if (contributions.Count > 0)
-                            commands.Add(new InputMappingCommand
-                            {
-                                CommandName = commandKv.Key,
-                                Contributions = contributions.ToArray(),
-                            });
-                    }
-                if (commands.Count > 0)
-                    sets.Add(new ExpressionInputMappingSet { SetName = setKv.Key, Commands = commands.ToArray() });
-            }
-            return sets.Count > 0 ? sets.ToArray() : null;
-        }
-
-        // A mapping's diagnostic name must equal the referenced entry's name by code point. Indices stay
-        // authoritative, so a mismatch is reported but never changes the resolved entry.
-        private static bool DiagnosticNameMatches(
-            string diagnosticName,
-            int expressionIndex,
-            IReadOnlyList<KHR_character_expression.ExpressionItem> wireExpressions)
-        {
-            return wireExpressions != null
-                && expressionIndex >= 0
-                && expressionIndex < wireExpressions.Count
-                && string.Equals(diagnosticName, wireExpressions[expressionIndex]?.Name, StringComparison.Ordinal);
+            return ExpressionDriverPipeline.ToInputMappingSets(
+                BuildMappingSets(mappingExt, wireToTrackIndex, wireExpressions, onInvalidSet));
         }
 
         internal static KHR_character_expression_mapping GetMappingExtension(GLTFRoot root)

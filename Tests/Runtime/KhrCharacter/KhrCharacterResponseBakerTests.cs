@@ -128,7 +128,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void MorphTimeZeroMustMatchNodeOrMeshNeutralWeight()
+        public void MorphTimeZeroMayDifferFromAuthoredInitial()
         {
             var fixture = new Fixture();
             int input = AddTwoKeyInput(fixture);
@@ -158,9 +158,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                 new[] { new SamplerSpec(input, output) },
                 new[] { CoreChannel(0, fixture.Root, 0, "weights") });
 
-            var exception = Assert.Throws<ExpressionResponseEvaluationException>(
-                () => fixture.Bake("invalid-neutral"));
-            StringAssert.Contains("authored initial value", exception.Message);
+            Assert.DoesNotThrow(() => fixture.Bake("different-neutral"));
         }
 
         [Test]
@@ -496,7 +494,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void UnlistedChannelWithWrongTimeZeroValueIsStillRejected()
+        public void UnlistedChannelWithDifferentTimeZeroRemainsValid()
         {
             var fixture = new Fixture();
             int input = AddTwoKeyInput(fixture);
@@ -511,9 +509,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                     CoreChannel(1, fixture.Root, 0, "scale"),
                 });
 
-            var exception = Assert.Throws<ExpressionResponseEvaluationException>(
-                () => fixture.Bake(Entry("move", 0, joint: new[] { 0 })));
-            StringAssert.Contains("Channel 1 time-zero sample", exception.Message);
+            Assert.DoesNotThrow(() => fixture.Bake(Entry("move", 0, joint: new[] { 0 })));
         }
 
         [Test]
@@ -569,7 +565,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void CoreRotationOnOneEntryAgainstPointerRotationOnAnotherIsInvalid()
+        public void CoreAndPointerRotationMayOverlapAcrossEntries()
         {
             var fixture = new Fixture();
             int input = AddTwoKeyInput(fixture);
@@ -586,15 +582,12 @@ namespace UnityGLTF.KhrCharacter.Tests
                 new[] { new SamplerSpec(input, output) },
                 new[] { PointerChannel(0, fixture.Root, "/nodes/0/rotation") });
 
-            var exception = Assert.Throws<ExpressionResponseEvaluationException>(
-                () => fixture.Bake(Entry("lookLeft", 0, joint: new[] { 0 }), Entry("lookRight", 1, joint: new[] { 0 })));
-            StringAssert.Contains("'lookLeft'", exception.Message);
-            StringAssert.Contains("'lookRight'", exception.Message);
-            StringAssert.Contains("/nodes/0/rotation", exception.Message);
+            var entries = fixture.Bake(Entry("lookLeft", 0, joint: new[] { 0 }), Entry("lookRight", 1, joint: new[] { 0 }));
+            Assert.That(entries.Length, Is.EqualTo(2));
         }
 
         [Test]
-        public void OverlapOnVendorDeclaredSingleWriterPropertyIsInvalid()
+        public void VendorSingleWriterDeclarationDoesNotInvalidateOverlap()
         {
             var fixture = TranslationFixture();
             var registry = new ExpressionDerivedExtensionRegistry();
@@ -606,12 +599,9 @@ namespace UnityGLTF.KhrCharacter.Tests
             var first = Entry("first", 0, joint: new[] { 0 });
             first.RawExtensions = new JObject { { "ACME_translation_lock", new JObject() } };
 
-            var exception = Assert.Throws<ExpressionResponseEvaluationException>(
-                () => fixture.Bake(
-                    new[] { first, Entry("second", 0, joint: new[] { 0 }) },
-                    new ExpressionResponseBakeOptions { Registry = registry },
-                    out _));
-            StringAssert.Contains("single-writer", exception.Message);
+            Assert.DoesNotThrow(() => fixture.Bake(
+                new[] { first, Entry("second", 0, joint: new[] { 0 }) },
+                new ExpressionResponseBakeOptions { Registry = registry }, out _));
         }
 
         [Test]
@@ -1480,7 +1470,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void ComposeHonorsSingleWriterDeclarationsOnlyOfCarriedSupportedExtensions()
+        public void ComposeKeepsMandatoryAdditiveResponsesDespiteLegacyDeclarations()
         {
             var fixture = TranslationFixture();
             var second = Entry("second", 0, joint: new[] { 0 });
@@ -1501,8 +1491,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             var supported = new ExpressionDerivedExtensionRegistry();
             supported.Register("ACME_exclusive", false, isSupported: true, declaresSingleWriter: translation);
             responses.DerivedExtensions = supported;
-            LogAssert.Expect(LogType.Error, new Regex("composition failed for '/nodes/0/translation'"));
-            Assert.IsFalse(responses.Compose(snapshot).TryGetRecord("/nodes/0/translation", out _));
+            Assert.IsTrue(responses.Compose(snapshot).TryGetRecord("/nodes/0/translation", out var retained));
+            Assert.That(retained.Value, Is.EqualTo(new[] { 2d, 4d, 6d }));
         }
 
         private GameObject CreateGameObject(string name)

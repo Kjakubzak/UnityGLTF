@@ -1096,11 +1096,18 @@ namespace UnityGLTF
 			
 			var node = new Node();
 
-			if (_visbilityPluginEnabled && !nodeTransform.gameObject.activeSelf)
-			{
-				DeclareExtensionUsage(KHR_node_visibility_Factory.EXTENSION_NAME, false);
-				node.AddExtension(KHR_node_visibility_Factory.EXTENSION_NAME, new KHR_node_visibility { visible = false });
-			}
+            var coreVisibility = nodeTransform.GetComponent<CoreNodeVisibility>();
+            if (coreVisibility != null)
+            {
+                DeclareExtensionUsage(KHR_node_visibility_Factory.EXTENSION_NAME, false);
+                node.AddExtension(KHR_node_visibility_Factory.EXTENSION_NAME, coreVisibility.ExportOwnState());
+            }
+            else if (_visbilityPluginEnabled && !nodeTransform.gameObject.activeSelf)
+            {
+                // Optional export adaptation of manually authored Unity activation; imported glTF uses own Boolean state.
+                DeclareExtensionUsage(KHR_node_visibility_Factory.EXTENSION_NAME, false);
+                node.AddExtension(KHR_node_visibility_Factory.EXTENSION_NAME, new KHR_node_visibility { visible = false });
+            }
 			
 			if (ExportNames)
 			{

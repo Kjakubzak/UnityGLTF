@@ -66,6 +66,7 @@ namespace UnityGLTF.KhrCharacter
             return new SkeletonMappingResult
             {
                 MappingSets = mappingSets.ToArray(),
+                RawExtensionJson = ext.Serialize().Value.ToString(Newtonsoft.Json.Formatting.None),
                 Bones = adapterSelection?.Associations ?? new Dictionary<string, Transform>(),
                 SelectedRig = adapterSelection?.Identifier,
                 Report = adapterSelection?.Report ?? new ValidationReport(),
@@ -153,7 +154,7 @@ namespace UnityGLTF.KhrCharacter
                 if (layout == null) layout = NodeLayout.Build(root, nodeIndexToGo, translationScale);
                 var pose = BakeReferencePoseAnimation(
                     root, readBufferView, layout, animation, animationIndex,
-                    ExtractPoseType(root, extension) ?? ReferencePoseLabels.TPose);
+                    ExtractPoseType(root, extension));
                 if (!pose.IsValid)
                     Debug.LogWarning(
                         $"[KHR_character] Reference-pose animation {animationIndex} is invalid: {string.Join(" ", pose.Errors)}");
@@ -171,7 +172,7 @@ namespace UnityGLTF.KhrCharacter
             string poseType)
         {
             var errors = new List<string>();
-            if (poseType.Length == 0) errors.Add("poseType is empty; it must be a nonempty label when present.");
+            if (string.IsNullOrEmpty(poseType)) errors.Add("poseType is required and must be a nonempty label.");
             var used = root.ExtensionsUsed;
             if (used == null || !used.Contains(KhrCharacterExtensionNames.ReferencePose))
                 errors.Add($"extensionsUsed does not list {KhrCharacterExtensionNames.ReferencePose}.");
@@ -463,6 +464,8 @@ namespace UnityGLTF.KhrCharacter
 
             var bones = new Dictionary<string, Transform>();
             var nodeIndices = new Dictionary<string, int>();
+            var names = new Dictionary<string, string>();
+            var payloads = new Dictionary<string, string>();
             var report = new ValidationReport();
             foreach (var kv in mapping)
             {
@@ -480,11 +483,11 @@ namespace UnityGLTF.KhrCharacter
                 }
 
                 nodeIndices[vocab] = nodeIndex;
+                names[vocab] = association.Name;
+                payloads[vocab] = association.AdditionalProperties?.ToString(Newtonsoft.Json.Formatting.None);
                 if (nodeIndexToGo.TryGetValue(nodeIndex, out var go) && go != null)
                 {
                     bones[vocab] = go.transform;
-                    if (association.Name != null && association.Name != go.name)
-                        report.Warnings.Add($"[KHR_character] skeleton joint '{vocab}' name '{association.Name}' does not match node {nodeIndex} name '{go.name}'.");
                 }
                 else
                 {
@@ -498,6 +501,8 @@ namespace UnityGLTF.KhrCharacter
             {
                 Associations = bones,
                 NodeIndices = nodeIndices,
+                AssociationNames = names,
+                AssociationPayloads = payloads,
                 Identifier = identifier,
                 Report = report,
             };
@@ -511,7 +516,7 @@ namespace UnityGLTF.KhrCharacter
                 if (ext is DefaultExtension raw && raw.ExtensionData != null)
                     return (new KHR_character_reference_pose_Factory().Deserialize(root, raw.ExtensionData) as KHR_character_reference_pose)?.PoseType;
             }
-            catch { /* malformed poseType metadata -> fall back to the default */ }
+            catch { /* malformed poseType metadata -> retain as invalid */ }
             return null;
         }
 

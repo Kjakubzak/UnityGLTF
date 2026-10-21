@@ -2,7 +2,7 @@
 
 This non-ratified, disabled-by-default plugin imports and exports:
 
-- `KHR_node_visibility_hint`, with nearest-ancestor inheritance and descendant replacement.
+- `KHR_node_visibility_hint`, with logical AND over the node and all ancestor hints.
 - `KHR_mesh_primitive_visibility_hint`, attached to a shared mesh primitive but evaluated for each containing node instance.
 
 The runtime's semantic layer exposes pure predicates. It does not mutate `Renderer.enabled`, materials, meshes, lights, node activation, cameras, or authored/animated `KHR_node_visibility` state. Render integrations may use material/shader substitution, draw filtering, primitive splitting, or another observably equivalent route.
@@ -50,7 +50,9 @@ Any other role string, including a differently cased standard token such as `Fir
 
 ## Rendering boundary
 
-The plugin provides metadata preservation and the predicates, not a complete render-pipeline adapter. Hint-hidden content must not contribute to any visual pass of that view: color, depth, or shadow. Replacing its surface color with a transparent material is not enough. How that is achieved for passes shared between views, such as a shadow map used by several cameras, is host-defined, and so is whether mirrors, planar reflections, and reflection probes inside a view include content that is hint-hidden in that view. Content hidden by `KHR_node_visibility` stays out of them. A light attached to a node whose visual-content predicate is false must not light that view; give a light that must reach every view `role: always` on its own node. Cameras, camera hints, look-at markers, selectability, hoverability, picking, physics, and animation are outside the visibility contract.
+The plugin preserves metadata and supplies pure predicates. The host omits directly drawn hint-hidden content; shadow, reflection and lighting policies are host-defined. The optional scoped adapter substitutes a no-draw material for color/depth and also gates node shadows as its own policy; its light helper is optional. An `always` child never cancels a restrictive ancestor, including for hosts electing that light policy. Cameras, transforms, animation and interaction remain active. Supported `KHR_node_visibility` retains its separate requirements.
+
+Core Boolean state lives on `UnityGLTF.CoreNodeVisibility.Visible`, with `IsVisibleInHierarchy(node, instanceRoot)` as the cumulative query. Import and pointer animation do not deactivate GameObjects. Imported scenes receive `CoreVisibilityController`, which filters renderers and lights while preserving cameras and hierarchy; export writes each own Boolean, rather than an inherited false result. A host may separately include manual Unity activation or renderer state in its rendering policy; those are not authored core Boolean values.
 
 A consumer claiming support when either extension is listed in `extensionsRequired` must integrate these predicates into each visual render view and omit hidden node or primitive content from all relevant visual passes. The stock metadata plugin does not make that claim and rejects required use unless the host explicitly enables the corresponding `HostSupportsRequiredNodeUse` or `HostSupportsRequiredPrimitiveUse` capability after providing a complete integration.
 
@@ -86,7 +88,7 @@ For a primitive instance:
 renderPrimitiveInstance = primitiveHintVisible AND nodeHintVisible AND coreVisible
 ```
 
-A descendant node hint replaces its inherited node hint. It can therefore make its own content hint-visible even when an ancestor's hint is false. An ancestor `KHR_node_visibility.visible: false` remains part of `coreVisible` and cannot be overridden.
+A descendant node hint adds a restriction to all ancestor predicates. It cannot restore content hidden by an ancestor hint, including with `always`. An ancestor `KHR_node_visibility.visible: false` remains part of `coreVisible` and cannot be overridden.
 
 ## Import, export, and authoring
 

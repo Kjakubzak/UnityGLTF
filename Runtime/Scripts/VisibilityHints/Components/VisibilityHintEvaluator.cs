@@ -63,6 +63,17 @@ namespace UnityGLTF.VisibilityHints
                && IsRoleVisible(resolvedNodeRole, viewTags, resolver, renderUnsupportedRoles)
                && IsRoleVisible(primitiveRole, viewTags, resolver, renderUnsupportedRoles);
 
+        /// <summary>Combines an already ancestor-inclusive node hint with the local primitive role.</summary>
+        public static bool ShouldRenderPrimitiveInstance(
+            bool nodeHintVisible,
+            string primitiveRole,
+            IReadOnlyCollection<string> viewTags,
+            bool ancestorInclusiveCoreVisible,
+            IVisibilityRoleResolver resolver = null,
+            bool renderUnsupportedRoles = false)
+            => ancestorInclusiveCoreVisible && nodeHintVisible
+               && IsRoleVisible(primitiveRole, viewTags, resolver, renderUnsupportedRoles);
+
         // Iterates instead of calling Contains so a caller's case-insensitive set cannot loosen the exact comparison.
         private static bool HasTag(IReadOnlyCollection<string> viewTags, string tag)
         {

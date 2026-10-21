@@ -4,9 +4,8 @@ using UnityEngine;
 namespace UnityGLTF.VisibilityHints
 {
     /// <summary>
-    /// Serialized <c>KHR_node_visibility_hint</c> annotations and their nearest-ancestor resolution. Resolution is
-    /// performed as a pure query so a descendant hint can replace an inherited hint independently for each node
-    /// instance and render view.
+    /// Serialized authored hints and pure ancestor-inclusive visibility queries per node instance and render view.
+    /// Authored roles remain available independently of the cumulative Boolean rendering result.
     /// </summary>
     [DisallowMultipleComponent]
     public class NodeVisibilityHintSet : MonoBehaviour
@@ -60,6 +59,7 @@ namespace UnityGLTF.VisibilityHints
             _indexDirty = false;
         }
 
+        /// <summary>Nearest authored role for metadata presentation; not the effective rendering predicate.</summary>
         public string ResolveRole(Transform node)
         {
             if (node == null || (node != transform && !node.IsChildOf(transform))) return null;
@@ -72,14 +72,32 @@ namespace UnityGLTF.VisibilityHints
             return null;
         }
 
+        /// <summary>ANDs each local role on this node and its ancestors within this imported instance root.</summary>
+        public bool IsHintVisible(
+            Transform node,
+            IReadOnlyCollection<string> viewTags,
+            IVisibilityRoleResolver resolver = null,
+            bool renderUnsupportedRoles = false)
+        {
+            if (node == null || (node != transform && !node.IsChildOf(transform))) return true;
+            EnsureIndex();
+            for (var current = node; current != null; current = current.parent)
+            {
+                if (_entryByNode.TryGetValue(current, out var entry)
+                    && !VisibilityHintEvaluator.IsRoleVisible(entry.Role, viewTags, resolver, renderUnsupportedRoles))
+                    return false;
+                if (current == transform) break;
+            }
+            return true;
+        }
+
         public bool ShouldRenderVisualContent(
             Transform node,
             IReadOnlyCollection<string> viewTags,
             bool ancestorInclusiveCoreVisible,
             IVisibilityRoleResolver resolver = null,
             bool renderUnsupportedRoles = false)
-            => VisibilityHintEvaluator.ShouldRenderNodeVisualContent(
-                ResolveRole(node), viewTags, ancestorInclusiveCoreVisible, resolver, renderUnsupportedRoles);
+            => ancestorInclusiveCoreVisible && IsHintVisible(node, viewTags, resolver, renderUnsupportedRoles);
 
         /// <summary>
         /// Presentation name for an entry: its label, else the node's nonempty name, else its role. The node name is

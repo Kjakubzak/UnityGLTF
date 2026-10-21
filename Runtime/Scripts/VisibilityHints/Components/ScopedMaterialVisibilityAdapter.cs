@@ -29,7 +29,7 @@ namespace UnityGLTF.VisibilityHints
         /// <summary>
         /// Applies one renderer instance's node and primitive predicates for one view with the given view tags.
         /// Dispose the returned scope in a <c>finally</c> block immediately after that view renders. Call this
-        /// independently for every descendant renderer so a nearer node hint can override an inherited hint.
+        /// independently for every descendant renderer; every ancestor hint remains a restriction.
         /// </summary>
         public IDisposable ApplyForView(
             Renderer renderer, IReadOnlyCollection<string> viewTags, bool ancestorInclusiveCoreVisible)
@@ -118,7 +118,7 @@ namespace UnityGLTF.VisibilityHints
         /// <summary>
         /// Turns off, for one view, every supplied light whose node's visual-content predicate is false, and restores
         /// them when the returned scope is disposed. Roles resolve through <see cref="NodeVisibilityHintSet"/>, so a
-        /// light that must reach every view needs <c>role: always</c> on its own node. Cameras and camera hints are
+        /// light reaching every view under this optional policy needs an unrestricted ancestor path. Cameras and camera hints are
         /// never touched.
         /// </summary>
         public IDisposable ApplyLightsForView(

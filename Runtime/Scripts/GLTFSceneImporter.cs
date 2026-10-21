@@ -845,6 +845,10 @@ namespace UnityGLTF
 				CreatedObject.transform.SetParent(SceneParent, false);
 			}
 
+            if (CreatedObject != null && CreatedObject.GetComponentInChildren<CoreNodeVisibility>(true) != null
+                && CreatedObject.GetComponent<CoreVisibilityController>() == null)
+                CreatedObject.AddComponent<CoreVisibilityController>();
+
 			_lastLoadedScene = CreatedObject;
 
 			try
@@ -1105,16 +1109,18 @@ namespace UnityGLTF
 			return null;
 		}
 		
-		private bool ShouldBeVisible(Node node, GameObject nodeObj)
-		{
-			if (node.Extensions != null && node.Extensions.TryGetValue(KHR_node_visibility_Factory.EXTENSION_NAME, out var ext))
-			{
-				return (ext as KHR_node_visibility).visible;
-			}
-			else
-				return true;
-		}
-		
+        private bool ShouldBeVisible(Node node, GameObject nodeObj)
+        {
+            if (node.Extensions != null && node.Extensions.TryGetValue(KHR_node_visibility_Factory.EXTENSION_NAME, out var ext))
+            {
+                var state = nodeObj.GetComponent<CoreNodeVisibility>();
+                if (state == null) state = nodeObj.AddComponent<CoreNodeVisibility>();
+                state.Bind(ext as KHR_node_visibility);
+            }
+            // Visibility filters visual contributions; it never deactivates cameras, interaction or animation.
+            return true;
+        }
+
 		protected virtual async Task ConstructNode(Node node, int nodeIndex, CancellationToken cancellationToken)
 		{
 			cancellationToken.ThrowIfCancellationRequested();

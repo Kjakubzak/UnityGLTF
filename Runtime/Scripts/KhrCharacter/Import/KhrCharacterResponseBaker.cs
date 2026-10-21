@@ -184,7 +184,6 @@ namespace UnityGLTF.KhrCharacter
                 }
             }
 
-            ValidateConflicts(extension, listings, possibleRecords);
             if (conflictValidationIncomplete)
                 context.IncompleteReasons.Add(
                     "Conflict validation across expression entries is incomplete: a listed channel could not be " +
@@ -451,13 +450,7 @@ namespace UnityGLTF.KhrCharacter
                     throw Invalid($"Shared sampler {samplerIndex} decoded with inconsistent output encodings.");
             }
 
-            if (!ExpressionInitialValueValidation.MatchesTimeZeroSample(
-                    resolved.AuthoredInitial,
-                    sampler,
-                    resolved.Target,
-                    decodedOutput.Encoding))
-                throw Invalid(
-                    $"Channel {channelIndex} time-zero sample does not match its authored initial value.");
+            // b and the channel's time-zero sample n are independent; differing n is valid.
         }
 
         private static void EnsureClassification(
@@ -484,47 +477,6 @@ namespace UnityGLTF.KhrCharacter
                 case ExpressionChannelClassification.TextureTransform:
                     return "offset, scale or rotation of an authored KHR_texture_transform";
                 default: return "a supported property";
-            }
-        }
-
-        // Possible records are every listed channel, supported or not. Core and pointer forms of a property share
-        // one canonical identity, and whole arrays overlap their elements.
-        private static void ValidateConflicts(
-            KHR_character_expression extension,
-            EntryListing[] listings,
-            List<PossibleRecord> possibleRecords)
-        {
-            var carriedExtensions = new List<ExpressionDerivedExtension>();
-            foreach (var listing in listings)
-                if (listing != null)
-                    carriedExtensions.AddRange(listing.Carried);
-            var isSingleWriter = ExpressionComposer.SingleWriterPredicate(carriedExtensions);
-
-            var byProperty = new Dictionary<string, List<PossibleRecord>>(StringComparer.Ordinal);
-            foreach (var record in possibleRecords)
-            {
-                string property = record.Target.Identity.CanonicalProperty;
-                if (!byProperty.TryGetValue(property, out var group))
-                    byProperty.Add(property, group = new List<PossibleRecord>());
-                group.Add(record);
-            }
-
-            foreach (var group in byProperty.Values)
-            {
-                for (int first = 0; first < group.Count; first++)
-                {
-                    for (int second = first + 1; second < group.Count; second++)
-                    {
-                        var a = group[first];
-                        var b = group[second];
-                        if (a.EntryIndex == b.EntryIndex || !a.Target.Identity.Overlaps(b.Target.Identity)) continue;
-                        if (!isSingleWriter(a.Target) && !isSingleWriter(b.Target)) continue;
-                        throw Invalid(
-                            $"Expression entries {a.EntryIndex} ('{extension.Expressions[a.EntryIndex].Name}') and " +
-                            $"{b.EntryIndex} ('{extension.Expressions[b.EntryIndex].Name}') both list " +
-                            $"'{a.Target.Identity.CanonicalProperty}', a single-writer property.");
-                    }
-                }
             }
         }
 

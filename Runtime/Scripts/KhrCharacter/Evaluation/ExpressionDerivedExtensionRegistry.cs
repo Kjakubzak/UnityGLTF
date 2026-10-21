@@ -53,7 +53,8 @@ namespace UnityGLTF.KhrCharacter
         public ExpressionChannelClassification Classification { get; }
 
         /// <summary>
-        /// Optional predicate for properties the extension declares single-writer. A declaration applies to the
+        /// Legacy host metadata retained for compatibility. It does not change mandatory additive aggregation.
+        /// A historical declaration applies to the
         /// whole asset when an entry carries the extension and this implementation supports it.
         /// </summary>
         public Func<ExpressionResponseTarget, bool> DeclaresSingleWriter { get; }
@@ -96,7 +97,7 @@ namespace UnityGLTF.KhrCharacter
         /// <param name="listsChannels">Whether the extension lists channels in a <c>channels</c> array.</param>
         /// <param name="classification">The channel targets the extension may list.</param>
         /// <param name="isSupported">Whether this host implements the extension's handling.</param>
-        /// <param name="declaresSingleWriter">Optional predicate for properties the extension declares single-writer.</param>
+        /// <param name="declaresSingleWriter">Legacy host metadata; the normative composer does not enforce cross-entry single-writer ownership.</param>
         public void Register(
             string name,
             bool listsChannels,

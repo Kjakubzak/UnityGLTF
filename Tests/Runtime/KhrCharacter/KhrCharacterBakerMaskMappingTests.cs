@@ -312,7 +312,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void BuildMappingSets_DiagnosticNamesAreComparedWithEntryNamesByCodePoint()
+        public void BuildMappingSets_IndependentNamesRemainWithoutWarnings()
         {
             var wireExpressions = new List<KHR_character_expression.ExpressionItem>
             {
@@ -337,15 +337,11 @@ namespace UnityGLTF.KhrCharacter.Tests
                         { new KHR_character_expression_mapping.TargetWeight { Target = 0, Name = "smile", Weight = 1 } } },
                 };
 
-            LogAssert.Expect(LogType.Warning,
-                new Regex("Mapping name 'smile' does not match the name of expression index 0"));
             var forward = KhrCharacterBaker.BuildMappingSets(mapping, WireToTrackIndex, wireExpressions);
-            LogAssert.Expect(LogType.Warning,
-                new Regex("Input mapping name 'smile' does not match the name of expression index 0"));
             var input = KhrCharacterBaker.BuildInputMappingSets(mapping, WireToTrackIndex, wireExpressions);
 
             Assert.AreEqual(2, forward[0].Targets[0].Contributions.Length,
-                "a mismatched diagnostic name only warns; the index stays authoritative");
+                "independent labels do not affect index resolution");
             Assert.AreEqual(0, forward[0].Targets[0].Contributions[1].SourceIndex);
             Assert.AreEqual(0, input[0].Commands[0].Contributions[0].TargetIndex);
             LogAssert.NoUnexpectedReceived();
