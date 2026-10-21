@@ -210,8 +210,9 @@ namespace UnityGLTF.KhrCharacter.Tests
             StringAssert.Contains("supported range", exception.Message);
         }
 
-        [Test]
-        public void UnsupportedOptionalOutputIsNotDecodedButItsInputSetsDuration()
+        [TestCase("/materials/0/extensions/VENDOR/a~1b~0c")]
+        [TestCase("/nodes/0/extras/applicationValue")]
+        public void UnsupportedOptionalOutputIsNotDecodedButItsInputSetsDuration(string pointer)
         {
             var fixture = new Fixture();
             int supportedInput = fixture.AddFloatAccessor(
@@ -244,7 +245,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                 new[]
                 {
                     CoreChannel(0, fixture.Root, 0, "translation"),
-                    PointerChannel(1, fixture.Root, "/materials/0/extensions/VENDOR/a~1b~0c"),
+                    PointerChannel(1, fixture.Root, pointer),
                 });
 
             var response = ExpressionResponseEvaluator.Evaluate(fixture.Bake("mixed")[0].Animation, 0.5f);

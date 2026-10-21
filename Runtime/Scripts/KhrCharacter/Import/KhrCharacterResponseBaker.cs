@@ -534,8 +534,6 @@ namespace UnityGLTF.KhrCharacter
                     throw Invalid($"Channel {channelIndex} uses KHR_animation_pointer with a node target.");
                 if (!TryParsePointer(pointer, out string[] segments))
                     throw Invalid($"Channel {channelIndex} has an empty or malformed JSON pointer.");
-                if (ContainsExtrasSegment(segments))
-                    throw Invalid($"Channel {channelIndex} pointer targets extras, which is not portable.");
                 if (TryResolveCoreNodePointer(root, pointer, segments, channelIndex, out var resolved))
                     return resolved;
                 if (TryResolveTextureTransformPointer(context, pointer, segments, channelIndex, out resolved))
@@ -1002,13 +1000,6 @@ namespace UnityGLTF.KhrCharacter
                 index = index * 10 + value;
             }
             return true;
-        }
-
-        private static bool ContainsExtrasSegment(string[] segments)
-        {
-            for (int index = 0; index < segments.Length; index++)
-                if (segments[index] == "extras") return true;
-            return false;
         }
 
         private static bool TryGetPointer(AnimationChannelTarget target, out string pointer)

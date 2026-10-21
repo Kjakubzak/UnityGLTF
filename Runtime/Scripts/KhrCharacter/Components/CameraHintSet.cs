@@ -158,6 +158,11 @@ namespace UnityGLTF.KhrCharacter
                 if (matrices.TryGetValue(node, out var authored))
                 {
                     local = authored.LocalMatrix;
+                    for (int axis = 0; axis < 3; axis++)
+                    {
+                        var column = local.GetColumn(axis);
+                        if (column.x == 0f && column.y == 0f && column.z == 0f) return false;
+                    }
                     if (authored.ForwardAxisConversion && !isHintNode)
                         local *= Matrix4x4.Rotate(ForwardAxisTurn);
                 }
@@ -166,6 +171,7 @@ namespace UnityGLTF.KhrCharacter
                     var rotation = node.localRotation;
                     if (isHintNode && hint.NodeTransformHasForwardAxisConversion)
                         rotation *= Quaternion.Inverse(ForwardAxisTurn);
+                    if (node.localScale.x == 0f || node.localScale.y == 0f || node.localScale.z == 0f) return false;
                     local = Matrix4x4.TRS(node.localPosition, rotation, node.localScale);
                 }
                 frame = local * frame;

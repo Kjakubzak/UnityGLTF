@@ -47,15 +47,11 @@ namespace UnityGLTF.KhrCharacter.Tests
                     "expressionSetMappings", new JObject
                     {
                         { "vrm", new JObject { { "Smile", Contribution("source", 1, 0.5) } } },
+                        { "relative/v1", new JObject { { "Smile", Contribution("source", 1, 0.25) } } },
                         { "", new JObject { { "Smile", Contribution("source", 0, 1) } } },
                     }
                 },
-                {
-                    "expressionSetInputMappings", new JObject
-                    {
-                        { "relative/v1", new JObject { { "Smile", Contribution("target", 1, 0.25) } } },
-                    }
-                },
+
             };
 
             LogAssert.Expect(LogType.Error,
@@ -77,7 +73,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                 Assert.AreEqual(0.5, suppression.Amount);
                 Assert.AreEqual(0.25, suppression.Threshold);
 
-                Assert.AreEqual(1, responses.ForwardMappingSets.Count, "the empty identifier drops only its own set");
+                Assert.AreEqual(2, responses.MappingSets.Count, "the empty identifier drops only its own set");
                 Assert.IsTrue(responses.TryGetForwardMappingSet("vrm", out var forward));
                 Assert.AreEqual(1, forward.Targets[0].Contributions[0].SourceIndex);
                 Assert.AreEqual(0.5, forward.Targets[0].Contributions[0].Weight);
@@ -238,17 +234,17 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void BuildInputMappingSets_ResolvesTargetIndicesSeparately()
+        public void BuildInputMappingSets_AdaptsCurrentSourceIndices()
         {
             var mapping = new KHR_character_expression_mapping();
-            mapping.ExpressionSetInputMappings["https://example.com/vocab/v1"] =
-                new Dictionary<string, List<KHR_character_expression_mapping.TargetWeight>>
+            mapping.ExpressionSetMappings["https://example.com/vocab/v1"] =
+                new Dictionary<string, List<KHR_character_expression_mapping.SourceWeight>>
                 {
                     {
-                        "happy", new List<KHR_character_expression_mapping.TargetWeight>
+                        "happy", new List<KHR_character_expression_mapping.SourceWeight>
                         {
-                            new KHR_character_expression_mapping.TargetWeight { Target = 1, Weight = 0.75 },
-                            new KHR_character_expression_mapping.TargetWeight { Target = 99, Weight = 1 },
+                            new KHR_character_expression_mapping.SourceWeight { Source = 1, Weight = 0.75 },
+                            new KHR_character_expression_mapping.SourceWeight { Source = 99, Weight = 1 },
                         }
                     },
                 };
@@ -265,7 +261,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         [TestCase("vrm")]
         [TestCase("relative/v1")]
         [TestCase("https://example.com/expression/v1")]
-        public void BuildMappingSets_NonEmptyIdentifiersAreAcceptedInBothDirections(string identifier)
+        public void BuildMappingSets_NonEmptyIdentifiersAreAcceptedInCanonicalAndInputAdapter(string identifier)
         {
             var mapping = new KHR_character_expression_mapping();
             mapping.ExpressionSetMappings[identifier] =
@@ -273,12 +269,6 @@ namespace UnityGLTF.KhrCharacter.Tests
                 {
                     { "happy", new List<KHR_character_expression_mapping.SourceWeight>
                         { new KHR_character_expression_mapping.SourceWeight { Source = 0, Weight = 1 } } },
-                };
-            mapping.ExpressionSetInputMappings[identifier] =
-                new Dictionary<string, List<KHR_character_expression_mapping.TargetWeight>>
-                {
-                    { "happy", new List<KHR_character_expression_mapping.TargetWeight>
-                        { new KHR_character_expression_mapping.TargetWeight { Target = 0, Weight = 1 } } },
                 };
 
             var forward = KhrCharacterBaker.BuildMappingSets(mapping, WireToTrackIndex);
@@ -289,7 +279,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void BuildMappingSets_EmptyIdentifierIsRejectedInBothDirections()
+        public void BuildMappingSets_EmptyIdentifierIsRejectedInCanonicalAndInputAdapter()
         {
             var mapping = new KHR_character_expression_mapping();
             mapping.ExpressionSetMappings[""] =
@@ -297,12 +287,6 @@ namespace UnityGLTF.KhrCharacter.Tests
                 {
                     { "happy", new List<KHR_character_expression_mapping.SourceWeight>
                         { new KHR_character_expression_mapping.SourceWeight { Source = 0, Weight = 1 } } },
-                };
-            mapping.ExpressionSetInputMappings[""] =
-                new Dictionary<string, List<KHR_character_expression_mapping.TargetWeight>>
-                {
-                    { "happy", new List<KHR_character_expression_mapping.TargetWeight>
-                        { new KHR_character_expression_mapping.TargetWeight { Target = 0, Weight = 1 } } },
                 };
 
             Assert.Throws<System.InvalidOperationException>(
@@ -330,12 +314,6 @@ namespace UnityGLTF.KhrCharacter.Tests
                         }
                     },
                 };
-            mapping.ExpressionSetInputMappings[MappingVocab] =
-                new Dictionary<string, List<KHR_character_expression_mapping.TargetWeight>>
-                {
-                    { "Smile", new List<KHR_character_expression_mapping.TargetWeight>
-                        { new KHR_character_expression_mapping.TargetWeight { Target = 0, Name = "smile", Weight = 1 } } },
-                };
 
             var forward = KhrCharacterBaker.BuildMappingSets(mapping, WireToTrackIndex, wireExpressions);
             var input = KhrCharacterBaker.BuildInputMappingSets(mapping, WireToTrackIndex, wireExpressions);
@@ -348,7 +326,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void TryApplyMappingSets_InvalidDirectionKeepsBaseSetButExposesNoPartialAdapter()
+        public void TryApplyMappingSets_InvalidCurrentIdentifierKeepsBaseSetButExposesNoPartialAdapter()
         {
             var mapping = new KHR_character_expression_mapping();
             mapping.ExpressionSetMappings[MappingVocab] =
@@ -357,11 +335,11 @@ namespace UnityGLTF.KhrCharacter.Tests
                     { "happy", new List<KHR_character_expression_mapping.SourceWeight>
                         { new KHR_character_expression_mapping.SourceWeight { Source = 0, Weight = 1 } } },
                 };
-            mapping.ExpressionSetInputMappings[""] =
-                new Dictionary<string, List<KHR_character_expression_mapping.TargetWeight>>
+            mapping.ExpressionSetMappings[""] =
+                new Dictionary<string, List<KHR_character_expression_mapping.SourceWeight>>
                 {
-                    { "happy", new List<KHR_character_expression_mapping.TargetWeight>
-                        { new KHR_character_expression_mapping.TargetWeight { Target = 0, Weight = 1 } } },
+                    { "happy", new List<KHR_character_expression_mapping.SourceWeight>
+                        { new KHR_character_expression_mapping.SourceWeight { Source = 0, Weight = 1 } } },
                 };
             var baseTrack = new ExpressionTrack { Name = "base" };
             var set = new CharacterExpressionSet { Expressions = new[] { baseTrack } };
@@ -374,7 +352,7 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             Assert.IsFalse(applied);
             Assert.AreSame(baseTrack, set.Expressions[0], "optional import retains the base expression response");
-            Assert.IsNull(set.MappingSets, "the valid direction is cleared when its companion direction is invalid");
+            Assert.IsNull(set.MappingSets, "invalid current metadata prevents exposing a partial mapping adapter");
             Assert.IsNull(set.InputMappingSets);
             Assert.IsNull(set.MappingExtensionsJson);
             Assert.IsNull(set.MappingRequiredCompanionExtensions);

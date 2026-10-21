@@ -1746,27 +1746,10 @@ namespace UnityGLTF.KhrCharacter.Tests
                                         ExtrasJson = "\"forward-extra\"",
                                         AdditionalPropertiesJson = "{\"futureForwardField\":8}",
                                     },
-                                },
-                            },
-                        },
-                    },
-                },
-                InputMappingSets = new[]
-                {
-                    new ExpressionInputMappingSet
-                    {
-                        SetName = ExpressionVocab,
-                        Commands = new[]
-                        {
-                            new InputMappingCommand
-                            {
-                                CommandName = "Smile",
-                                Contributions = new[]
-                                {
-                                    new InputMappingContribution
+                                    new MappingContribution
                                     {
-                                        TargetIndex = 0,
-                                        Name = "target",
+                                        SourceIndex = 0,
+                                        Name = "independent target label",
                                         Weight = 0.5f,
                                         ExtensionsJson = "{\"ACME_input_entry\":{\"value\":9}}",
                                         ExtrasJson = "[\"input-extra\"]",
@@ -1807,12 +1790,14 @@ namespace UnityGLTF.KhrCharacter.Tests
             var mapping = gltf.Extensions[KHR_character_expression_mapping.EXTENSION_NAME]
                 as KHR_character_expression_mapping;
             var forward = mapping.ExpressionSetMappings[ExpressionVocab]["Smile"][0];
-            var input = mapping.ExpressionSetInputMappings[ExpressionVocab]["Smile"][0];
+            var input = mapping.ExpressionSetMappings[ExpressionVocab]["Smile"][1];
+            Assert.IsEmpty(mapping.ExpressionSetInputMappings);
+            Assert.IsNull(((JObject)mapping.Serialize().Value)["expressionSetInputMappings"]);
             Assert.AreEqual("source", forward.Name);
             Assert.AreEqual(7, forward.Extensions["ACME_mapping_entry"]["value"].Value<int>());
             Assert.AreEqual("forward-extra", forward.Extras.Value<string>());
             Assert.AreEqual(8, forward.AdditionalProperties["futureForwardField"].Value<int>());
-            Assert.AreEqual("target", input.Name);
+            Assert.AreEqual("independent target label", input.Name);
             Assert.AreEqual(9, input.Extensions["ACME_input_entry"]["value"].Value<int>());
             Assert.AreEqual("input-extra", input.Extras[0].Value<string>());
             Assert.AreEqual(10, input.AdditionalProperties["futureInputField"].Value<int>());

@@ -9,8 +9,8 @@ namespace UnityGLTF.KhrCharacter.Tests
 {
     /// <summary>
     /// End-to-end play-mode tests for suppression (one expression attenuating another) and vocabulary mapping
-    /// (a common-vocabulary weight distributed onto model expressions), observed through morph output. Endpoint
-    /// outputs read the pre-suppression drivers u.
+    /// (a common-vocabulary weight distributed onto model expressions), observed through morph output. Optional host
+    /// projections read the pre-suppression drivers u; the standard mapping operation supplies native inputs.
     /// </summary>
     public class ExpressionControllerSuppressionMappingTests
     {
@@ -89,17 +89,17 @@ namespace UnityGLTF.KhrCharacter.Tests
                 {
                     new ExpressionTrack { Name = "smileLeft", Domains = ExpressionDomain.Morph, MorphDrivers = new[] { LinearMorph(smr) } },
                 },
-                InputMappingSets = new[]
+                MappingSets = new[]
                 {
-                    new ExpressionInputMappingSet
+                    new ExpressionMappingSet
                     {
                         SetName = "vrm",
-                        Commands = new[]
+                        Targets = new[]
                         {
-                            new InputMappingCommand
+                            new MappingTarget
                             {
-                                CommandName = "happy",
-                                Contributions = new[] { new InputMappingContribution { TargetIndex = 0, Weight = 1f } },
+                                TargetName = "happy",
+                                Contributions = new[] { new MappingContribution { SourceIndex = 0, Weight = 1f } },
                             }
                         }
                     }
@@ -161,12 +161,12 @@ namespace UnityGLTF.KhrCharacter.Tests
                 {
                     new ExpressionTrack { Name = "smileLeft", Domains = ExpressionDomain.Morph, MorphDrivers = new[] { LinearMorph(smr) } },
                 },
-                InputMappingSets = new[]
+                MappingSets = new[]
                 {
-                    new ExpressionInputMappingSet
+                    new ExpressionMappingSet
                     {
                         SetName = "vrm",
-                        Commands = new[] { new InputMappingCommand { CommandName = "happy", Contributions = new[] { new InputMappingContribution { TargetIndex = 0, Weight = 0.5f } } } },
+                        Targets = new[] { new MappingTarget { TargetName = "happy", Contributions = new[] { new MappingContribution { SourceIndex = 0, Weight = 0.5f } } } },
                     }
                 }
             };
@@ -196,12 +196,12 @@ namespace UnityGLTF.KhrCharacter.Tests
                 {
                     new ExpressionTrack { Name = "smileLeft", Domains = ExpressionDomain.Morph, MorphDrivers = new[] { LinearMorph(smr) } },
                 },
-                InputMappingSets = new[]
+                MappingSets = new[]
                 {
-                    new ExpressionInputMappingSet
+                    new ExpressionMappingSet
                     {
                         SetName = "vrm",
-                        Commands = new[] { new InputMappingCommand { CommandName = "happy", Contributions = new[] { new InputMappingContribution { TargetIndex = 0, Weight = 1f } } } },
+                        Targets = new[] { new MappingTarget { TargetName = "happy", Contributions = new[] { new MappingContribution { SourceIndex = 0, Weight = 1f } } } },
                     }
                 }
             };
@@ -274,9 +274,6 @@ namespace UnityGLTF.KhrCharacter.Tests
                 Expressions = new[]
                 {
                     new ExpressionTrack { Name = "smileLeft", Domains = ExpressionDomain.Morph, MorphDrivers = new[] { LinearMorph(smr) } },
-                },
-                MappingSets = new[]
-                {
                     new ExpressionMappingSet
                     {
                         SetName = "out",
@@ -289,13 +286,10 @@ namespace UnityGLTF.KhrCharacter.Tests
                             },
                         },
                     },
-                },
-                InputMappingSets = new[]
-                {
-                    new ExpressionInputMappingSet
+                    new ExpressionMappingSet
                     {
                         SetName = "vrm",
-                        Commands = new[] { new InputMappingCommand { CommandName = "happy", Contributions = new[] { new InputMappingContribution { TargetIndex = 0, Weight = 0.5 } } } },
+                        Targets = new[] { new MappingTarget { TargetName = "happy", Contributions = new[] { new MappingContribution { SourceIndex = 0, Weight = 0.5 } } } },
                     },
                 },
             };
@@ -320,12 +314,12 @@ namespace UnityGLTF.KhrCharacter.Tests
                 {
                     new ExpressionTrack { Name = "smileLeft", Domains = ExpressionDomain.Morph, MorphDrivers = new[] { LinearMorph(smr) } },
                 },
-                InputMappingSets = new[]
+                MappingSets = new[]
                 {
-                    new ExpressionInputMappingSet
+                    new ExpressionMappingSet
                     {
                         SetName = "vrm",
-                        Commands = new[] { new InputMappingCommand { CommandName = "happy", Contributions = new[] { new InputMappingContribution { TargetIndex = 0, Weight = 1 } } } },
+                        Targets = new[] { new MappingTarget { TargetName = "happy", Contributions = new[] { new MappingContribution { SourceIndex = 0, Weight = 1 } } } },
                     },
                 },
             };

@@ -460,7 +460,7 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             var value = (JObject)ext.Serialize().Value;
             var serializedForward = (JObject)value["expressionSetMappings"][Vocab]["Smile"][0];
-            var serializedInput = (JObject)value["expressionSetInputMappings"][Vocab]["Smile"][0];
+            Assert.IsNull(value["expressionSetInputMappings"], "obsolete wire operations are not emitted");
 
             Assert.AreEqual(2, serializedForward["source"].Value<int>());
             Assert.AreEqual("source-edited", serializedForward["name"].Value<string>());
@@ -469,12 +469,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsFalse(serializedForward["extras"].Value<bool>());
             Assert.AreEqual(22, serializedForward["futureForwardField"].Value<int>());
 
-            Assert.AreEqual(3, serializedInput["target"].Value<int>());
-            Assert.AreEqual("target-edited", serializedInput["name"].Value<string>());
-            Assert.AreEqual(0.6, serializedInput["weight"].Value<double>());
-            Assert.AreEqual(23, serializedInput["extensions"]["ACME_input"]["value"].Value<int>());
-            Assert.AreEqual("input", serializedInput["extras"][0].Value<string>());
-            Assert.AreEqual(24, serializedInput["futureInputField"].Value<int>());
+            Assert.AreEqual(3, ext.ExpressionSetInputMappings[Vocab]["Smile"][0].Target,
+                "legacy parsed metadata remains available for explicit migration");
 
             Assert.AreEqual(25, value["extensions"]["ACME_mapping_root"]["value"].Value<int>());
             Assert.IsTrue(value["extras"]["mapping"].Value<bool>());

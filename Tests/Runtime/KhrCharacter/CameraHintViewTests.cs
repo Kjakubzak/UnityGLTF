@@ -7,7 +7,7 @@ using UnityGLTF.Extensions;
 namespace UnityGLTF.KhrCharacter.Tests
 {
     /// <summary>
-    /// Synchronous tests for the CameraHintSet initial camera pose (authored rotation path rule, host -Z camera axis,
+    /// Synchronous tests for the CameraHintSet initial camera pose (core camera frame, host -Z camera axis,
     /// scene-root placement), subject point, roles and display names, plus ViewModeController visibility toggling.
     /// </summary>
     public class CameraHintViewTests
@@ -77,6 +77,25 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
+        public void ZeroScaleAncestorCannotAcquireAnInitialPoseThroughRoundedChildRotation()
+        {
+            var root = NewGo("root");
+            var hints = root.AddComponent<CameraHintSet>();
+            var parent = NewGo("parent").transform; parent.SetParent(root.transform, false);
+            parent.localRotation = Quaternion.Euler(17f, 29f, 41f);
+            parent.localScale = new Vector3(2f, 0f, -3f);
+            var node = NewGo("cameraNode").transform; node.SetParent(parent, false);
+            node.localRotation = Quaternion.Euler(23f, 37f, 53f);
+            var hint = new CameraHint { Node = node };
+            Assert.IsFalse(hints.TryGetInitialCameraFrame(hint, root.transform, out _));
+            // Small positive scales remain defined; do not use an arbitrary epsilon as a singularity gate.
+            parent.localScale = new Vector3(2f, 1e-15f, -3f);
+            node.localRotation = Quaternion.identity;
+            parent.localRotation = Quaternion.identity;
+            Assert.IsTrue(hints.TryGetInitialCameraFrame(hint, root.transform, out _));
+        }
+
+        [Test]
         public void AuthoredRotation_NegativeAncestorScaleKeepsLookAndUpDirections()
         {
             var scene = NewGo("scene");
@@ -113,7 +132,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             trsObject.transform.localPosition = position;
             trsObject.transform.localRotation = rotation;
             trsObject.transform.localScale = scale;
-            // Decomposing a matrix with a zero column loses the scale sign; only the authored columns keep it.
+            // The authored matrix carries rotation and reflection even when the live Unity transform differs.
             matrixObject.transform.localPosition = position;
             matrixObject.transform.localScale = new Vector3(-1f, 1f, 2f);
 

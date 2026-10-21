@@ -104,17 +104,6 @@ namespace UnityGLTF.KhrCharacter.Tests
                         { ""source"": 2, ""name"": ""jawOpen"", ""weight"": 1.0 }
                       ]
                     }
-                  },
-                  ""expressionSetInputMappings"": {
-                    ""https://example.com/expression-vocabularies/example/v1"": {
-                      ""Smile"": [
-                        { ""target"": 0, ""name"": ""smileLeft"", ""weight"": 0.5 },
-                        { ""target"": 1, ""name"": ""smileRight"", ""weight"": 0.5 }
-                      ],
-                      ""MouthOpen"": [
-                        { ""target"": 2, ""name"": ""jawOpen"", ""weight"": 1.0 }
-                      ]
-                    }
                   }
                 }
               }
@@ -242,7 +231,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void MappingReadmeExampleComputesBothOperationsExactly()
+        public void CurrentMappingAndOptionalHostProjectionUseTheSameCoefficients()
         {
             ParseMappingExample(out var forward, out var input);
 
@@ -256,7 +245,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                 Is.EqualTo(BitConverter.DoubleToInt64Bits(0.6000000000000001d)),
                 "the exact binary64 sum of 0.8 * 0.5 and 0.8 * 0.25 rounds to 0.6000000000000001");
             Assert.That(outputs["MouthOpen"], Is.EqualTo(1d));
-            Assert.That(native, Is.EqualTo(new[] { 0.5d, 0.5d, 0.25d }));
+            Assert.That(native, Is.EqualTo(new[] { 0.8d, 0.8d, 0.25d }));
         }
 
         [Test]
@@ -269,7 +258,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                 new Dictionary<string, double> { { "Smile", 1.5d }, { "MouthOpen", -0.5d }, { "Unknown", 1d } },
                 3);
 
-            Assert.That(native, Is.EqualTo(new[] { 0.5d, 0.5d, 0d }));
+            Assert.That(native, Is.EqualTo(new[] { 0.8d, 0.8d, 0d }));
             Assert.Throws<ArgumentOutOfRangeException>(() => ExpressionDriverPipeline.EvaluateInputMapping(
                 input, new Dictionary<string, double> { { "Smile", double.NaN } }, 3));
         }
@@ -310,7 +299,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                 Assert.That(responses.EvaluateInputMapping(
                         VocabularyIdentifier,
                         new Dictionary<string, double> { { "Smile", 1d }, { "MouthOpen", 0.25d } }),
-                    Is.EqualTo(new[] { 0.5d, 0.5d, 0.25d }));
+                    Is.EqualTo(new[] { 0.8d, 0.8d, 0.25d }));
             }
             finally
             {
