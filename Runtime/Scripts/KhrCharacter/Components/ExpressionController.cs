@@ -149,8 +149,7 @@ namespace UnityGLTF.KhrCharacter
         /// <summary>
         /// Evaluates a set authored in Unity. Its tracks become the response animations its export would contain (legacy
         /// curves normalized to response progress, in glTF space), so previewing the set matches evaluating the exported
-        /// asset. A track that cannot be expressed that way, or that animates a node rotation, node scale or texture
-        /// scale an earlier track already animates, is reported as a warning and produces no output.
+        /// asset. Invalid curves are reported and produce no output; shared non-additive targets use the documented host policy.
         /// </summary>
         public void Initialize(CharacterExpressionSet set)
         {
@@ -271,7 +270,7 @@ namespace UnityGLTF.KhrCharacter
         public void UseDirectNativeInputs() => _selectedInputMappingSet = null;
 
         /// <summary>
-        /// The endpoint outputs of an <c>expressionSetMappings</c> set, computed from the current pre-suppression drivers
+        /// Optional host output projection of an input table, computed from the current pre-suppression drivers
         /// <c>u</c> (after any selected input mapping); suppression never changes them.
         /// </summary>
         public IReadOnlyDictionary<string, float> EvaluateVocabularyOutputs(string setName)
@@ -566,6 +565,7 @@ namespace UnityGLTF.KhrCharacter
                         outputNames.Add(set.SetName);
                     }
             var inputNames = new List<string>();
+            if (forward != null && forward.Count > 0) input = ExpressionDriverPipeline.ToInputMappingSets(forward);
             if (input != null)
                 foreach (var set in input)
                     if (set?.SetName != null && !_inputMappingSets.ContainsKey(set.SetName))

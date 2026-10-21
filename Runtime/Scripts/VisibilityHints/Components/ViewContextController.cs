@@ -77,9 +77,8 @@ namespace UnityGLTF.VisibilityHints
             Transform node, IReadOnlyCollection<string> viewTags, bool ancestorInclusiveCoreVisible)
         {
             var nodeHints = GetComponent<NodeVisibilityHintSet>();
-            var role = nodeHints != null ? nodeHints.ResolveRole(node) : null;
-            return VisibilityHintEvaluator.ShouldRenderNodeVisualContent(
-                role, viewTags, ancestorInclusiveCoreVisible, CustomRoleResolver, _renderUnsupportedRoles);
+            return ancestorInclusiveCoreVisible && (nodeHints == null
+                || nodeHints.IsHintVisible(node, viewTags, CustomRoleResolver, _renderUnsupportedRoles));
         }
 
         /// <summary>Primitive-instance predicate for a view that carries <see cref="DefaultViewTags"/>.</summary>
@@ -96,10 +95,11 @@ namespace UnityGLTF.VisibilityHints
         {
             var nodeHints = GetComponent<NodeVisibilityHintSet>();
             var primitiveHints = GetComponent<PrimitiveVisibilityHintSet>();
-            var nodeRole = nodeHints != null ? nodeHints.ResolveRole(renderer != null ? renderer.transform : null) : null;
+            bool nodeHintVisible = nodeHints == null || nodeHints.IsHintVisible(
+                renderer != null ? renderer.transform : null, viewTags, CustomRoleResolver, _renderUnsupportedRoles);
             var primitiveRole = primitiveHints != null ? primitiveHints.ResolveRole(renderer, subMesh) : null;
             return VisibilityHintEvaluator.ShouldRenderPrimitiveInstance(
-                nodeRole, primitiveRole, viewTags, ancestorInclusiveCoreVisible,
+                nodeHintVisible, primitiveRole, viewTags, ancestorInclusiveCoreVisible,
                 CustomRoleResolver, _renderUnsupportedRoles);
         }
     }

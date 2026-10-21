@@ -5,7 +5,9 @@
         "UnityGLTF.KhrCharacter.Runtime",
         "UnityGLTF.KhrCharacter.Schema",
         "UnityGLTFScripts",
-        "GLTFSerialization"
+        "GLTFSerialization",
+        "UnityGLTF.VisibilityHints.Runtime",
+        "UnityGLTF.VisibilityHints.Schema"
     ],
     "optionalUnityReferences": [
         "TestAssemblies"

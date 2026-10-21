@@ -81,6 +81,59 @@ namespace UnityGLTF.KhrCharacter.Tests
                && channel.Target.Extensions.TryGetValue(KHR_animation_pointer.EXTENSION_NAME, out var ext)
                && ext is KHR_animation_pointer p ? p.path : null;
 
+        [TestCase(false)]
+        [TestCase(true)]
+        public void CoreVisibilityExportsOwnStateAndBooleanPointerOutput(bool floatCurveValues)
+        {
+            var root = new GameObject("root"); _created.Add(root);
+            var parent = new GameObject("parent"); parent.transform.SetParent(root.transform, false);
+            var child = new GameObject("child"); child.transform.SetParent(parent.transform, false);
+            var hidden = parent.AddComponent<CoreNodeVisibility>();
+            hidden.Bind(new KHR_node_visibility { visible = false, AdditionalProperties = new JObject
+                { { "extras", new JObject { { "origin", "authored" } } } } });
+            child.AddComponent<CoreNodeVisibility>().Visible = true;
+            child.AddComponent<Camera>();
+            var settings = GLTFSettings.GetDefaultSettings();
+            foreach (var plugin in settings.ExportPlugins)
+                if (plugin is AnimationPointerExport) plugin.Enabled = true;
+            var context = new ExportContext(settings);
+            var exporter = new GLTFSceneExporter(new[] { root.transform }, context);
+            context.AfterSceneExport += (scene, gltf) =>
+            {
+                var animation = new GLTFAnimation { Name = "CoreVisibility" };
+                gltf.Animations.Add(animation);
+                exporter.AddAnimationData(hidden, nameof(CoreNodeVisibility.Visible), animation,
+                    new[] { 0f, 1f }, floatCurveValues ? new object[] { 0f, 1f } : new object[] { false, true });
+            };
+            var bytes = exporter.SaveGLBToByteArray("core-visibility");
+            var exported = exporter.GetRoot();
+            var parentNode = exported.Nodes.Find(node => node.Name == "parent");
+            var childNode = exported.Nodes.Find(node => node.Name == "child");
+            var parentValue = (KHR_node_visibility)parentNode.Extensions[KHR_node_visibility_Factory.EXTENSION_NAME];
+            var childValue = (KHR_node_visibility)childNode.Extensions[KHR_node_visibility_Factory.EXTENSION_NAME];
+            Assert.IsFalse(parentValue.visible);
+            Assert.IsTrue(childValue.visible, "a true child exports own true beneath false parent");
+            Assert.AreEqual("authored", parentValue.Serialize().Value["extras"]["origin"].Value<string>());
+            Assert.IsTrue(child.activeInHierarchy);
+            Assert.IsNotNull(childNode.Camera, "core false does not remove the descendant camera");
+            var animationResult = exported.Animations.Find(animation => animation.Name == "CoreVisibility");
+            Assert.AreEqual(1, animationResult.Channels.Count);
+            var channel = animationResult.Channels[0];
+            Assert.AreEqual("/nodes/" + exported.Nodes.IndexOf(parentNode) + "/extensions/KHR_node_visibility/visible",
+                PointerPath(channel));
+            var sampler = animationResult.Samplers[channel.Sampler.Id];
+            Assert.AreEqual(InterpolationType.STEP, sampler.Interpolation);
+            var output = sampler.Output.Value;
+            Assert.AreEqual(5121, (int)output.ComponentType, "Boolean output uses UNSIGNED_BYTE");
+            Assert.AreEqual(GLTFAccessorAttributeType.SCALAR, output.Type);
+            Assert.AreEqual(2, output.Count);
+            Assert.IsFalse(output.Normalized);
+            int binaryStart = 28 + System.BitConverter.ToInt32(bytes, 12);
+            int valueStart = binaryStart + (int)output.BufferView.Value.ByteOffset + (int)output.ByteOffset;
+            Assert.AreEqual(0, bytes[valueStart]);
+            Assert.AreEqual(1, bytes[valueStart + 1]);
+        }
+
         // A minimal single-key joint rotation driver: enough to make an expression emit one channel so the
         // expression item is kept (the exporter drops expressions with zero channels).
         private static JointDriver RotationDriver(Transform target) => new JointDriver
@@ -90,7 +143,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             DeltaQuat = new[] { Quaternion.Euler(10f, 0f, 0f) }, BaseQuat = Quaternion.identity,
         };
 
-        // Translation is additive, so several expressions may move the same node; node rotation is single-writer.
+        // Translation aggregates additively; shared rotation uses the documented host composition policy.
         private static JointDriver TranslationDriver(Transform target) => new JointDriver
         {
             Target = target, Channel = TrsChannel.Translation,
@@ -1454,7 +1507,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void TwoTracksRotatingOneBoneAbortWithHelperNodeMessage()
+        public void TwoTracksRotatingOneBoneExportBothResponses()
         {
             var root = new GameObject("char");
             _created.Add(root);
@@ -1469,16 +1522,14 @@ namespace UnityGLTF.KhrCharacter.Tests
                 },
             });
 
-            var exception = Assert.Catch<System.InvalidOperationException>(() => ExportToGltfRoot(root));
-            StringAssert.Contains("'lookLeft'", exception.Message);
-            StringAssert.Contains("'lookRight'", exception.Message);
-            StringAssert.Contains("/rotation', which only one expression may write", exception.Message);
-            StringAssert.Contains("helper node", exception.Message);
+            var exported = ExportToGltfRoot(root);
+            var expressions = (KHR_character_expression)exported.Extensions[KHR_character_expression.EXTENSION_NAME];
+            Assert.That(expressions.Expressions.Count, Is.EqualTo(2));
         }
 
         [TestCase(false)]
         [TestCase(true)]
-        public void TextureScaleConflictsOnlyWhenTwoTracksAnimateIt(bool animateScale)
+        public void SharedTextureScaleExportsBothTracks(bool animateScale)
         {
             var shader = TextureShaderOrFail();
             var root = MakeUvCharacter(shader, out var renderer);
@@ -1510,8 +1561,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                     "constant scale channels are not listed, so two offset expressions do not conflict");
                 return;
             }
-            var exception = Assert.Catch<System.InvalidOperationException>(() => ExportToGltfRoot(root));
-            StringAssert.Contains("/KHR_texture_transform/scale', which only one expression may write", exception.Message);
+            Assert.DoesNotThrow(() => ExportToGltfRoot(root));
         }
 
         [Test]
@@ -1749,27 +1799,10 @@ namespace UnityGLTF.KhrCharacter.Tests
                                         ExtrasJson = "\"forward-extra\"",
                                         AdditionalPropertiesJson = "{\"futureForwardField\":8}",
                                     },
-                                },
-                            },
-                        },
-                    },
-                },
-                InputMappingSets = new[]
-                {
-                    new ExpressionInputMappingSet
-                    {
-                        SetName = ExpressionVocab,
-                        Commands = new[]
-                        {
-                            new InputMappingCommand
-                            {
-                                CommandName = "Smile",
-                                Contributions = new[]
-                                {
-                                    new InputMappingContribution
+                                    new MappingContribution
                                     {
-                                        TargetIndex = 0,
-                                        Name = "target",
+                                        SourceIndex = 0,
+                                        Name = "independent target label",
                                         Weight = 0.5f,
                                         ExtensionsJson = "{\"ACME_input_entry\":{\"value\":9}}",
                                         ExtrasJson = "[\"input-extra\"]",
@@ -1810,12 +1843,14 @@ namespace UnityGLTF.KhrCharacter.Tests
             var mapping = gltf.Extensions[KHR_character_expression_mapping.EXTENSION_NAME]
                 as KHR_character_expression_mapping;
             var forward = mapping.ExpressionSetMappings[ExpressionVocab]["Smile"][0];
-            var input = mapping.ExpressionSetInputMappings[ExpressionVocab]["Smile"][0];
+            var input = mapping.ExpressionSetMappings[ExpressionVocab]["Smile"][1];
+            Assert.IsEmpty(mapping.ExpressionSetInputMappings);
+            Assert.IsNull(((JObject)mapping.Serialize().Value)["expressionSetInputMappings"]);
             Assert.AreEqual("source", forward.Name);
             Assert.AreEqual(7, forward.Extensions["ACME_mapping_entry"]["value"].Value<int>());
             Assert.AreEqual("forward-extra", forward.Extras.Value<string>());
             Assert.AreEqual(8, forward.AdditionalProperties["futureForwardField"].Value<int>());
-            Assert.AreEqual("target", input.Name);
+            Assert.AreEqual("independent target label", input.Name);
             Assert.AreEqual(9, input.Extensions["ACME_input_entry"]["value"].Value<int>());
             Assert.AreEqual("input-extra", input.Extras[0].Value<string>());
             Assert.AreEqual(10, input.AdditionalProperties["futureInputField"].Value<int>());
@@ -2235,8 +2270,8 @@ namespace UnityGLTF.KhrCharacter.Tests
                 "duplicate poseType labels do not collapse distinct animation-indexed reference poses");
         }
 
-        [TestCase(null, "t_pose")]
-        [TestCase("", "t_pose")]
+        [TestCase(null, null)]
+        [TestCase("", null)]
         [TestCase("T_POSE", "T_POSE")]
         [TestCase("TPose", "TPose")]
         public void ReferencePoseExport_WritesResolvedLabelExplicitly(string authoredLabel, string expectedLabel)
@@ -2254,6 +2289,12 @@ namespace UnityGLTF.KhrCharacter.Tests
                 },
             });
 
+            if (expectedLabel == null)
+            {
+                var error = Assert.Throws<System.InvalidOperationException>(() => ExportToGltfRoot(root));
+                StringAssert.Contains("requires a nonempty poseType", error.Message);
+                return;
+            }
             var gltf = ExportToGltfRoot(root);
 
             GLTFAnimation refAnim = null;
@@ -2264,7 +2305,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsNotNull(refAnim);
             var poseJson = (JObject)refAnim.Extensions[KHR_character_reference_pose.EXTENSION_NAME].Serialize().Value;
             Assert.AreEqual(expectedLabel, poseJson["poseType"].Value<string>(),
-                "an unset label resolves to t_pose; any other label is written verbatim");
+                "a provided label is written verbatim; no missing label is invented");
             Assert.AreEqual("ReferencePose_" + expectedLabel, refAnim.Name);
         }
 

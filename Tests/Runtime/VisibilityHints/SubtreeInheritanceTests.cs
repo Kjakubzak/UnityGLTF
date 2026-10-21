@@ -42,7 +42,7 @@ namespace UnityGLTF.VisibilityHints.Tests
         }
 
         [Test]
-        public void NearestDescendantHintReplacesInheritedHint()
+        public void DescendantHintAddsRestrictionToAllAncestors()
         {
             var root = NewGo("root");
             var a = NewChild(root, "A");
@@ -60,11 +60,13 @@ namespace UnityGLTF.VisibilityHints.Tests
             Assert.AreEqual("first_person", set.ResolveRole(c.transform));
             Assert.IsFalse(set.ShouldRenderVisualContent(a.transform, FirstPerson, true));
             Assert.IsFalse(set.ShouldRenderVisualContent(b.transform, FirstPerson, true));
-            Assert.IsTrue(set.ShouldRenderVisualContent(c.transform, FirstPerson, true));
+            Assert.IsFalse(set.ShouldRenderVisualContent(c.transform, FirstPerson, true));
+            Assert.IsFalse(set.ShouldRenderVisualContent(c.transform, ThirdPerson, true));
+            Assert.IsTrue(set.ShouldRenderVisualContent(c.transform, new[] { "first_person", "third_person" }, true));
         }
 
         [Test]
-        public void ExplicitAlwaysHintOverridesInheritedRole()
+        public void ExplicitAlwaysCannotCancelAncestorRestriction()
         {
             var root = NewGo("root");
             var parent = NewChild(root, "parent");
@@ -77,7 +79,8 @@ namespace UnityGLTF.VisibilityHints.Tests
             });
 
             Assert.IsFalse(set.ShouldRenderVisualContent(parent.transform, FirstPerson, true));
-            Assert.IsTrue(set.ShouldRenderVisualContent(child.transform, FirstPerson, true));
+            Assert.IsFalse(set.ShouldRenderVisualContent(child.transform, FirstPerson, true));
+            Assert.IsTrue(set.ShouldRenderVisualContent(child.transform, ThirdPerson, true));
         }
 
         [Test]

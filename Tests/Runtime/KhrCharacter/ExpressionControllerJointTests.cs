@@ -131,7 +131,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [UnityTest]
-        public IEnumerator TimeZeroKeyAwayFromTheBase_DrivesNothing()
+        public IEnumerator TimeZeroKeyAwayFromTheBase_ContributesItsOwnChange()
         {
             var root = MakeRoot(out var joint);
             joint.localPosition = new Vector3(0f, 7f, 0f);
@@ -145,18 +145,16 @@ namespace UnityGLTF.KhrCharacter.Tests
                 DeltaVec = new[] { new Vector3(0f, 0.5f, 0f), new Vector3(0f, 2.5f, 0f) },
             };
             var ec = root.AddComponent<ExpressionController>();
-            LogAssert.Expect(LogType.Warning,
-                new Regex("Expression 0 \\('raised'\\) produces no output: .*time-zero translation"));
             ec.Initialize(WrapJoint("raised", raised));
 
             ec.SetWeight("raised", 1f);
             yield return null;
-            Assert.That(ec.Bindings, Is.Empty);
-            Assert.That(joint.localPosition, Is.EqualTo(new Vector3(0f, 7f, 0f)));
+            Assert.That(ec.Bindings, Is.Not.Empty);
+            Assert.That(joint.localPosition.y, Is.EqualTo(3f).Within(1e-5f));
         }
 
         [UnityTest]
-        public IEnumerator RotationOfOneJointOnTwoTracks_KeepsTheFirstTrackWithOneWarning()
+        public IEnumerator SharedRotationUsesLastActiveTrackWithoutDiscardingChannels()
         {
             var root = MakeRoot(out var joint);
             var set = new CharacterExpressionSet
@@ -178,9 +176,6 @@ namespace UnityGLTF.KhrCharacter.Tests
                 }
             };
             var ec = root.AddComponent<ExpressionController>();
-            LogAssert.Expect(LogType.Warning, new Regex(
-                "Expressions 0 \\('lookRight'\\) and 1 \\('lookUp'\\) both animate the rotation of 'bone'.*" +
-                "expression 1 produces no output"));
             ec.Initialize(set);
 
             ec.SetWeight("lookRight", 1f);
@@ -189,9 +184,9 @@ namespace UnityGLTF.KhrCharacter.Tests
 
             // A repeated warning or a per-frame composition error would be unexpected.
             LogAssert.NoUnexpectedReceived();
-            Assert.That(ec.Composition.Failures, Is.Empty, "composition never sees two rotation records");
-            Assert.Less(Quaternion.Angle(joint.localRotation, Quaternion.Euler(0f, 30f, 0f)), 0.1f,
-                "the first track owns the rotation");
+            Assert.That(ec.Composition.Failures, Is.Empty, "shared rotation records are valid");
+            Assert.Less(Quaternion.Angle(joint.localRotation, Quaternion.Euler(-20f, 0f, 0f)), 0.1f,
+                "the highest active index supplies the absolute rotation");
         }
 
         [UnityTest]

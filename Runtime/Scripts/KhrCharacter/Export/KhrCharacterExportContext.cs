@@ -397,7 +397,6 @@ namespace UnityGLTF.KhrCharacter
                 throw InvalidExpression("The expression set is empty.");
 
             var preflight = new ExpressionExportPreflight();
-            var singleWriterOwners = new Dictionary<string, int>(StringComparer.Ordinal);
             for (int expressionIndex = 0; expressionIndex < set.Expressions.Length; expressionIndex++)
             {
                 var track = set.Expressions[expressionIndex];
@@ -448,16 +447,6 @@ namespace UnityGLTF.KhrCharacter
                         $"[KHR_character] Expression '{track.Name}' changes no property: it is exported with one " +
                         "unlisted channel and produces no response records.");
                 }
-                foreach (var target in plan.Targets)
-                {
-                    if (!plan.Lists(target) || !IsSingleWriterTarget(target)) continue;
-                    if (singleWriterOwners.TryGetValue(target, out int owner))
-                        throw InvalidExpression(
-                            $"Expressions {owner} ('{set.Expressions[owner].Name}') and {expressionIndex} " +
-                            $"('{track.Name}') both animate '{target}', which only one expression may write. " +
-                            SingleWriterHint(target));
-                    singleWriterOwners.Add(target, expressionIndex);
-                }
                 preflight.Plans[track] = plan;
                 ValidateSuppressions(set.Expressions, expressionIndex, track);
             }
@@ -472,26 +461,6 @@ namespace UnityGLTF.KhrCharacter
 
             ValidateMappings(set);
             return preflight;
-        }
-
-        // Node rotation and scale and KHR_texture_transform scale are single-writer (EXP-06): at most one expression
-        // may list each of them. The exporter writes no other single-writer property.
-        private static bool IsSingleWriterTarget(string target)
-        {
-            if (target.StartsWith("/nodes/", StringComparison.Ordinal))
-                return target.EndsWith("/rotation", StringComparison.Ordinal)
-                       || target.EndsWith("/scale", StringComparison.Ordinal);
-            return target.EndsWith(
-                $"/{ExtTextureTransformExtensionFactory.EXTENSION_NAME}/{ExtTextureTransformExtensionFactory.SCALE}",
-                StringComparison.Ordinal);
-        }
-
-        private static string SingleWriterHint(string target)
-        {
-            return target.StartsWith("/nodes/", StringComparison.Ordinal)
-                ? "Give each expression its own helper node: insert one ancestor of the joint per expression at the " +
-                  "joint's pivot and let each expression rotate or scale only its own helper node."
-                : "Move the texture scale change into one expression; texture offsets and rotations may still add up.";
         }
 
         private static void ValidateMorphDriver(
@@ -553,7 +522,6 @@ namespace UnityGLTF.KhrCharacter
                     path = "translation";
                     var values = BuildJointVectorValues(driver, sampler, description);
                     var authored = new[] { node.Translation.X, node.Translation.Y, node.Translation.Z };
-                    RequireEquivalent(authored, ToGltfTranslation(values[0]), $"{description} time-zero translation");
                     foreach (var value in values) constant &= SameComponents(authored, ToGltfTranslation(value));
                     break;
                 }
@@ -562,7 +530,6 @@ namespace UnityGLTF.KhrCharacter
                     path = "scale";
                     var values = BuildJointVectorValues(driver, sampler, description);
                     var authored = new[] { node.Scale.X, node.Scale.Y, node.Scale.Z };
-                    RequireEquivalent(authored, ToComponents(values[0]), $"{description} time-zero scale");
                     foreach (var value in values) constant &= SameComponents(authored, ToComponents(value));
                     break;
                 }
@@ -571,11 +538,6 @@ namespace UnityGLTF.KhrCharacter
                     path = "rotation";
                     var values = BuildJointRotationValues(driver, sampler, description);
                     var authored = new[] { node.Rotation.X, node.Rotation.Y, node.Rotation.Z, node.Rotation.W };
-                    if (!ExpressionInitialValueValidation.QuaternionsEquivalent(
-                            authored,
-                            ToGltfRotation(values[0]),
-                            ExpressionAccessorComponentEncoding.Float))
-                        throw InvalidExpression($"{description} time-zero rotation does not match the exported node.");
                     foreach (var value in values)
                     {
                         var exported = ToGltfRotation(value);
@@ -641,7 +603,6 @@ namespace UnityGLTF.KhrCharacter
 
             if (driver.TransformTarget != TextureTransformTarget.Offset)
             {
-                RequireEquivalent(expectedScale, ToComponents(curves.Scale[0]), $"{description} time-zero scale");
                 ValidateTextureTarget(
                     basePath + ExtTextureTransformExtensionFactory.SCALE,
                     sampler,
@@ -655,7 +616,6 @@ namespace UnityGLTF.KhrCharacter
             }
             if (driver.TransformTarget != TextureTransformTarget.Scale)
             {
-                RequireEquivalent(expectedOffset, ToComponents(curves.Offset[0]), $"{description} time-zero offset");
                 ValidateTextureTarget(
                     basePath + ExtTextureTransformExtensionFactory.OFFSET,
                     sampler,
@@ -767,7 +727,9 @@ namespace UnityGLTF.KhrCharacter
         private static void ValidateMappings(CharacterExpressionSet set)
         {
             bool hasForwardMappings = set.MappingSets != null && set.MappingSets.Length > 0;
-            bool hasInputMappings = set.InputMappingSets != null && set.InputMappingSets.Length > 0;
+            bool hasInputMappings = false;
+            if (set.InputMappingSets != null && set.InputMappingSets.Length > 0)
+                throw InvalidExpression("Legacy InputMappingSets must be explicitly migrated with FromLegacyInputMappingSets before export.");
             if (!hasForwardMappings && !hasInputMappings &&
                 HasCompanionPayload(
                     set.MappingExtensionsJson,
@@ -788,7 +750,7 @@ namespace UnityGLTF.KhrCharacter
                 for (int setIndex = 0; setIndex < set.MappingSets.Length; setIndex++)
                 {
                     var mappingSet = set.MappingSets[setIndex];
-                    string description = $"Forward mapping set {setIndex}";
+                    string description = $"Input mapping set {setIndex}";
                     if (mappingSet?.Targets == null || mappingSet.Targets.Length == 0)
                         throw InvalidExpression($"{description} is empty.");
                     ValidateMappingIdentifier(mappingSet.SetName);
@@ -825,48 +787,6 @@ namespace UnityGLTF.KhrCharacter
                     }
                 }
 
-            var inputNames = new HashSet<string>();
-            if (set.InputMappingSets != null)
-                for (int setIndex = 0; setIndex < set.InputMappingSets.Length; setIndex++)
-                {
-                    var mappingSet = set.InputMappingSets[setIndex];
-                    string description = $"Input mapping set {setIndex}";
-                    if (mappingSet?.Commands == null || mappingSet.Commands.Length == 0)
-                        throw InvalidExpression($"{description} is empty.");
-                    ValidateMappingIdentifier(mappingSet.SetName);
-                    if (!inputNames.Add(mappingSet.SetName))
-                        throw InvalidExpression($"{description} duplicates identifier '{mappingSet.SetName}'.");
-                    var commandNames = new HashSet<string>();
-                    for (int commandIndex = 0; commandIndex < mappingSet.Commands.Length; commandIndex++)
-                    {
-                        var command = mappingSet.Commands[commandIndex];
-                        string commandDescription = $"{description} command {commandIndex}";
-                        if (command?.Contributions == null || command.Contributions.Length == 0 ||
-                            string.IsNullOrEmpty(command.CommandName))
-                            throw InvalidExpression($"{commandDescription} is empty.");
-                        if (!commandNames.Add(command.CommandName))
-                            throw InvalidExpression($"{commandDescription} duplicates key '{command.CommandName}'.");
-                        for (int contributionIndex = 0; contributionIndex < command.Contributions.Length; contributionIndex++)
-                        {
-                            var contribution = command.Contributions[contributionIndex];
-                            string contributionDescription = $"{commandDescription} contribution {contributionIndex}";
-                            ValidateExpressionReference(
-                                set.Expressions,
-                                contribution.TargetIndex,
-                                contribution.Name,
-                                contributionDescription);
-                            RequireUnit(contribution.Weight, $"{contributionDescription} weight");
-                            AddExtensionNames(
-                                companionExtensionNames,
-                                ParseExtensionsObject(
-                                    contribution.ExtensionsJson,
-                                    $"{contributionDescription} companion extensions"));
-                            ParseToken(contribution.ExtrasJson);
-                            ParseObject(contribution.AdditionalPropertiesJson);
-                        }
-                    }
-                }
-
             ValidateRequiredCompanionExtensions(
                 set.MappingRequiredCompanionExtensions,
                 companionExtensionNames,
@@ -881,9 +801,6 @@ namespace UnityGLTF.KhrCharacter
         {
             if (expressionIndex < 0 || expressionIndex >= expressions.Length || expressions[expressionIndex] == null)
                 throw InvalidExpression($"{description} references invalid expression {expressionIndex}.");
-            if (diagnosticName != null
-                && !string.Equals(diagnosticName, expressions[expressionIndex].Name, StringComparison.Ordinal))
-                throw InvalidExpression($"{description} name does not match expression {expressionIndex}.");
         }
 
         private static void ValidateMappingIdentifier(string identifier)
@@ -1196,41 +1113,6 @@ namespace UnityGLTF.KhrCharacter
                 }
             }
 
-            if (set.InputMappingSets != null)
-            {
-                foreach (var mappingSet in set.InputMappingSets)
-                {
-                    if (mappingSet?.Commands == null) continue;
-                    ValidateMappingIdentifier(mappingSet.SetName);
-                    var setDict = new Dictionary<string, List<KHR_character_expression_mapping.TargetWeight>>();
-                    foreach (var command in mappingSet.Commands)
-                    {
-                        if (command?.Contributions == null || string.IsNullOrEmpty(command.CommandName)) continue;
-                        var contributions = new List<KHR_character_expression_mapping.TargetWeight>();
-                        foreach (var contribution in command.Contributions)
-                        {
-                            if (!runtimeToWireIndex.TryGetValue(contribution.TargetIndex, out int targetIndex)) continue;
-                            var companionExtensions = ParseExtensionsObject(
-                                contribution.ExtensionsJson,
-                                "Input mapping contribution companion extensions");
-                            contributions.Add(new KHR_character_expression_mapping.TargetWeight
-                            {
-                                Target = targetIndex,
-                                Name = contribution.Name,
-                                Weight = contribution.Weight,
-                                Extensions = companionExtensions,
-                                Extras = ParseToken(contribution.ExtrasJson),
-                                AdditionalProperties = ParseObject(contribution.AdditionalPropertiesJson),
-                            });
-                            DeclareCompanionExtensions(
-                                exporter, companionExtensions, set.MappingRequiredCompanionExtensions);
-                        }
-                        if (contributions.Count > 0) setDict[command.CommandName] = contributions;
-                    }
-                    if (setDict.Count > 0) inputMappingDict[mappingSet.SetName] = setDict;
-                }
-            }
-
             if (expressions.Count > 0)
             {
                 var rootExtension = new KHR_character_expression
@@ -1249,12 +1131,11 @@ namespace UnityGLTF.KhrCharacter
                 if (anySuppression) exporter.DeclareExtensionUsage(KHR_character_expression_suppression.EXTENSION_NAME);
             }
 
-            if (mappingDict.Count > 0 || inputMappingDict.Count > 0)
+            if (mappingDict.Count > 0)
             {
                 var mappingExtension = new KHR_character_expression_mapping
                 {
                     ExpressionSetMappings = mappingDict,
-                    ExpressionSetInputMappings = inputMappingDict,
                     Extensions = ParseExtensionsObject(
                         set.MappingExtensionsJson,
                         "Mapping extension companion extensions"),
@@ -1585,7 +1466,7 @@ namespace UnityGLTF.KhrCharacter
                 {
                     if (set == null || !KHR_character_expression_mapping.IsValidMappingSetIdentifier(set.Identifier))
                         continue;
-                    var associations = ExportAssociations(exporter, set.Associations);
+                    var associations = ExportAssociations(exporter, set.Associations, set.AssociationNames, set.AssociationPayloads);
                     if (associations.Count > 0) mappings[set.Identifier] = associations;
                 }
             }
@@ -1603,14 +1484,16 @@ namespace UnityGLTF.KhrCharacter
 
             var mapping = new KHR_character_skeleton_mapping
             {
-                SkeletalRigMappings = mappings
+                SkeletalRigMappings = mappings,
+                AdditionalProperties = ParseObject(result.RawExtensionJson),
             };
             gltfRoot.AddExtension(KHR_character_skeleton_mapping.EXTENSION_NAME, mapping);
             exporter.DeclareExtensionUsage(KHR_character_skeleton_mapping.EXTENSION_NAME);
         }
 
         private static Dictionary<string, KHR_character_skeleton_mapping.JointAssociation> ExportAssociations(
-            GLTFSceneExporter exporter, Dictionary<string, Transform> associations)
+            GLTFSceneExporter exporter, Dictionary<string, Transform> associations,
+            Dictionary<string, string> names = null, Dictionary<string, string> payloads = null)
         {
             var exported = new Dictionary<string, KHR_character_skeleton_mapping.JointAssociation>();
             if (associations == null) return exported;
@@ -1619,10 +1502,13 @@ namespace UnityGLTF.KhrCharacter
                 if (string.IsNullOrEmpty(association.Key) || association.Value == null) continue;
                 int nodeIndex = exporter.GetTransformIndex(association.Value);
                 if (nodeIndex < 0) continue;
+                string name = association.Value.name;
+                if (names != null && names.TryGetValue(association.Key, out var authoredName)) name = authoredName;
+                string payload = null;
+                payloads?.TryGetValue(association.Key, out payload);
                 exported[association.Key] = new KHR_character_skeleton_mapping.JointAssociation
                 {
-                    Node = nodeIndex,
-                    Name = association.Value.name,
+                    Node = nodeIndex, Name = name, AdditionalProperties = ParseObject(payload),
                 };
             }
             return exported;
@@ -1635,7 +1521,9 @@ namespace UnityGLTF.KhrCharacter
         private void ExportReferencePose(GLTFSceneExporter exporter, GLTFRoot gltfRoot, ReferencePose pose)
         {
             if (pose == null) return;
-            string poseType = string.IsNullOrEmpty(pose.PoseType) ? ReferencePoseLabels.TPose : pose.PoseType;
+            if (string.IsNullOrEmpty(pose.PoseType))
+                throw new InvalidOperationException("Reference-pose export requires a nonempty poseType.");
+            string poseType = pose.PoseType;
             var anim = new GLTFAnimation { Name = $"ReferencePose_{poseType}" };
             if (pose.Bones == null) return;
 

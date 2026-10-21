@@ -26,8 +26,11 @@ namespace UnityGLTF.KhrCharacter
         /// <summary>The concrete property type.</summary>
         public ExpressionPropertyKind Kind { get; }
 
-        /// <summary>True when the value is the single absolute sample of a single-writer property.</summary>
+        /// <summary>True for a host-composed absolute value; retained name for API compatibility.
+        /// Shared targets are valid and use the last active expression-array index.</summary>
         public bool IsSingleWriter { get; }
+
+        public bool IsHostComposed => IsSingleWriter;
 
         /// <summary>
         /// The aggregate value in glTF space. An additive component is <c>b + sum(s - n)</c>, accumulated exactly and
@@ -80,9 +83,9 @@ namespace UnityGLTF.KhrCharacter
 
     /// <summary>
     /// The composition stage of KHR_character_expression as a pure function. It combines the responses of every
-    /// entry for one driver snapshot without depending on their order: additive components use
+    /// entry for one driver snapshot with mandatory additive components independent of order; they use
     /// <c>y = b + sum(s - n)</c> with exact binary64 accumulation, morph weights become one complete vector per node,
-    /// and a single-writer property keeps its single absolute sample.
+    /// and other properties select the absolute sample of the highest active expression-array index.
     /// </summary>
     public static class ExpressionComposer
     {
@@ -105,7 +108,7 @@ namespace UnityGLTF.KhrCharacter
         }
 
         /// <summary>
-        /// True for the properties KHR_character_expression and its standard derived extensions make single-writer:
+        /// Legacy classifier name for properties using host composition, not a structural single-writer rule:
         /// quaternions, node <c>rotation</c> and <c>scale</c>, and <c>KHR_texture_transform</c> <c>scale</c>.
         /// </summary>
         public static bool IsStandardSingleWriter(ExpressionResponseTarget target)
@@ -118,43 +121,34 @@ namespace UnityGLTF.KhrCharacter
                 case ExpressionPropertyKind.TextureScale:
                     return true;
             }
-            return target.ValueKind == ExpressionResponseValueKind.Quaternion;
+            return target.ValueKind == ExpressionResponseValueKind.Quaternion
+                || target.ValueKind == ExpressionResponseValueKind.Boolean
+                || target.ValueKind == ExpressionResponseValueKind.Integer;
         }
 
         /// <summary>
-        /// The single-writer predicate for an asset: the standard single-writer properties plus every property that a
-        /// derived extension carried by one of its entries declares single-writer. Declarations count only for
-        /// extensions this implementation supports.
+        /// Compatibility classifier for host-composed property types. Historical declarations cannot override
+        /// mandatory additive rules.
         /// </summary>
         public static Func<ExpressionResponseTarget, bool> SingleWriterPredicate(
             IEnumerable<ExpressionDerivedExtension> carriedExtensions)
         {
-            var declarations = new List<Func<ExpressionResponseTarget, bool>>();
-            if (carriedExtensions != null)
-                foreach (var extension in carriedExtensions)
-                    if (extension != null && extension.IsSupported && extension.DeclaresSingleWriter != null &&
-                        !declarations.Contains(extension.DeclaresSingleWriter))
-                        declarations.Add(extension.DeclaresSingleWriter);
-            if (declarations.Count == 0) return IsStandardSingleWriter;
-            return target =>
-            {
-                if (IsStandardSingleWriter(target)) return true;
-                foreach (var declaration in declarations)
-                    if (declaration(target)) return true;
-                return false;
-            };
+            // Historical vendor single-writer declarations cannot disable required additive aggregation.
+            return IsStandardSingleWriter;
         }
+
+        /// <summary>True for properties using this host's absolute-sample override policy, not a validity gate.</summary>
+        public static bool IsHostComposed(ExpressionResponseTarget target) => IsStandardSingleWriter(target);
 
         /// <summary>Composes the responses of all entries for one driver snapshot.</summary>
         /// <param name="responses">The response of every expression entry, by expression index.</param>
-        /// <param name="isSingleWriter">The asset's single-writer predicate; null uses
-        /// <see cref="IsStandardSingleWriter"/>.</param>
+        /// <param name="isSingleWriter">Retained compatibility parameter; current type rules always determine the mandatory additive boundary.</param>
         public static ExpressionComposition Compose(
             IReadOnlyList<ExpressionResponse> responses,
             Func<ExpressionResponseTarget, bool> isSingleWriter = null)
         {
             if (responses == null) throw new ArgumentNullException(nameof(responses));
-            var predicate = isSingleWriter ?? IsStandardSingleWriter;
+            var predicate = (Func<ExpressionResponseTarget, bool>)IsHostComposed;
             var groups = new Dictionary<string, PropertyGroup>(StringComparer.Ordinal);
             var failures = new List<ExpressionEvaluationFailure>();
             for (int expressionIndex = 0; expressionIndex < responses.Count; expressionIndex++)
@@ -215,7 +209,7 @@ namespace UnityGLTF.KhrCharacter
             foreach (var contribution in contributions)
             {
                 var target = contribution.Record.Target;
-                if (target.Kind != first.Kind || target.ArrayLength != first.ArrayLength)
+                if (target.Kind != first.Kind || target.ArrayLength != first.ArrayLength || target.ValueKind != first.ValueKind)
                 {
                     error = "its records disagree on the property's type or size";
                     return null;
@@ -236,19 +230,36 @@ namespace UnityGLTF.KhrCharacter
             List<Contribution> contributions,
             out string error)
         {
-            if (contributions.Count > 1)
+            // Contributions were gathered in serialized expression-array order. Inactive entries emitted no record.
+            var sample = contributions[contributions.Count - 1].Record.Value;
+            if (sample.Count != target.ComponentCount)
             {
-                error = $"expression entries {DescribeEntries(contributions)} each produced a record for this " +
-                        "single-writer property, so the asset is invalid";
+                error = "the host-selected absolute sample has the wrong size";
                 return null;
             }
-            var sample = contributions[0].Record.Value;
             var value = new double[sample.Count];
             var contributed = new bool[sample.Count];
+            double normSquared = 0d;
             for (int component = 0; component < value.Length; component++)
             {
                 value[component] = sample[component];
+                if (!ValidHostComponent(value[component], target.ValueKind))
+                {
+                    error = "the host-selected sample violates its finite or discrete value requirements";
+                    return null;
+                }
+                normSquared += value[component] * value[component];
                 contributed[component] = true;
+            }
+            if (target.ValueKind == ExpressionResponseValueKind.Quaternion)
+            {
+                if (value.Length != 4 || normSquared <= 0d || double.IsInfinity(normSquared))
+                {
+                    error = "the host-selected quaternion cannot be normalized";
+                    return null;
+                }
+                double norm = Math.Sqrt(normSquared);
+                for (int component = 0; component < value.Length; component++) value[component] /= norm;
             }
             error = null;
             return new ExpressionAggregateRecord(property, target.Kind, true, value, contributed);
@@ -363,10 +374,9 @@ namespace UnityGLTF.KhrCharacter
                 contributed[element] = true;
                 if (singleWriter)
                 {
-                    if (writers > 1)
+                    if (!ValidHostComponent(sample, first.ValueKind))
                     {
-                        error = $"element {element} has records from several expression entries " +
-                                $"({DescribeEntries(contributions)}) but is single-writer, so the asset is invalid";
+                        error = "the host-selected array sample violates its value requirements";
                         return null;
                     }
                     value[element] = sample;
@@ -380,6 +390,11 @@ namespace UnityGLTF.KhrCharacter
             error = null;
             return new ExpressionAggregateRecord(property, first.Kind, singleWriter, value, contributed);
         }
+
+        private static bool ValidHostComponent(double value, ExpressionResponseValueKind kind)
+            => !double.IsNaN(value) && !double.IsInfinity(value)
+               && (kind != ExpressionResponseValueKind.Boolean || value == 0d || value == 1d)
+               && (kind != ExpressionResponseValueKind.Integer || value == Math.Truncate(value));
 
         private static string DescribeEntries(List<Contribution> contributions)
         {

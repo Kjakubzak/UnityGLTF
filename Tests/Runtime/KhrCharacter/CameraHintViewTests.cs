@@ -7,7 +7,7 @@ using UnityGLTF.Extensions;
 namespace UnityGLTF.KhrCharacter.Tests
 {
     /// <summary>
-    /// Synchronous tests for the CameraHintSet initial camera pose (authored rotation path rule, host -Z camera axis,
+    /// Synchronous tests for the CameraHintSet initial camera pose (core camera frame, host -Z camera axis,
     /// scene-root placement), subject point, roles and display names, plus ViewModeController visibility toggling.
     /// </summary>
     public class CameraHintViewTests
@@ -61,21 +61,38 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void AuthoredRotation_ZeroScaleComponentTakesTheSpecSign()
+        public void ZeroScaleDefinesNoInitialPoseAndDoesNotChangeCamera()
         {
-            var chs = NewGo("chs").AddComponent<CameraHintSet>();
-            var flat = NewGo("flat");
-            flat.transform.localScale = new Vector3(-1f, 1f, 0f);
-            var squashed = NewGo("squashed");
-            squashed.transform.localScale = new Vector3(-1f, 1f, 0.5f);
+            var hints = NewGo("hints").AddComponent<CameraHintSet>();
+            var node = NewGo("flat").transform;
+            node.localScale = new Vector3(-1f, 1f, 0f);
+            var camera = NewGo("camera").AddComponent<Camera>();
+            camera.transform.position = new Vector3(4f, 5f, 6f);
+            var before = camera.transform.position;
+            var hint = new CameraHint { Node = node };
+            Assert.IsFalse(hints.TryGetInitialCameraFrame(hint, null, out _));
+            Assert.IsFalse(hints.TryGetInitialPose(hint, null, out _, out _));
+            hints.Apply(hint, camera);
+            Assert.AreEqual(before, camera.transform.position);
+        }
 
-            var flatRotation = chs.ComputeAuthoredRotation(new CameraHint { Node = flat.transform }, null);
-            AssertRotation(Quaternion.Euler(0f, 180f, 0f), flatRotation, "scale (-1, 1, 0) gives R = diag(-1, 1, -1)");
-            Assert.Greater(Quaternion.Angle(flat.transform.rotation, flatRotation), 1f,
-                "the transform's rotation alone does not carry the scale signs");
-            AssertRotation(Quaternion.identity,
-                chs.ComputeAuthoredRotation(new CameraHint { Node = squashed.transform }, null),
-                "scale (-1, 1, 0.5) is a reflection, which R removes");
+        [Test]
+        public void ZeroScaleAncestorCannotAcquireAnInitialPoseThroughRoundedChildRotation()
+        {
+            var root = NewGo("root");
+            var hints = root.AddComponent<CameraHintSet>();
+            var parent = NewGo("parent").transform; parent.SetParent(root.transform, false);
+            parent.localRotation = Quaternion.Euler(17f, 29f, 41f);
+            parent.localScale = new Vector3(2f, 0f, -3f);
+            var node = NewGo("cameraNode").transform; node.SetParent(parent, false);
+            node.localRotation = Quaternion.Euler(23f, 37f, 53f);
+            var hint = new CameraHint { Node = node };
+            Assert.IsFalse(hints.TryGetInitialCameraFrame(hint, root.transform, out _));
+            // Small positive scales remain defined; do not use an arbitrary epsilon as a singularity gate.
+            parent.localScale = new Vector3(2f, 1e-15f, -3f);
+            node.localRotation = Quaternion.identity;
+            parent.localRotation = Quaternion.identity;
+            Assert.IsTrue(hints.TryGetInitialCameraFrame(hint, root.transform, out _));
         }
 
         [Test]
@@ -110,14 +127,14 @@ namespace UnityGLTF.KhrCharacter.Tests
             trsObject.transform.SetParent(scene.transform, false);
 
             var rotation = Quaternion.Euler(20f, 30f, 0f);
-            var scale = new Vector3(-1f, 1f, 0f);
+            var scale = new Vector3(-1f, 1f, 2f);
             var position = new Vector3(1f, 2f, 3f);
             trsObject.transform.localPosition = position;
             trsObject.transform.localRotation = rotation;
             trsObject.transform.localScale = scale;
-            // Decomposing a matrix with a zero column loses the scale sign; only the authored columns keep it.
+            // The authored matrix carries rotation and reflection even when the live Unity transform differs.
             matrixObject.transform.localPosition = position;
-            matrixObject.transform.localScale = new Vector3(1f, 1f, 0f);
+            matrixObject.transform.localScale = new Vector3(-1f, 1f, 2f);
 
             var root = new GLTFRoot();
             var matrixNode = new Node
@@ -143,7 +160,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             var fromTrs = set.ComputeAuthoredRotation(trsHint, scene.transform);
 
             AssertRotation(fromTrs, fromMatrix);
-            AssertRotation(rotation * Quaternion.Euler(0f, 180f, 0f), fromTrs);
+            Assert.IsTrue(set.TryGetInitialCameraFrame(matrixHint, scene.transform, out var frame));
+            Assert.Less(frame.determinant, 0f, "the core frame retains reflection; no custom first-column flip");
         }
 
         [Test]

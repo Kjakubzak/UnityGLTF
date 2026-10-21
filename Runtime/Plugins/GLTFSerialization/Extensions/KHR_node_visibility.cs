@@ -8,18 +8,19 @@ namespace GLTF.Schema
 	public class KHR_node_visibility : IExtension
 	{
 		public bool visible = true;
+        public JObject AdditionalProperties;
 
 		public JProperty Serialize()
 		{
-			var obj = new JObject();
+			var obj = AdditionalProperties != null ? (JObject)AdditionalProperties.DeepClone() : new JObject();
 			JProperty jProperty = new JProperty(KHR_node_visibility_Factory.EXTENSION_NAME, obj);
-			obj.Add(new JProperty(nameof(visible), visible));
+			obj[nameof(visible)] = visible;
 			return jProperty;
 		}
 
 		public IExtension Clone(GLTFRoot root)
 		{
-			return new KHR_node_visibility() { visible = visible};
+			return new KHR_node_visibility() { visible = visible, AdditionalProperties = AdditionalProperties != null ? (JObject)AdditionalProperties.DeepClone() : null };
 		}
 	}
 
@@ -43,6 +44,11 @@ namespace GLTF.Schema
 					extension.visible = visible.Value<bool>();
 				else
 					extension.visible = true;
+                if (extensionToken.Value is JObject obj)
+                {
+                    extension.AdditionalProperties = (JObject)obj.DeepClone();
+                    extension.AdditionalProperties.Remove(nameof(KHR_node_visibility.visible));
+                }
 				return extension;
 			}
 

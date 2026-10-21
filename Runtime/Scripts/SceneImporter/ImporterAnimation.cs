@@ -367,8 +367,8 @@ namespace UnityGLTF
 											pointerData = new AnimationPointerData();
 											pointerData.targetNodeIds = new int[] {rootIndex.index};
 											nodeIds = pointerData.targetNodeIds;
-											pointerData.unityPropertyNames = new string[1] { "m_IsActive" };
-											pointerData.targetType = typeof(GameObject);
+											pointerData.unityPropertyNames = new string[1] { nameof(CoreNodeVisibility.Visible) };
+											pointerData.targetType = typeof(CoreNodeVisibility);
 											pointerData.primaryData = samplerCache.Output; 
 											pointerData.importAccessorContentConversion = (data, frame) =>
 											{

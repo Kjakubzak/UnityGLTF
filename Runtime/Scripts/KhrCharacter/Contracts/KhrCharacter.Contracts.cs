@@ -145,7 +145,7 @@ namespace UnityGLTF.KhrCharacter
     [Serializable]
     public struct MappingContribution
     {
-        public int SourceIndex;
+        public int SourceIndex; // Native expression driven by this external input term (wire source).
         public string Name;
         public double Weight;
         public string ExtensionsJson;
@@ -154,6 +154,7 @@ namespace UnityGLTF.KhrCharacter
     }
 
     [Serializable]
+    /// <summary>One external input key. TargetName is retained for authored asset compatibility.</summary>
     public class MappingTarget { public string TargetName; public MappingContribution[] Contributions; }
 
     [Serializable]
@@ -180,8 +181,8 @@ namespace UnityGLTF.KhrCharacter
     public class CharacterExpressionSet
     {
         public ExpressionTrack[] Expressions;
-        public ExpressionMappingSet[] MappingSets;           // native drivers -> endpoint outputs
-        public ExpressionInputMappingSet[] InputMappingSets; // endpoint commands -> native drivers
+        public ExpressionMappingSet[] MappingSets;           // Current external input keys -> native drivers
+        public ExpressionInputMappingSet[] InputMappingSets; // Legacy authored input table; migrate with FromLegacyInputMappingSets
         public string MappingExtensionsJson;
         public string MappingExtrasJson;
         public string MappingAdditionalPropertiesJson;
@@ -226,7 +227,7 @@ namespace UnityGLTF.KhrCharacter
     public class ReferencePose
     {
         public int AnimationIndex;
-        public string PoseType;          // exact poseType label, e.g. ReferencePoseLabels.TPose (retarget pose; not the neutral/bind pose)
+        public string PoseType = ReferencePoseLabels.TPose; // exact required poseType label, e.g. ReferencePoseLabels.TPose (retarget pose; not the neutral/bind pose)
         public Transform[] Bones;
         public Vector3[] LocalPositions;
         public Quaternion[] LocalRotations;
@@ -271,6 +272,8 @@ namespace UnityGLTF.KhrCharacter
 
         /// <summary>Role → glTF node index for every association, instantiated or not.</summary>
         public Dictionary<string, int> NodeIndices = new Dictionary<string, int>();
+        public Dictionary<string, string> AssociationNames = new Dictionary<string, string>();
+        public Dictionary<string, string> AssociationPayloads = new Dictionary<string, string>();
 
         public ValidationReport Report = new ValidationReport();
     }
@@ -287,6 +290,7 @@ namespace UnityGLTF.KhrCharacter
     public class SkeletonMappingResult
     {
         public SkeletonMappingSetResult[] MappingSets;
+        public string RawExtensionJson;
         public ReferencePose[] ReferencePoses;
         public Dictionary<string, Transform> Bones;   // vocab joint name -> resolved Transform
         public string SelectedRig;                    // optional host-adapter selection
@@ -312,11 +316,20 @@ namespace UnityGLTF.KhrCharacter
     }
 
     [Serializable]
+    public struct SerializableAssociationMetadata
+    {
+        public string Role;
+        public string Name;
+        public string Payload;
+    }
+
+    [Serializable]
     public class SerializableSkeletonMappingSet
     {
         public string Identifier;
         public SerializableBoneEntry[] Associations;
         public SerializableNodeIndexEntry[] NodeIndices;
+        public SerializableAssociationMetadata[] AssociationMetadata;
         public ValidationReport Report = new ValidationReport();
     }
 
@@ -327,6 +340,7 @@ namespace UnityGLTF.KhrCharacter
         public string SelectedRig;
         public ReferencePose ReferencePose;   // already [Serializable]
         public SerializableSkeletonMappingSet[] MappingSets;
+        public string RawExtensionJson;
         public ReferencePose[] ReferencePoses;
         public ValidationReport Report = new ValidationReport();   // already [Serializable]
 
@@ -343,6 +357,7 @@ namespace UnityGLTF.KhrCharacter
                             Identifier = set.Identifier,
                             Associations = ToEntries(set.Associations),
                             NodeIndices = ToNodeIndexEntries(set.NodeIndices),
+                            AssociationMetadata = ToAssociationMetadata(set),
                             Report = set.Report ?? new ValidationReport(),
                         });
             return new SerializableSkeletonMapping
@@ -351,6 +366,7 @@ namespace UnityGLTF.KhrCharacter
                 SelectedRig = result.SelectedRig,
                 ReferencePose = result.ReferencePose,
                 MappingSets = mappingSets.ToArray(),
+                RawExtensionJson = result.RawExtensionJson,
                 ReferencePoses = result.ReferencePoses,
                 Report = result.Report ?? new ValidationReport(),
             };
@@ -368,6 +384,8 @@ namespace UnityGLTF.KhrCharacter
                             Identifier = set.Identifier,
                             Associations = FromEntries(set.Associations),
                             NodeIndices = FromNodeIndexEntries(set.NodeIndices),
+                            AssociationNames = FromAssociationMetadata(set.AssociationMetadata, false),
+                            AssociationPayloads = FromAssociationMetadata(set.AssociationMetadata, true),
                             Report = set.Report ?? new ValidationReport(),
                         });
             return new SkeletonMappingResult
@@ -376,9 +394,32 @@ namespace UnityGLTF.KhrCharacter
                 SelectedRig = SelectedRig,
                 ReferencePose = NullIfEmpty(ReferencePose),
                 MappingSets = mappingSets.ToArray(),
+                RawExtensionJson = RawExtensionJson,
                 ReferencePoses = ReferencePoses,
                 Report = Report ?? new ValidationReport(),
             };
+        }
+
+        private static SerializableAssociationMetadata[] ToAssociationMetadata(SkeletonMappingSetResult set)
+        {
+            var entries = new List<SerializableAssociationMetadata>();
+            if (set.AssociationNames != null)
+                foreach (var item in set.AssociationNames)
+                {
+                    string payload = null;
+                    set.AssociationPayloads?.TryGetValue(item.Key, out payload);
+                    entries.Add(new SerializableAssociationMetadata { Role = item.Key, Name = item.Value, Payload = payload });
+                }
+            return entries.ToArray();
+        }
+
+        private static Dictionary<string, string> FromAssociationMetadata(SerializableAssociationMetadata[] entries, bool payload)
+        {
+            var result = new Dictionary<string, string>();
+            if (entries != null)
+                foreach (var entry in entries)
+                    if (entry.Role != null) result[entry.Role] = payload ? entry.Payload : entry.Name;
+            return result;
         }
 
         // Unity rehydrates a null ReferencePose as an empty instance, which must not be listed as a tagged animation.

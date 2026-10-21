@@ -16,6 +16,8 @@ namespace UnityGLTF.KhrCharacter
     {
         Components,
         Quaternion,
+        Boolean,
+        Integer,
     }
 
     /// <summary>

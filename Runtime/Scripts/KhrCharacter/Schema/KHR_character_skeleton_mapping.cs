@@ -16,6 +16,7 @@ namespace GLTF.Schema
         {
             public int Node = -1;
             public string Name;
+            public JObject AdditionalProperties;
         }
 
         // Mapping-set identifier -> (role identifier -> node association), kept verbatim.
@@ -23,6 +24,7 @@ namespace GLTF.Schema
             = new Dictionary<string, Dictionary<string, JointAssociation>>();
 
         public JProperty RawData;
+        public JObject AdditionalProperties;
 
         public JProperty Serialize()
         {
@@ -38,14 +40,19 @@ namespace GLTF.Schema
                         foreach (var jointKv in rigKv.Value)
                         {
                             if (jointKv.Value == null) continue;
-                            var association = new JObject { { "node", jointKv.Value.Node } };
-                            if (jointKv.Value.Name != null) association.Add("name", jointKv.Value.Name);
+                            var association = jointKv.Value.AdditionalProperties != null
+                                ? (JObject)jointKv.Value.AdditionalProperties.DeepClone() : new JObject();
+                            association["node"] = jointKv.Value.Node;
+                            if (jointKv.Value.Name != null) association["name"] = jointKv.Value.Name;
+                            else association.Remove("name");
                             joints.Add(jointKv.Key, association);
                         }
                     rigs.Add(rigKv.Key, joints);
                 }
             }
-            return new JProperty(EXTENSION_NAME, new JObject { { "skeletalRigMappings", rigs } });
+            var value = AdditionalProperties != null ? (JObject)AdditionalProperties.DeepClone() : new JObject();
+            value["skeletalRigMappings"] = rigs;
+            return new JProperty(EXTENSION_NAME, value);
         }
 
         public IExtension Clone(GLTFRoot root) => new KHR_character_skeleton_mapping
@@ -66,6 +73,8 @@ namespace GLTF.Schema
             var ext = new KHR_character_skeleton_mapping { RawData = token };
             if (token.Value is JObject obj && obj["skeletalRigMappings"] is JObject rigs)
             {
+                ext.AdditionalProperties = (JObject)obj.DeepClone();
+                ext.AdditionalProperties.Remove("skeletalRigMappings");
                 foreach (var rigProp in rigs.Properties())
                 {
                     if (!(rigProp.Value is JObject joints)) continue;
@@ -80,6 +89,7 @@ namespace GLTF.Schema
                         {
                             Node = association["node"].Value<int>(),
                             Name = association["name"]?.Value<string>(),
+                            AdditionalProperties = (JObject)association.DeepClone(),
                         };
                     }
                     ext.SkeletalRigMappings[rigProp.Name] = map;

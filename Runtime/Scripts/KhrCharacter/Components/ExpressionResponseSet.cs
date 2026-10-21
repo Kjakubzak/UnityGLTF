@@ -192,22 +192,21 @@ namespace UnityGLTF.KhrCharacter
             => _validation ?? (_validation = new ExpressionValidationStatus(_incompleteValidationReasons));
 
         /// <summary>
-        /// Every <c>expressionSetMappings</c> set (native drivers to endpoint outputs), keyed by mapping-set
+        /// Every current <c>expressionSetMappings</c> set (external inputs to native drivers), keyed by mapping-set
         /// identifier. Source indices are expression-array indices.
         /// </summary>
         public IReadOnlyList<ExpressionMappingSet> ForwardMappingSets
             => _forwardMappingSets ?? Array.Empty<ExpressionMappingSet>();
 
         /// <summary>
-        /// Every <c>expressionSetInputMappings</c> set (endpoint commands to native drivers), keyed by mapping-set
+        /// Input-oriented adapters of every current mapping set, keyed by mapping-set
         /// identifier. Target indices are expression-array indices.
         /// </summary>
         public IReadOnlyList<ExpressionInputMappingSet> InputMappingSets
             => _inputMappingSets ?? Array.Empty<ExpressionInputMappingSet>();
 
         /// <summary>
-        /// The registry whose single-writer declarations <see cref="Compose"/> honors for derived extensions that an
-        /// entry carries and that the registry marks supported; <see cref="ExpressionDerivedExtensionRegistry.Default"/>
+        /// The derived-extension registry. Legacy single-writer declarations do not change mandatory addition; <see cref="ExpressionDerivedExtensionRegistry.Default"/>
         /// unless set.
         /// </summary>
         public ExpressionDerivedExtensionRegistry DerivedExtensions
@@ -246,7 +245,9 @@ namespace UnityGLTF.KhrCharacter
             _validation = validation ?? ExpressionValidationStatus.Complete;
             _incompleteValidationReasons = new List<string>(_validation.IncompleteReasons).ToArray();
             _forwardMappingSets = forwardMappingSets ?? Array.Empty<ExpressionMappingSet>();
-            _inputMappingSets = inputMappingSets ?? Array.Empty<ExpressionInputMappingSet>();
+            _inputMappingSets = _forwardMappingSets.Length > 0
+                ? ExpressionDriverPipeline.ToInputMappingSets(_forwardMappingSets)
+                : inputMappingSets ?? Array.Empty<ExpressionInputMappingSet>();
             _serializedEntries = SerializeEntries(_entries);
         }
 
@@ -304,8 +305,20 @@ namespace UnityGLTF.KhrCharacter
             return ExpressionComposer.Compose(responses, ExpressionComposer.SingleWriterPredicate(carried));
         }
 
+        /// <summary>Every current input mapping, preserving wire expression-array identities.</summary>
+        public IReadOnlyList<ExpressionMappingSet> MappingSets => ForwardMappingSets;
+
+        /// <summary>Maps external inputs to an immutable full-count native vector before host arbitration and suppression.</summary>
+        public IReadOnlyList<double> EvaluateExpressionSetMapping(
+            string identifier, IReadOnlyDictionary<string, double> inputs)
+        {
+            if (!TryGetForwardMappingSet(identifier, out var set))
+                throw new ArgumentException($"The asset has no expressionSetMappings set '{identifier}'.", nameof(identifier));
+            return Array.AsReadOnly(ExpressionDriverPipeline.EvaluateExpressionSetMapping(set, inputs, Count));
+        }
+
         /// <summary>
-        /// Computes the endpoint outputs of the <c>expressionSetMappings</c> set with the exact
+        /// Optional host projection of the input table to endpoint outputs with the exact
         /// <paramref name="identifier"/> from the snapshot's pre-suppression vector <c>u</c>.
         /// </summary>
         public IReadOnlyDictionary<string, double> EvaluateForwardMapping(
@@ -317,7 +330,7 @@ namespace UnityGLTF.KhrCharacter
         }
 
         /// <summary>
-        /// Computes the endpoint outputs of the <c>expressionSetMappings</c> set with the exact
+        /// Optional host projection of the input table to endpoint outputs with the exact
         /// <paramref name="identifier"/> from native drivers <paramref name="u"/>, which are clamped to [0, 1].
         /// </summary>
         /// <exception cref="ArgumentException">The asset has no such forward mapping set.</exception>
@@ -329,15 +342,17 @@ namespace UnityGLTF.KhrCharacter
         }
 
         /// <summary>
-        /// Computes the native drivers, by expression index, of the <c>expressionSetInputMappings</c> set with the
+        /// Computes native drivers from the current input mapping with the
         /// exact <paramref name="identifier"/> from endpoint commands, which are clamped to [0, 1].
         /// </summary>
         /// <exception cref="ArgumentException">The asset has no such input mapping set.</exception>
         public double[] EvaluateInputMapping(string identifier, IReadOnlyDictionary<string, double> commands)
         {
+            if (TryGetForwardMappingSet(identifier, out var currentSet))
+                return ExpressionDriverPipeline.EvaluateExpressionSetMapping(currentSet, commands, Count);
             if (!TryGetInputMappingSet(identifier, out var set))
                 throw new ArgumentException(
-                    $"The asset has no expressionSetInputMappings set '{identifier}'.", nameof(identifier));
+                    $"The asset has no expressionSetMappings set '{identifier}'.", nameof(identifier));
             return ExpressionDriverPipeline.EvaluateInputMapping(set, commands, Count);
         }
 

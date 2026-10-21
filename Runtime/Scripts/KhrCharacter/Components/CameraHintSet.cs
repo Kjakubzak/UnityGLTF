@@ -6,7 +6,7 @@ namespace UnityGLTF.KhrCharacter
 {
     /// <summary>
     /// Exposes passive <c>KHR_node_camera_hint</c> descriptors. A hint's initial camera pose is its node's authored
-    /// position and the rotation <c>R</c> from <see cref="ComputeAuthoredRotation"/>; a target node only supplies a
+    /// global transform with scale removed under core camera rules; a target node only supplies a
     /// subject point. <see cref="Apply"/> is one optional Unity host adapter; the extension itself does not select,
     /// create, activate, or drive a camera.
     /// </summary>
@@ -141,52 +141,76 @@ namespace UnityGLTF.KhrCharacter
         }
 
         /// <summary>
-        /// Computes the hint's authored rotation <c>R</c> in Unity coordinates, relative to
-        /// <paramref name="hierarchyRoot"/>. The path runs from the hint node up to, but not including,
-        /// <paramref name="hierarchyRoot"/> (the imported scene root), or to the top of the hierarchy when it is null
-        /// or not an ancestor. Each TRS node contributes its rotation times the signs of its scale, with the
-        /// zero-scale rules; each matrix node contributes its normalized authored columns, with the zero-column rules.
-        /// The product is taken root to leaf and its first column is negated when its determinant is negative.
-        /// Conjugating by the glTF-to-Unity X flip preserves every sign and determinant rule, so the result is the
-        /// spec's <c>R</c> expressed in Unity coordinates.
+        /// The core camera frame in asset coordinates: accumulate full local transforms before removing global scale.
+        /// Returns false for an undefined/singular frame, including zero scale. No fallback pose is invented.
         /// </summary>
-        public Quaternion ComputeAuthoredRotation(CameraHint hint, Transform hierarchyRoot)
+        public bool TryGetInitialCameraFrame(CameraHint hint, Transform hierarchyRoot, out Matrix4x4 frame)
         {
-            if (hint?.Node == null) return Quaternion.identity;
+            frame = Matrix4x4.identity;
+            if (hint?.Node == null) return false;
             var matrices = new Dictionary<Transform, AuthoredNodeMatrix>();
             foreach (var record in AuthoredMatrices)
                 if (record?.Node != null) matrices[record.Node] = record;
-
-            var q = Matrix4x4.identity;
             for (var node = hint.Node; node != null && node != hierarchyRoot; node = node.parent)
             {
                 bool isHintNode = node == hint.Node;
-                Matrix4x4 pathMatrix;
+                Matrix4x4 local;
                 if (matrices.TryGetValue(node, out var authored))
                 {
-                    pathMatrix = NormalizedColumns(authored.LocalMatrix);
-                    // A flipped matrix node's children sit under an in-between GameObject that undoes the turn.
+                    local = authored.LocalMatrix;
+                    for (int axis = 0; axis < 3; axis++)
+                    {
+                        var column = local.GetColumn(axis);
+                        if (column.x == 0f && column.y == 0f && column.z == 0f) return false;
+                    }
                     if (authored.ForwardAxisConversion && !isHintNode)
-                        pathMatrix *= Matrix4x4.Rotate(ForwardAxisTurn);
+                        local *= Matrix4x4.Rotate(ForwardAxisTurn);
                 }
                 else
                 {
                     var rotation = node.localRotation;
                     if (isHintNode && hint.NodeTransformHasForwardAxisConversion)
                         rotation *= Quaternion.Inverse(ForwardAxisTurn);
-                    pathMatrix = Matrix4x4.Rotate(rotation) * Matrix4x4.Scale(ScaleSigns(node.localScale));
+                    if (node.localScale.x == 0f || node.localScale.y == 0f || node.localScale.z == 0f) return false;
+                    local = Matrix4x4.TRS(node.localPosition, rotation, node.localScale);
                 }
-                q = pathMatrix * q;
+                frame = local * frame;
             }
-
-            if (q.determinant < 0f)
-                q.SetColumn(0, -q.GetColumn(0));
-            return Quaternion.LookRotation(q.GetColumn(2), q.GetColumn(1));
+            for (int column = 0; column < 3; column++)
+            {
+                var v = frame.GetColumn(column);
+                double length = Math.Sqrt((double)v.x * v.x + (double)v.y * v.y + (double)v.z * v.z);
+                if (length == 0d || double.IsNaN(length) || double.IsInfinity(length)) return false;
+                frame.SetColumn(column, new Vector4((float)(v.x / length), (float)(v.y / length), (float)(v.z / length), 0f));
+            }
+            return frame.determinant != 0f && !float.IsNaN(frame.determinant) && !float.IsInfinity(frame.determinant);
         }
 
         /// <summary>
-        /// Places a caller-supplied camera at the hint's initial pose: the hint node's position, and <c>R</c> composed
-        /// with the imported scene root's rotation (host placement). The camera looks along the hint's -Z with +Y up.
+        /// Rigid Unity host adaptation of a defined core camera frame. A reflected/sheared frame is retained by
+        /// TryGetInitialCameraFrame; a quaternion cannot express that full frame. Position excludes host placement.
+        /// </summary>
+        public bool TryGetInitialPose(CameraHint hint, Transform hierarchyRoot, out Vector3 position, out Quaternion rotation)
+        {
+            position = default;
+            rotation = Quaternion.identity;
+            if (!TryGetInitialCameraFrame(hint, hierarchyRoot, out var frame)) return false;
+            position = frame.GetColumn(3);
+            rotation = Quaternion.LookRotation(frame.GetColumn(2), frame.GetColumn(1));
+            return true;
+        }
+
+        /// <summary>Compatibility rigid host adaptation. Use TryGetInitialCameraFrame to detect undefined poses.</summary>
+        public Quaternion ComputeAuthoredRotation(CameraHint hint, Transform hierarchyRoot)
+        {
+            if (!TryGetInitialPose(hint, hierarchyRoot, out _, out var rotation))
+                throw new InvalidOperationException("The core camera frame is undefined; the hint supplies no initial pose.");
+            return rotation;
+        }
+
+        /// <summary>
+        /// Places a caller-supplied camera using the defined core camera frame composed
+        /// with the imported scene root (host placement). Undefined frames leave the camera untouched. The camera looks along the hint's -Z with +Y up.
         /// The target node never aims the camera; use <see cref="TryGetSubjectPoint"/> for framing or orbiting.
         /// Selection, projection adaptation, timing, and ownership remain host policy.
         /// </summary>
@@ -195,9 +219,13 @@ namespace UnityGLTF.KhrCharacter
             if (hint == null || camera == null || hint.Node == null) return;
 
             var hierarchyRoot = hint.Node != transform && hint.Node.IsChildOf(transform) ? transform : null;
-            var rotation = ComputeAuthoredRotation(hint, hierarchyRoot);
-            if (hierarchyRoot != null) rotation = hierarchyRoot.rotation * rotation;
-            camera.transform.SetPositionAndRotation(hint.Node.position, rotation * CameraAxisConversion);
+            if (!TryGetInitialCameraFrame(hint, hierarchyRoot, out var frame)) return;
+            var placedFrame = hierarchyRoot != null ? hierarchyRoot.localToWorldMatrix * frame : frame;
+            var rotation = Quaternion.LookRotation(placedFrame.GetColumn(2), placedFrame.GetColumn(1));
+            camera.transform.SetPositionAndRotation(placedFrame.GetColumn(3), rotation * CameraAxisConversion);
+            // Keep reflected/sheared core frames in the view matrix; a Transform quaternion alone loses them.
+            camera.worldToCameraMatrix = Matrix4x4.Scale(new Vector3(1f, 1f, -1f))
+                * (placedFrame * Matrix4x4.Rotate(CameraAxisConversion)).inverse;
 
             if (copyProjection && hint.Projection != null)
             {
@@ -215,52 +243,5 @@ namespace UnityGLTF.KhrCharacter
             return current.NodeIndex < 0 || candidate.NodeIndex < current.NodeIndex;
         }
 
-        // d_i is the sign of each scale component. With exactly one zero component, its sign is the product of the
-        // other two; with two or more zero components, each zero component uses +1.
-        internal static Vector3 ScaleSigns(Vector3 scale)
-        {
-            float sx = scale.x < 0f ? -1f : 1f;
-            float sy = scale.y < 0f ? -1f : 1f;
-            float sz = scale.z < 0f ? -1f : 1f;
-            int zeros = (scale.x == 0f ? 1 : 0) + (scale.y == 0f ? 1 : 0) + (scale.z == 0f ? 1 : 0);
-            if (zeros == 1)
-            {
-                if (scale.x == 0f) sx = sy * sz;
-                else if (scale.y == 0f) sy = sx * sz;
-                else sz = sx * sy;
-            }
-            return new Vector3(sx, sy, sz);
-        }
-
-        // Upper-left 3×3 with each column normalized. One zero column becomes the cross product of the other two in
-        // cyclic order; two or more zero columns give the identity.
-        internal static Matrix4x4 NormalizedColumns(Matrix4x4 matrix)
-        {
-            var columns = new Vector3[3];
-            int zeroColumns = 0;
-            int zeroIndex = -1;
-            for (int i = 0; i < 3; i++)
-            {
-                Vector3 column = matrix.GetColumn(i);
-                float length = column.magnitude;
-                if (length == 0f)
-                {
-                    zeroColumns++;
-                    zeroIndex = i;
-                    columns[i] = Vector3.zero;
-                }
-                else
-                {
-                    columns[i] = column / length;
-                }
-            }
-            if (zeroColumns >= 2) return Matrix4x4.identity;
-            if (zeroColumns == 1)
-                columns[zeroIndex] = Vector3.Cross(columns[(zeroIndex + 1) % 3], columns[(zeroIndex + 2) % 3]);
-
-            var result = Matrix4x4.identity;
-            for (int i = 0; i < 3; i++) result.SetColumn(i, new Vector4(columns[i].x, columns[i].y, columns[i].z, 0f));
-            return result;
-        }
     }
 }

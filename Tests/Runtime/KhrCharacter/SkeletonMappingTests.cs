@@ -229,7 +229,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void BakeSkeleton_NameMismatchWarnsButResolvesByIndex()
+        public void BakeSkeleton_IndependentAssociationNameIsPreserved()
         {
             var hips = NewGo("Hips_node");
             var nodeMap = new Dictionary<int, GameObject> { { 0, hips } };
@@ -241,7 +241,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             var result = KhrCharacterSkeletonBaker.BakeSkeleton(new GLTFRoot(), nodeMap, ext);
 
             Assert.AreSame(hips.transform, result.Bones["hips"]);
-            Assert.IsNotEmpty(result.Report.Warnings);
+            Assert.AreEqual("WrongName", result.MappingSets[0].AssociationNames["hips"]);
+            Assert.IsFalse(result.Report.Warnings.Exists(warning => warning.Contains("WrongName")));
         }
 
         [Test]
@@ -561,7 +562,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             var pose = fixture.Bake()[0];
 
             Assert.IsTrue(pose.IsValid, string.Join(" ", pose.Errors));
-            Assert.AreEqual(ReferencePoseLabels.TPose, pose.PoseType);
+            Assert.AreEqual(ReferencePoseLabels.TPose, pose.PoseType, "the explicit imported label remains exact");
             CollectionAssert.AreEqual(new[] { 0, 1, 2, 3 }, pose.ResolvedNodeIndices);
             CollectionAssert.AreEqual(new[] { -1, 0, 0, 1 }, pose.ParentIndices);
             Assert.AreSame(prop, pose.ResolvedNodes[2]);
@@ -800,7 +801,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void ReferencePoseSchema_OmittedPoseTypeResolvesToTPose()
+        public void ReferencePoseSchema_OmittedPoseTypeIsMissing()
         {
             var pose = new KHR_character_reference_pose_Factory().Deserialize(
                 new GLTFRoot(),
@@ -808,7 +809,7 @@ namespace UnityGLTF.KhrCharacter.Tests
                 as KHR_character_reference_pose;
 
             Assert.AreEqual("t_pose", ReferencePoseLabels.TPose);
-            Assert.AreEqual(ReferencePoseLabels.TPose, pose.PoseType);
+            Assert.IsNull(pose.PoseType, "an imported missing required label is not invented");
             Assert.AreEqual(ReferencePoseLabels.TPose, new KHR_character_reference_pose().PoseType);
         }
 

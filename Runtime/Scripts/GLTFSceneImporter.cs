@@ -712,6 +712,12 @@ namespace UnityGLTF
 				_assetCache.AnimationCache,
 				GenericObjectReferences.ToArray()
 			);
+
+            // Both scene and public node-tree imports complete through this ownership seam.
+            // Core visibility suppresses visual content without deactivating the imported hierarchy.
+            if (CreatedObject.GetComponentInChildren<CoreNodeVisibility>(true) != null
+                && CreatedObject.GetComponent<CoreVisibilityController>() == null)
+                CreatedObject.AddComponent<CoreVisibilityController>();
 		}
 
 		private GameObject NoSceneRoot;
@@ -1105,16 +1111,18 @@ namespace UnityGLTF
 			return null;
 		}
 		
-		private bool ShouldBeVisible(Node node, GameObject nodeObj)
-		{
-			if (node.Extensions != null && node.Extensions.TryGetValue(KHR_node_visibility_Factory.EXTENSION_NAME, out var ext))
-			{
-				return (ext as KHR_node_visibility).visible;
-			}
-			else
-				return true;
-		}
-		
+        private bool ShouldBeVisible(Node node, GameObject nodeObj)
+        {
+            if (node.Extensions != null && node.Extensions.TryGetValue(KHR_node_visibility_Factory.EXTENSION_NAME, out var ext))
+            {
+                var state = nodeObj.GetComponent<CoreNodeVisibility>();
+                if (state == null) state = nodeObj.AddComponent<CoreNodeVisibility>();
+                state.Bind(ext as KHR_node_visibility);
+            }
+            // Visibility filters visual contributions; it never deactivates cameras, interaction or animation.
+            return true;
+        }
+
 		protected virtual async Task ConstructNode(Node node, int nodeIndex, CancellationToken cancellationToken)
 		{
 			cancellationToken.ThrowIfCancellationRequested();
