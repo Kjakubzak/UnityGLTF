@@ -1342,6 +1342,25 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
+        public void DuplicateNativeExpressionNamesAbortBeforeExportingChannels()
+        {
+            var root = new GameObject("duplicateNames");
+            _created.Add(root);
+            root.AddComponent<ExpressionController>().Initialize(new CharacterExpressionSet
+            {
+                Expressions = new[]
+                {
+                    new ExpressionTrack { Name = "same" },
+                    new ExpressionTrack { Name = "other" },
+                    new ExpressionTrack { Name = "same" },
+                },
+            });
+            var error = Assert.Catch<System.InvalidOperationException>(() => ExportToGltfRoot(root));
+            StringAssert.Contains("Expression 2 has duplicate name 'same'", error.Message);
+            StringAssert.Contains("expression 0", error.Message);
+        }
+
+        [Test]
         public void DuplicateConcreteExpressionTargetsAbortExport()
         {
             var root = new GameObject("char");

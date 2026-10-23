@@ -323,7 +323,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void DuplicateLabels_RemainAddressableOnlyByArrayIndex()
+        public void InvalidDuplicateAuthoredNamesAreExcludedFromLookupUntilFixed()
         {
             var set = new CharacterExpressionSet
             {

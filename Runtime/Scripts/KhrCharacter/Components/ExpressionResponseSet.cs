@@ -51,7 +51,7 @@ namespace UnityGLTF.KhrCharacter
             ExtrasJson = extrasJson;
         }
 
-        /// <summary>The entry's descriptive <c>name</c>. Names are not unique; the array index identifies the entry.</summary>
+        /// <summary>The entry's nonempty <c>name</c>, unique within its asset; the array index identifies the entry.</summary>
         public string Name { get; }
         public int AnimationIndex { get; }
         public ExpressionResponseAnimation Animation { get; }

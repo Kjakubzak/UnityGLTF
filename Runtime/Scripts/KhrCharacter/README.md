@@ -47,9 +47,11 @@ ordinary content, because additional characters are out of scope for one asset.
   (`KHR_character_expression_mask`, `KHR_character_expression_texture`, the plural `_masks` / `_morphtargets` /
   `_joints`, `KHR_avatar_expression_*`, `KHR_character_bindpose`, `KHR_character_skeleton_bindpose`) import as
   unknown extensions: they are preserved where the containing object round-trips, and their channels are not animated.
-- **Expression entries use `name`.** The label is required and nonempty, but not unique; the array index identifies
+- **Expression entries use `name`.** Names are required, nonempty and unique within the asset by exact ordinal
+  comparison, without case folding, trimming or Unicode normalization. The array index identifies
   an entry. An entry is a glTF property, so unknown members (including a legacy `expression` label) are preserved
-  verbatim and never populate `name`. An entry without `name` is invalid expression data.
+  verbatim and never populate `name`. Missing, non-string, empty and repeated names are invalid expression data.
+  Import validates the complete name array before animation decoding; export validates names before emitting data.
 - **Mapping-set identifiers are opaque.** `KHR_character_expression_mapping` and `KHR_character_skeleton_mapping`
   accept any nonempty identifier and compare it by code point; nothing parses or dereferences it. Exporters should
   prefer a fixed vocabulary identifier, such as `vrm1_expressions` or `vrm1_humanoid`. Only an empty identifier is

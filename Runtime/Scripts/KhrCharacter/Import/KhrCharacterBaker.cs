@@ -28,6 +28,8 @@ namespace UnityGLTF.KhrCharacter
             if (root == null || importer == null || expressionExt?.Expressions == null)
                 return null;
 
+            KhrCharacterResponseBaker.ValidateNames(expressionExt.Expressions);
+
             remapper = remapper ?? new DefaultMaterialPropertiesRemapper();
             var tracks = new List<ExpressionTrack>();
             var rawSuppressions = new List<KHR_character_expression_suppression>(); // aligned with tracks, for the post-pass
