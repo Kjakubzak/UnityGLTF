@@ -102,6 +102,20 @@ namespace UnityGLTF.KhrCharacter
             }
         }
 
+        internal static void ValidateNames(IReadOnlyList<KHR_character_expression.ExpressionItem> expressions)
+        {
+            var firstNames = new Dictionary<string, int>(StringComparer.Ordinal);
+            for (int index = 0; index < expressions.Count; index++)
+            {
+                var name = expressions[index]?.Name;
+                if (string.IsNullOrEmpty(name))
+                    throw Invalid($"Expression entry {index} has no nonempty name.");
+                if (firstNames.TryGetValue(name, out int firstIndex))
+                    throw Invalid($"Expression entry {index} has duplicate name '{name}', first used by entry {firstIndex}.");
+                firstNames.Add(name, index);
+            }
+        }
+
         internal static ExpressionResponseSetEntry[] Bake(
             GLTFRoot root,
             Func<BufferView, byte[]> readBufferView,
@@ -124,6 +138,8 @@ namespace UnityGLTF.KhrCharacter
             if (extension?.Expressions == null || extension.Expressions.Count == 0)
                 return Array.Empty<ExpressionResponseSetEntry>();
 
+            ValidateNames(extension.Expressions);
+
             var context = new BakeContext
             {
                 Root = root,
@@ -139,8 +155,6 @@ namespace UnityGLTF.KhrCharacter
             for (int expressionIndex = 0; expressionIndex < entries.Length; expressionIndex++)
             {
                 var item = extension.Expressions[expressionIndex];
-                if (item == null || string.IsNullOrEmpty(item.Name))
-                    throw Invalid($"Expression entry {expressionIndex} has no nonempty name.");
                 if (root.Animations == null || item.Animation < 0 || item.Animation >= root.Animations.Count)
                     throw Invalid(
                         $"Expression entry {expressionIndex} references invalid animation {item.Animation}.");

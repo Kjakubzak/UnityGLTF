@@ -396,7 +396,7 @@ namespace UnityGLTF.KhrCharacter
             if (set?.Expressions == null || set.Expressions.Length == 0)
                 throw InvalidExpression("The expression set is empty.");
 
-            var preflight = new ExpressionExportPreflight();
+            var firstNames = new Dictionary<string, int>(StringComparer.Ordinal);
             for (int expressionIndex = 0; expressionIndex < set.Expressions.Length; expressionIndex++)
             {
                 var track = set.Expressions[expressionIndex];
@@ -404,7 +404,15 @@ namespace UnityGLTF.KhrCharacter
                     throw InvalidExpression($"Expression {expressionIndex} is null.");
                 if (string.IsNullOrEmpty(track.Name))
                     throw InvalidExpression($"Expression {expressionIndex} has no nonempty label.");
+                if (firstNames.TryGetValue(track.Name, out int firstIndex))
+                    throw InvalidExpression($"Expression {expressionIndex} has duplicate name '{track.Name}', first used by expression {firstIndex}.");
+                firstNames.Add(track.Name, expressionIndex);
+            }
 
+            var preflight = new ExpressionExportPreflight();
+            for (int expressionIndex = 0; expressionIndex < set.Expressions.Length; expressionIndex++)
+            {
+                var track = set.Expressions[expressionIndex];
                 var concreteTargets = new HashSet<string>();
                 var textureTargets = new Dictionary<string, TextureTargetSignature>();
                 var plan = new TrackExportPlan();

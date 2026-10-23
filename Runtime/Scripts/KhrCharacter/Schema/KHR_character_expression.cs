@@ -23,7 +23,7 @@ namespace GLTF.Schema
 
         public class ExpressionItem
         {
-            /// <summary>Required nonempty descriptive label. Labels are not unique; array indices identify entries.</summary>
+            /// <summary>Required nonempty name, unique within the expression array by ordinal comparison; array indices identify entries.</summary>
             public string Name;
             public int Animation;                                 // index into glTF animations (required)
             public KHR_character_expression_morphtarget Morphtarget;
@@ -180,7 +180,7 @@ namespace GLTF.Schema
                 if (!(node is JObject itemObj)) continue;
                 var item = new KHR_character_expression.ExpressionItem
                 {
-                    Name = itemObj["name"]?.Value<string>(),
+                    Name = itemObj["name"]?.Type == JTokenType.String ? itemObj["name"].Value<string>() : null,
                     Animation = itemObj["animation"]?.Value<int>() ?? -1,
                     Extras = itemObj["extras"]?.DeepClone(),
                     AdditionalProperties = new JObject(),

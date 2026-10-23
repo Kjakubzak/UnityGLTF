@@ -193,7 +193,7 @@ namespace UnityGLTF.KhrCharacter
 
         public void RebuildIndex()
         {
-            NameToIndex = new Dictionary<string, int>();
+            NameToIndex = new Dictionary<string, int>(StringComparer.Ordinal);
             if (Expressions == null) return;
             var duplicateNames = new HashSet<string>();
             for (int i = 0; i < Expressions.Length; i++)
@@ -205,7 +205,7 @@ namespace UnityGLTF.KhrCharacter
                 {
                     NameToIndex.Remove(track.Name);
                     duplicateNames.Add(track.Name);
-                    Debug.LogWarning($"[KHR_character] Duplicate expression label '{track.Name}'; use its authoritative array index.");
+                    Debug.LogWarning($"[KHR_character] Duplicate native expression name '{track.Name}'; export requires unique names.");
                     continue;
                 }
                 NameToIndex.Add(track.Name, i);

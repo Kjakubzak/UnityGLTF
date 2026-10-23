@@ -55,6 +55,57 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.That(response.Records[0].Value[2], Is.EqualTo(3f).Within(1e-6f));
         }
 
+        [TestCase("0")]
+        [TestCase("true")]
+        [TestCase("null")]
+        [TestCase("[]")]
+        [TestCase("{}")]
+        public void NonStringWireNamesAreNotCoercedIntoValidNames(string rawName)
+        {
+            var fixture = new Fixture();
+            var extension = new KHR_character_expression_Factory().Deserialize(fixture.Root,
+                new Newtonsoft.Json.Linq.JProperty(KHR_character_expression.EXTENSION_NAME,
+                    new Newtonsoft.Json.Linq.JObject { { "expressions", new Newtonsoft.Json.Linq.JArray(
+                        new Newtonsoft.Json.Linq.JObject
+                        {
+                            { "name", Newtonsoft.Json.Linq.JToken.Parse(rawName) },
+                            { "animation", 0 },
+                        }) } })) as KHR_character_expression;
+            Assert.Throws<ExpressionResponseEvaluationException>(() => fixture.Bake(extension));
+        }
+
+        [TestCase(0)]
+        [TestCase(1)]
+        public void DuplicateNamesFailBeforeAnimationDecoding(int secondAnimation)
+        {
+            var fixture = new Fixture();
+            var error = Assert.Throws<ExpressionResponseEvaluationException>(() =>
+                fixture.Bake(Entry("same", 0), Entry("other", 0), Entry("same", secondAnimation)));
+            StringAssert.Contains("entry 2 has duplicate name 'same'", error.Message);
+            StringAssert.Contains("entry 0", error.Message);
+        }
+
+        [TestCase("smile", "Smile")]
+        [TestCase("é", "e\u0301")]
+        [TestCase("smile", " smile")]
+        [TestCase("__proto__", "toString")]
+        public void DistinctExactNamesCanShareAnAnimation(string first, string second)
+        {
+            var fixture = new Fixture();
+            int input = fixture.AddFloatAccessor(GLTFAccessorAttributeType.SCALAR, 2,
+                new[] { 0f, 1f }, 0d, 1d);
+            int output = fixture.AddFloatAccessor(GLTFAccessorAttributeType.VEC3, 2,
+                new[] { 0f, 0f, 0f, 1f, 1f, 1f });
+            fixture.Root.Nodes.Add(new Node());
+            fixture.AddAnimation(new[] { new SamplerSpec(input, output) },
+                new[] { CoreChannel(0, fixture.Root, 0, "translation") });
+            var entries = fixture.Bake(Entry(first, 0, joint: new[] { 0 }),
+                Entry(second, 0, joint: new[] { 0 }));
+            Assert.That(entries, Has.Length.EqualTo(2));
+            Assert.That(entries[0].Name, Is.EqualTo(first));
+            Assert.That(entries[1].Name, Is.EqualTo(second));
+        }
+
         [Test]
         public void EntryWithOnlyLegacyExpressionLabelIsRejectedForMissingName()
         {
