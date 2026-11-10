@@ -26,8 +26,9 @@ namespace UnityGLTF.KhrCharacter
         /// <summary>The concrete property type.</summary>
         public ExpressionPropertyKind Kind { get; }
 
-        /// <summary>True for a host-composed absolute value; retained name for API compatibility.
-        /// Shared targets are valid and use the last active expression-array index.</summary>
+        /// <summary>True for a Boolean or integer value that this host selects from the highest active
+        /// expression-array index; retained name for API compatibility. False for additive components, node and
+        /// texture scale (additive) and rotations (approximately additive).</summary>
         public bool IsSingleWriter { get; }
 
         public bool IsHostComposed => IsSingleWriter;
@@ -83,9 +84,13 @@ namespace UnityGLTF.KhrCharacter
 
     /// <summary>
     /// The composition stage of KHR_character_expression as a pure function. It combines the responses of every
-    /// entry for one driver snapshot with mandatory additive components independent of order; they use
-    /// <c>y = b + sum(s - n)</c> with exact binary64 accumulation, morph weights become one complete vector per node,
-    /// and other properties select the absolute sample of the highest active expression-array index.
+    /// entry for one driver snapshot independent of order. Additive components use <c>y = b + sum(s - n)</c> with
+    /// exact binary64 accumulation, and morph weights become one complete vector per node. Node <c>scale</c> and
+    /// <c>KHR_texture_transform</c> <c>scale</c> use the same additive formula, as recommended by
+    /// KHR_character_expression_joint and KHR_character_expression_texture_transform. Rotations (quaternions) compose
+    /// approximately additively: <c>y = normalize(b * exp(sum(log(n^-1 * s))))</c>, see
+    /// <see cref="ComposeRotation"/>. Boolean and integer properties select the absolute sample of the highest
+    /// active expression-array index.
     /// </summary>
     public static class ExpressionComposer
     {
@@ -108,23 +113,22 @@ namespace UnityGLTF.KhrCharacter
         }
 
         /// <summary>
-        /// Legacy classifier name for properties using host composition, not a structural single-writer rule:
-        /// quaternions, node <c>rotation</c> and <c>scale</c>, and <c>KHR_texture_transform</c> <c>scale</c>.
+        /// Legacy classifier name for the properties this host composes by selecting the absolute sample of the
+        /// highest active expression-array index: Boolean and integer values. It is not a structural single-writer
+        /// rule. Node <c>scale</c>, <c>KHR_texture_transform</c> <c>scale</c> and rotations are no longer selected
+        /// this way; they compose additively and approximately additively.
         /// </summary>
         public static bool IsStandardSingleWriter(ExpressionResponseTarget target)
         {
             if (target == null) return false;
-            switch (target.Kind)
-            {
-                case ExpressionPropertyKind.NodeRotation:
-                case ExpressionPropertyKind.NodeScale:
-                case ExpressionPropertyKind.TextureScale:
-                    return true;
-            }
-            return target.ValueKind == ExpressionResponseValueKind.Quaternion
-                || target.ValueKind == ExpressionResponseValueKind.Boolean
+            return target.ValueKind == ExpressionResponseValueKind.Boolean
                 || target.ValueKind == ExpressionResponseValueKind.Integer;
         }
+
+        /// <summary>True for a rotation, which this host composes with <see cref="ComposeRotation"/>.</summary>
+        public static bool IsRotation(ExpressionResponseTarget target)
+            => target != null && (target.ValueKind == ExpressionResponseValueKind.Quaternion
+                                  || target.Kind == ExpressionPropertyKind.NodeRotation);
 
         /// <summary>
         /// Compatibility classifier for host-composed property types. Historical declarations cannot override
@@ -137,7 +141,8 @@ namespace UnityGLTF.KhrCharacter
             return IsStandardSingleWriter;
         }
 
-        /// <summary>True for properties using this host's absolute-sample override policy, not a validity gate.</summary>
+        /// <summary>True for properties using this host's highest-active-index selection (Boolean and integer values),
+        /// not a validity gate.</summary>
         public static bool IsHostComposed(ExpressionResponseTarget target) => IsStandardSingleWriter(target);
 
         /// <summary>Composes the responses of all entries for one driver snapshot.</summary>
@@ -219,6 +224,8 @@ namespace UnityGLTF.KhrCharacter
 
             if (first.ArrayLength > 0)
                 return ComposeArray(property, first, singleWriter, contributions, out error);
+            if (IsRotation(first))
+                return ComposeRotation(property, first, contributions, out error);
             if (singleWriter)
                 return ComposeSingleWriter(property, first, contributions, out error);
             return ComposeAdditive(property, first, contributions, out error);
@@ -239,7 +246,6 @@ namespace UnityGLTF.KhrCharacter
             }
             var value = new double[sample.Count];
             var contributed = new bool[sample.Count];
-            double normSquared = 0d;
             for (int component = 0; component < value.Length; component++)
             {
                 value[component] = sample[component];
@@ -248,21 +254,128 @@ namespace UnityGLTF.KhrCharacter
                     error = "the host-selected sample violates its finite or discrete value requirements";
                     return null;
                 }
-                normSquared += value[component] * value[component];
                 contributed[component] = true;
-            }
-            if (target.ValueKind == ExpressionResponseValueKind.Quaternion)
-            {
-                if (value.Length != 4 || normSquared <= 0d || double.IsInfinity(normSquared))
-                {
-                    error = "the host-selected quaternion cannot be normalized";
-                    return null;
-                }
-                double norm = Math.Sqrt(normSquared);
-                for (int component = 0; component < value.Length; component++) value[component] /= norm;
             }
             error = null;
             return new ExpressionAggregateRecord(property, target.Kind, true, value, contributed);
+        }
+
+        /// <summary>
+        /// Approximately additive rotation composition, this host's choice for the KHR_character_expression_joint
+        /// recommendation (the specification prescribes no algorithm). Each record contributes its change from its
+        /// own time-zero sample as a rotation vector, <c>r = log(n^-1 * s)</c>, taken on the shorter arc (the
+        /// relative quaternion is flipped to <c>w &gt;= 0</c>, so each change is at most half a turn). The rotation
+        /// vectors are summed per component exactly in binary64, and the aggregate is
+        /// <c>y = normalize(b * exp(sum(r)))</c>, with <c>b</c> the authored initial rotation. Quaternions are glTF
+        /// <c>[x, y, z, w]</c> and every product is a local (right) composition. Properties:
+        /// the result does not depend on record order; changes about one shared axis add exactly (10 + 10 degrees
+        /// is 20 degrees); a single record whose neutral sample equals <c>b</c> reproduces its sample; small changes
+        /// about different axes combine approximately additively (10 degrees right and 10 degrees up give about 10
+        /// degrees right and 10 degrees up, as one 14.1-degree rotation about the diagonal axis). The result sign is
+        /// whatever this product gives; it is a unit quaternion either way.
+        /// </summary>
+        private static ExpressionAggregateRecord ComposeRotation(
+            string property,
+            ExpressionResponseTarget target,
+            List<Contribution> contributions,
+            out string error)
+        {
+            var authored = target.AuthoredInitial;
+            if (target.ComponentCount != 4 || authored == null || authored.Count != 4)
+            {
+                error = "it has no authored initial rotation to compose onto";
+                return null;
+            }
+            if (!TryNormalize(authored[0], authored[1], authored[2], authored[3], out var b))
+            {
+                error = "the authored initial rotation cannot be normalized";
+                return null;
+            }
+
+            var x = new double[contributions.Count];
+            var y = new double[contributions.Count];
+            var z = new double[contributions.Count];
+            for (int index = 0; index < contributions.Count; index++)
+            {
+                var record = contributions[index].Record;
+                if (record.Value.Count != 4 || record.NeutralValue.Count != 4)
+                {
+                    error = $"a record of expression entry {contributions[index].ExpressionIndex} has the wrong size";
+                    return null;
+                }
+                if (!TryNormalize(record.Value[0], record.Value[1], record.Value[2], record.Value[3], out var s) ||
+                    !TryNormalize(record.NeutralValue[0], record.NeutralValue[1], record.NeutralValue[2],
+                        record.NeutralValue[3], out var n))
+                {
+                    error = $"a rotation of expression entry {contributions[index].ExpressionIndex} cannot be normalized";
+                    return null;
+                }
+                var change = Multiply(Conjugate(n), s);
+                var vector = Log(change);
+                x[index] = vector[0];
+                y[index] = vector[1];
+                z[index] = vector[2];
+            }
+
+            if (!ExactBinary64Sum.TrySum(x, x.Length, out double sumX) ||
+                !ExactBinary64Sum.TrySum(y, y.Length, out double sumY) ||
+                !ExactBinary64Sum.TrySum(z, z.Length, out double sumZ))
+            {
+                error = "the summed rotation change is not finite";
+                return null;
+            }
+            var composed = Multiply(b, Exp(sumX, sumY, sumZ));
+            if (!TryNormalize(composed[0], composed[1], composed[2], composed[3], out var value))
+            {
+                error = "the composed rotation cannot be normalized";
+                return null;
+            }
+            error = null;
+            return new ExpressionAggregateRecord(
+                property, target.Kind, false, value, new[] { true, true, true, true });
+        }
+
+        private static bool TryNormalize(double x, double y, double z, double w, out double[] q)
+        {
+            q = null;
+            double normSquared = x * x + y * y + z * z + w * w;
+            if (!(normSquared > 0d) || double.IsInfinity(normSquared)) return false;
+            double norm = Math.Sqrt(normSquared);
+            q = new[] { x / norm, y / norm, z / norm, w / norm };
+            return true;
+        }
+
+        private static double[] Conjugate(double[] q) => new[] { -q[0], -q[1], -q[2], q[3] };
+
+        // Hamilton product a * b of [x, y, z, w] quaternions.
+        private static double[] Multiply(double[] a, double[] b) => new[]
+        {
+            a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+            a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+            a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+            a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+        };
+
+        // Rotation vector (axis times full angle) of a unit quaternion, on the shorter arc.
+        private static double[] Log(double[] q)
+        {
+            double sign = q[3] < 0d ? -1d : 1d;
+            double vx = sign * q[0], vy = sign * q[1], vz = sign * q[2], w = sign * q[3];
+            double sine = Math.Sqrt(vx * vx + vy * vy + vz * vz);
+            if (sine == 0d) return new[] { 0d, 0d, 0d };
+            double angle = 2d * Math.Atan2(sine, w);
+            double scale = angle / sine;
+            return new[] { vx * scale, vy * scale, vz * scale };
+        }
+
+        // Unit quaternion of a rotation vector (axis times full angle).
+        private static double[] Exp(double x, double y, double z)
+        {
+            double angle = Math.Sqrt(x * x + y * y + z * z);
+            if (angle == 0d) return new[] { 0d, 0d, 0d, 1d };
+            double half = 0.5d * angle;
+            double scale = Math.Sin(half) / angle;
+            return new[] { x * scale, y * scale, z * scale, Math.Cos(half) };
         }
 
         private static ExpressionAggregateRecord ComposeAdditive(

@@ -186,7 +186,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void SharedQuaternionOverrideRetainsEveryAdditiveTranslationAndNeutral()
+        public void SharedQuaternionComposesApproximatelyAdditivelyAndRetainsEveryAdditiveTranslation()
         {
             var move = new ExpressionResponseTarget(ExpressionPropertyIdentity.ForProperty("/nodes/0/translation"),
                 3, ExpressionResponseValueKind.Components, true, ExpressionPropertyKind.NodeTranslation, new[] { 0d, 10d, 0d }, 0);
@@ -205,10 +205,16 @@ namespace UnityGLTF.KhrCharacter.Tests
             });
             Assert.IsTrue(composition.TryGetRecord("/nodes/0/translation", out var translation));
             Assert.That(translation.Value, Is.EqualTo(new[] { 0d, 14d, 0d }));
-            Assert.IsTrue(composition.TryGetRecord("/nodes/0/rotation", out var selected));
-            Assert.That(selected.Value[0], Is.EqualTo(0));
+            Assert.IsTrue(composition.TryGetRecord("/nodes/0/rotation", out var composed));
+            // 90 degrees about X plus 90 degrees about Y: neither sample wins; the rotation vectors add to one
+            // rotation of 90 * sqrt(2) degrees about the diagonal (1, 1, 0) axis.
+            double angle = Math.PI / Math.Sqrt(2d);
+            Assert.That(composed.Value[0], Is.EqualTo(Math.Sin(angle / 2d) / Math.Sqrt(2d)).Within(1e-6));
+            Assert.That(composed.Value[1], Is.EqualTo(composed.Value[0]).Within(1e-6));
+            Assert.That(composed.Value[2], Is.EqualTo(0d).Within(1e-6));
+            Assert.That(composed.Value[3], Is.EqualTo(Math.Cos(angle / 2d)).Within(1e-6));
             double norm = 0;
-            foreach (var value in selected.Value) norm += value * value;
+            foreach (var value in composed.Value) norm += value * value;
             Assert.That(norm, Is.EqualTo(1d).Within(1e-12));
             Assert.That(composition.Responses[0].Records.Count, Is.EqualTo(2));
             Assert.That(composition.Responses[1].Records.Count, Is.EqualTo(2));

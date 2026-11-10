@@ -187,17 +187,10 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void ScaleAndRotationPassTheAbsoluteSampleThrough()
+        public void ScaleIsAdditiveAndOneRotationKeepsItsSample()
         {
             var scale = Target("/nodes/0/scale", ExpressionPropertyKind.NodeScale, new[] { 1d, 1d, 1d });
-            var rotation = new ExpressionResponseTarget(
-                ExpressionPropertyIdentity.ForWholeArray("/nodes/0/rotation"),
-                4,
-                ExpressionResponseValueKind.Quaternion,
-                true,
-                ExpressionPropertyKind.NodeRotation,
-                new[] { 0d, 0d, 0d, 1d },
-                0);
+            var rotation = RotationTarget(new[] { 0d, 0d, 0d, 1d });
             float half = (float)Math.Sqrt(0.5d);
 
             var composition = ExpressionComposer.Compose(new[]
@@ -208,10 +201,89 @@ namespace UnityGLTF.KhrCharacter.Tests
             });
 
             Assert.IsTrue(composition.TryGetRecord("/nodes/0/scale", out var scaleRecord));
-            Assert.IsTrue(scaleRecord.IsSingleWriter);
-            Assert.That(scaleRecord.Value, Is.EqualTo(new[] { 3d, 4d, 5d }), "not b + (s - n)");
+            Assert.IsFalse(scaleRecord.IsSingleWriter);
+            Assert.That(scaleRecord.Value, Is.EqualTo(new[] { 2d, 3d, 4d }), "b + (s - n)");
             Assert.IsTrue(composition.TryGetRecord("/nodes/0/rotation", out var rotationRecord));
+            Assert.IsFalse(rotationRecord.IsSingleWriter);
             Assert.That(rotationRecord.Value, Is.EqualTo(new double[] { 0f, half, 0f, half }).Within(1e-6));
+        }
+
+        [Test]
+        public void OneRotationOnARotatedBaseReproducesItsSample()
+        {
+            var b = AxisAngle(0d, 0d, 1d, 30d);
+            var s = Multiply(b, AxisAngle(0d, 1d, 0d, 25d));
+            var target = RotationTarget(b);
+
+            var composition = ExpressionComposer.Compose(new[] { Response(Record(target, ToFloat(s), ToFloat(b))) });
+
+            Assert.IsTrue(composition.TryGetRecord("/nodes/0/rotation", out var record));
+            Assert.That(AngleBetween(record.Value, s), Is.LessThan(1e-4d), "b * (n^-1 * s) with n = b is s");
+        }
+
+        [Test]
+        public void TenDegreesRightAndTenDegreesUpGiveAboutBoth()
+        {
+            // Rotation about +Y turns the glTF +Z axis toward +X ("right"); rotation about +X turns it toward -Y.
+            var target = RotationTarget(new[] { 0d, 0d, 0d, 1d });
+            var identity = new[] { 0f, 0f, 0f, 1f };
+
+            var composition = ExpressionComposer.Compose(new[]
+            {
+                Response(Record(target, ToFloat(AxisAngle(0d, 1d, 0d, 10d)), identity)),
+                Response(Record(target, ToFloat(AxisAngle(1d, 0d, 0d, 10d)), identity)),
+            });
+
+            Assert.IsTrue(composition.TryGetRecord("/nodes/0/rotation", out var record));
+            var forward = Rotate(record.Value, 0d, 0d, 1d);
+            double right = Math.Atan2(forward[0], forward[2]) * 180d / Math.PI;
+            double down = Math.Asin(-forward[1]) * 180d / Math.PI;
+            Assert.That(right, Is.EqualTo(10d).Within(0.5d), "about 10 degrees right");
+            Assert.That(down, Is.EqualTo(10d).Within(0.5d), "about 10 degrees about X");
+            Assert.That(Norm(record.Value), Is.EqualTo(1d).Within(1e-12d));
+        }
+
+        [Test]
+        public void TenDegreesAndTenDegreesAboutOneAxisGiveTwenty()
+        {
+            var b = AxisAngle(1d, 0d, 0d, 5d);
+            var target = RotationTarget(b);
+            var s = Multiply(b, AxisAngle(0d, 1d, 0d, 10d));
+
+            var composition = ExpressionComposer.Compose(new[]
+            {
+                Response(Record(target, ToFloat(s), ToFloat(b))),
+                Response(Record(target, ToFloat(s), ToFloat(b))),
+            });
+
+            Assert.IsTrue(composition.TryGetRecord("/nodes/0/rotation", out var record));
+            var expected = Multiply(b, AxisAngle(0d, 1d, 0d, 20d));
+            Assert.That(AngleBetween(record.Value, expected) * 180d / Math.PI, Is.LessThan(1e-3d),
+                "b followed by 20 degrees about the shared axis");
+        }
+
+        [Test]
+        public void RotationResultBitsDoNotDependOnRecordOrder()
+        {
+            var target = RotationTarget(new[] { 0d, 0d, 0d, 1d });
+            var identity = new[] { 0f, 0f, 0f, 1f };
+            var responses = new[]
+            {
+                Response(Record(target, ToFloat(AxisAngle(0d, 1d, 0d, 12d)), identity)),
+                Response(Record(target, ToFloat(AxisAngle(1d, 0d, 0d, -7d)), identity)),
+                Response(Record(target, ToFloat(AxisAngle(0.3d, 0.4d, 0.866d, 40d)), identity)),
+            };
+
+            long[] expected = null;
+            foreach (var order in new[] { new[] { 0, 1, 2 }, new[] { 2, 1, 0 }, new[] { 1, 2, 0 } })
+            {
+                var composition = ExpressionComposer.Compose(Array.ConvertAll(order, index => responses[index]));
+                var bits = new List<long>();
+                foreach (double component in composition.Records[0].Value)
+                    bits.Add(BitConverter.DoubleToInt64Bits(component));
+                if (expected == null) expected = bits.ToArray();
+                else Assert.That(bits, Is.EqualTo(expected), string.Join(",", order));
+            }
         }
 
         [Test]
@@ -254,7 +326,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void SharedScaleUsesHighestActiveExpressionIndex()
+        public void SharedScaleAddsEachChangeFromItsNeutralSample()
         {
             var scale = Target("/nodes/0/scale", ExpressionPropertyKind.NodeScale, new[] { 1d, 1d, 1d });
 
@@ -264,9 +336,28 @@ namespace UnityGLTF.KhrCharacter.Tests
                 Response(Record(scale, new[] { 3f, 3f, 3f }, new[] { 1f, 1f, 1f })),
             });
 
-            Assert.IsTrue(composition.TryGetRecord("/nodes/0/scale", out var selected));
-            Assert.That(selected.Value, Is.EqualTo(new[] { 3d, 3d, 3d }));
+            Assert.IsTrue(composition.TryGetRecord("/nodes/0/scale", out var composed));
+            Assert.That(composed.Value, Is.EqualTo(new[] { 4d, 4d, 4d }),
+                "1 + (2 - 1) + (3 - 1); the highest index gave 3 and multiplication 6");
             Assert.That(composition.Failures, Is.Empty);
+        }
+
+        [Test]
+        public void SharedTextureScaleAddsEachChangeFromItsNeutralSample()
+        {
+            const string property =
+                "/materials/0/pbrMetallicRoughness/baseColorTexture/extensions/KHR_texture_transform/scale";
+            var scale = Target(property, ExpressionPropertyKind.TextureScale, new[] { 1d, 0.5d });
+
+            var composition = ExpressionComposer.Compose(new[]
+            {
+                Response(Record(scale, new[] { 2f, 0.5f }, new[] { 1f, 0.5f })),
+                Response(Record(scale, new[] { 1.5f, 1.5f }, new[] { 1f, 0.5f })),
+            });
+
+            Assert.IsTrue(composition.TryGetRecord(property, out var composed));
+            Assert.IsFalse(composed.IsSingleWriter);
+            Assert.That(composed.Value, Is.EqualTo(new[] { 2.5d, 1.5d }));
         }
 
         [Test]
@@ -325,6 +416,53 @@ namespace UnityGLTF.KhrCharacter.Tests
                 authored,
                 0);
         }
+
+        private static ExpressionResponseTarget RotationTarget(double[] authored)
+        {
+            return new ExpressionResponseTarget(
+                ExpressionPropertyIdentity.ForWholeArray("/nodes/0/rotation"),
+                4,
+                ExpressionResponseValueKind.Quaternion,
+                true,
+                ExpressionPropertyKind.NodeRotation,
+                authored,
+                0);
+        }
+
+        // [x, y, z, w] quaternion of a rotation by degrees about a unit axis.
+        private static double[] AxisAngle(double x, double y, double z, double degrees)
+        {
+            double length = Math.Sqrt(x * x + y * y + z * z);
+            double half = degrees * Math.PI / 360d;
+            double sine = Math.Sin(half) / length;
+            return new[] { x * sine, y * sine, z * sine, Math.Cos(half) };
+        }
+
+        private static double[] Multiply(IReadOnlyList<double> a, IReadOnlyList<double> b) => new[]
+        {
+            a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+            a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+            a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+            a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+        };
+
+        private static double[] Rotate(IReadOnlyList<double> q, double x, double y, double z)
+        {
+            var rotated = Multiply(Multiply(q, new[] { x, y, z, 0d }), new[] { -q[0], -q[1], -q[2], q[3] });
+            return new[] { rotated[0], rotated[1], rotated[2] };
+        }
+
+        // Angle in radians of the rotation between two unit quaternions, independent of their signs.
+        private static double AngleBetween(IReadOnlyList<double> a, IReadOnlyList<double> b)
+        {
+            double dot = Math.Abs(a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]);
+            return 2d * Math.Acos(Math.Min(1d, dot));
+        }
+
+        private static double Norm(IReadOnlyList<double> q)
+            => Math.Sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+
+        private static float[] ToFloat(double[] values) => Array.ConvertAll(values, value => (float)value);
 
         private static ExpressionResponseTarget ArrayTarget(string property, double[] authored)
         {

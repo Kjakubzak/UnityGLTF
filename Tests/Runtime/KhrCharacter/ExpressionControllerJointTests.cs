@@ -93,8 +93,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             ec.SetWeight("turn", 1f);
             yield return null;
 
-            // Rotation is single-writer: the record is the absolute sample, so the live 45 degree pose is replaced,
-            // not stacked.
+            // One rotation record on a base equal to its neutral sample composes to its absolute sample, so the live
+            // 45 degree pose is replaced, not stacked.
             Assert.Less(Quaternion.Angle(joint.localRotation, Quaternion.Euler(0f, 90f, 0f)), 0.1f);
             Assert.Greater(Quaternion.Angle(joint.localRotation, Quaternion.Euler(0f, 0f, 45f)), 1f);
         }
@@ -154,7 +154,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [UnityTest]
-        public IEnumerator SharedRotationUsesLastActiveTrackWithoutDiscardingChannels()
+        public IEnumerator SharedRotationComposesApproximatelyAdditivelyWithoutDiscardingChannels()
         {
             var root = MakeRoot(out var joint);
             var set = new CharacterExpressionSet
@@ -185,12 +185,17 @@ namespace UnityGLTF.KhrCharacter.Tests
             // A repeated warning or a per-frame composition error would be unexpected.
             LogAssert.NoUnexpectedReceived();
             Assert.That(ec.Composition.Failures, Is.Empty, "shared rotation records are valid");
-            Assert.Less(Quaternion.Angle(joint.localRotation, Quaternion.Euler(-20f, 0f, 0f)), 0.1f,
-                "the highest active index supplies the absolute rotation");
+            // The two changes (30 degrees about Y, 20 degrees about X) add as rotation vectors: one rotation of
+            // sqrt(30^2 + 20^2) degrees that is neither track's sample alone.
+            Assert.AreEqual(System.Math.Sqrt(30d * 30d + 20d * 20d),
+                Quaternion.Angle(Quaternion.identity, joint.localRotation), 0.05d);
+            Assert.Greater(Quaternion.Angle(joint.localRotation, Quaternion.Euler(-20f, 0f, 0f)), 5f,
+                "the highest active index no longer supplies the rotation");
+            Assert.Greater(Quaternion.Angle(joint.localRotation, Quaternion.Euler(0f, 30f, 0f)), 5f);
         }
 
         [UnityTest]
-        public IEnumerator Scale_IsTheAbsoluteSample()
+        public IEnumerator Scale_IsTheAuthoredValuePlusTheChange()
         {
             var root = MakeRoot(out var joint);
             var grow = new JointDriver
@@ -208,7 +213,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             joint.localScale = new Vector3(5f, 5f, 5f);
             ec.SetWeight("grow", 1f);
             yield return null;
-            Assert.That(joint.localScale, Is.EqualTo(new Vector3(3f, 3f, 3f)), "the sample replaces the live scale");
+            Assert.That(joint.localScale, Is.EqualTo(new Vector3(3f, 3f, 3f)), "b + (s - n) replaces the live scale");
 
             ec.SetWeight("grow", 0f);
             yield return null;
