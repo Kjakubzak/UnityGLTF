@@ -75,6 +75,8 @@ namespace GLTF.Schema
                     if (!string.IsNullOrEmpty(role) && !Contains(array, role)) array.Add(role);
             if (array.Count > 0) obj["roles"] = array;
             else obj.Remove("roles");
+            // The legacy single "role" is not part of the specification and is never written.
+            obj.Remove("role");
             // label is optional but minLength:1; never emit "" (Unity coerces a null serialized string to "").
             if (!string.IsNullOrEmpty(label)) obj["label"] = label;
             else obj.Remove("label");
@@ -86,8 +88,8 @@ namespace GLTF.Schema
         /// <summary>
         /// Reads <c>roles</c> (required: a nonempty array of distinct nonempty strings) and <c>label</c>. Invalid
         /// items and duplicates are dropped with a warning; a hint left with no valid role reads as null roles. A
-        /// legacy single <c>role</c> string is not part of the specification: it is kept as an unknown member, and
-        /// without <c>roles</c> the hint is ignored with a warning.
+        /// legacy single <c>role</c> string is not part of the specification: it is dropped (never preserved or
+        /// re-exported) with a warning, and without <c>roles</c> the hint is ignored.
         /// </summary>
         internal static void Parse(
             string extensionName,
@@ -131,6 +133,10 @@ namespace GLTF.Schema
                 if (list.Count > 0) roles = list.ToArray();
                 else UnityEngine.Debug.LogWarning(
                     $"{extensionName}: 'roles' has no valid role; the hint imposes no restriction.");
+                if (obj["role"] != null)
+                    UnityEngine.Debug.LogWarning(
+                        $"{extensionName}: ignoring the legacy 'role' property, which is not part of the " +
+                        "specification; 'roles' is used and 'role' is not re-exported.");
             }
             else if (obj["role"] != null)
             {
@@ -154,7 +160,7 @@ namespace GLTF.Schema
             extras = obj["extras"]?.DeepClone();
             var additional = new JObject();
             foreach (var property in obj.Properties())
-                if (property.Name != "roles" && property.Name != "label"
+                if (property.Name != "roles" && property.Name != "role" && property.Name != "label"
                     && property.Name != "extensions" && property.Name != "extras")
                     additional.Add(property.Name, property.Value.DeepClone());
             additionalProperties = additional.HasValues ? additional : null;

@@ -151,8 +151,52 @@ namespace UnityGLTF.VisibilityHints.Tests
 
             Assert.IsNotNull(ext);
             Assert.IsNull(ext.Roles, "the legacy single role is not migrated; the hint imposes no restriction");
-            Assert.AreEqual("third_person", ext.AdditionalProperties["role"].Value<string>(),
-                "the legacy member is preserved as an unknown property");
+            Assert.IsNull(ext.AdditionalProperties, "the legacy member is dropped, not preserved as an unknown property");
+            Assert.IsNull(((JObject)ext.Serialize().Value)["role"], "the legacy single role is never re-exported");
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void LegacyRoleNextToRoles_IsIgnoredAndNeverReexported(bool primitive)
+        {
+            LogAssert.Expect(LogType.Warning, new Regex("legacy 'role'"));
+            var wire = new JObject { { "roles", new JArray("first_person") }, { "role", "third_person" }, { "ACME_note", 1 } };
+            string[] roles;
+            JObject additional;
+            JObject reexported;
+            if (primitive)
+            {
+                var ext = (KHR_mesh_primitive_visibility_hint)new KHR_mesh_primitive_visibility_hint_Factory().Deserialize(null,
+                    new JProperty(KHR_mesh_primitive_visibility_hint.EXTENSION_NAME, wire));
+                roles = ext.Roles; additional = ext.AdditionalProperties; reexported = (JObject)ext.Serialize().Value;
+            }
+            else
+            {
+                var ext = (KHR_node_visibility_hint)new KHR_node_visibility_hint_Factory().Deserialize(null,
+                    new JProperty(KHR_node_visibility_hint.EXTENSION_NAME, wire));
+                roles = ext.Roles; additional = ext.AdditionalProperties; reexported = (JObject)ext.Serialize().Value;
+            }
+            CollectionAssert.AreEqual(new[] { "first_person" }, roles, "'roles' is authoritative");
+            Assert.IsNull(additional["role"], "the legacy member is not kept as an unknown property");
+            Assert.AreEqual(1, additional["ACME_note"].Value<int>(), "other unknown members are still preserved");
+            Assert.IsNull(reexported["role"], "the legacy single role is never re-exported");
+            Assert.AreEqual(1, reexported["ACME_note"].Value<int>());
+        }
+
+        [Test]
+        public void Serialize_NeverWritesLegacyRole_EvenFromStoredAdditionalProperties()
+        {
+            // Hint sets imported by an earlier version may hold a legacy "role" in their stored additional properties.
+            var stored = new JObject { { "role", "third_person" }, { "ACME_note", 1 } };
+            var node = (JObject)new KHR_node_visibility_hint { Roles = new[] { "third_person" }, AdditionalProperties = stored }
+                .Serialize().Value;
+            var prim = (JObject)new KHR_mesh_primitive_visibility_hint { Roles = new[] { "first_person" }, AdditionalProperties = stored }
+                .Serialize().Value;
+            Assert.IsNull(node["role"]);
+            Assert.IsNull(prim["role"]);
+            Assert.AreEqual(1, node["ACME_note"].Value<int>());
+            Assert.AreEqual(1, prim["ACME_note"].Value<int>());
+            Assert.AreEqual("third_person", stored["role"].Value<string>(), "the stored object is not mutated");
         }
 
         [Test]

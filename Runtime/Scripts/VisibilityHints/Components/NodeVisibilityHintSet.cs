@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace UnityGLTF.VisibilityHints
 {
@@ -11,7 +12,7 @@ namespace UnityGLTF.VisibilityHints
     public class NodeVisibilityHintSet : MonoBehaviour
     {
         [System.Serializable]
-        public class NodeVisibilityEntry
+        public class NodeVisibilityEntry : ISerializationCallbackReceiver
         {
             public Transform Node;
 
@@ -28,6 +29,23 @@ namespace UnityGLTF.VisibilityHints
             public string ExtrasJson;
             public string AdditionalPropertiesJson;
             public string[] RequiredCompanionExtensions;
+
+            /// <summary>
+            /// The single role serialized by earlier versions of this package (field <c>Role</c>). It is moved into
+            /// <see cref="Roles"/> after deserialization, with <c>third_person_only</c> and <c>first_person_only</c>
+            /// mapped to the standard roles, and is never exported.
+            /// </summary>
+            [SerializeField, HideInInspector, FormerlySerializedAs("Role")] internal string LegacyRole;
+
+            void ISerializationCallbackReceiver.OnBeforeSerialize() { }
+
+            void ISerializationCallbackReceiver.OnAfterDeserialize() => MigrateLegacyRole();
+
+            internal void MigrateLegacyRole()
+            {
+                Roles = LegacyVisibilityMigration.RolesWithLegacyRole(Roles, LegacyRole);
+                LegacyRole = null;
+            }
         }
 
         [SerializeField, HideInInspector] private List<NodeVisibilityEntry> _entries = new List<NodeVisibilityEntry>();

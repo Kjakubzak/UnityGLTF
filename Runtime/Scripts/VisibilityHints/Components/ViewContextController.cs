@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace UnityGLTF.VisibilityHints
 {
@@ -12,11 +13,16 @@ namespace UnityGLTF.VisibilityHints
     /// authored visibility state.
     /// </summary>
     [DisallowMultipleComponent]
-    public class ViewContextController : MonoBehaviour
+    public class ViewContextController : MonoBehaviour, ISerializationCallbackReceiver
     {
         [SerializeField] private List<string> _defaultAppliedRoles = new List<string>();
         [SerializeField] private List<string> _defaultRolesWithLogic = new List<string>();
         [NonSerialized] private VisibilityRoleContext _defaultRoles;
+
+        // Default view tags serialized by earlier versions of this package; migrated to role logic after
+        // deserialization (see LegacyVisibilityMigration.TryMigrateViewTags) and then cleared.
+        [SerializeField, HideInInspector, FormerlySerializedAs("_defaultViewTags")]
+        private List<string> _legacyDefaultViewTags = new List<string>();
 
         /// <summary>Raised with the new context when <see cref="SetDefaultRoles"/> changes it.</summary>
         public event Action<VisibilityRoleContext> OnDefaultRolesChanged;
@@ -90,6 +96,27 @@ namespace UnityGLTF.VisibilityHints
         }
 
         private void OnValidate() => _defaultRoles = null;
+
+        void ISerializationCallbackReceiver.OnBeforeSerialize() { }
+
+        void ISerializationCallbackReceiver.OnAfterDeserialize() => MigrateLegacyViewTags();
+
+        internal void MigrateLegacyViewTags()
+        {
+            if (LegacyVisibilityMigration.TryMigrateViewTags(
+                    _legacyDefaultViewTags, _defaultAppliedRoles, _defaultRolesWithLogic,
+                    out var applied, out var withLogic))
+            {
+                _defaultAppliedRoles = applied;
+                _defaultRolesWithLogic = withLogic;
+                _defaultRoles = null;
+            }
+            _legacyDefaultViewTags?.Clear();
+        }
+
+        /// <summary>Test hook: sets the legacy serialized view tags as an older scene would.</summary>
+        internal void SetLegacyDefaultViewTagsForTest(IEnumerable<string> tags)
+            => _legacyDefaultViewTags = tags != null ? new List<string>(tags) : new List<string>();
 
         private static bool HasNoRoles(List<string> roles)
         {
