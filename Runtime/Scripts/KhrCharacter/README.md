@@ -140,12 +140,26 @@ never writes scene objects; applying the results and mixing them with other writ
    not depend on entry order. `n` is never replaced by `b`, and the result is never clamped or wrapped. Node
    translation, texture offset and texture rotation are additive; rotation angles add as raw scalars, so whole turns
    survive. Morph weights fold whole-array and element records into one complete vector per node, whose untouched
-   elements keep their authored value (`ExpressionAggregateRecord.Contributed` marks the touched ones). Node rotation
-   and scale, texture scale, quaternions, Boolean and integer properties use this host's override policy: choose
-   the absolute sample from the highest active expression-array index. Normalize quaternion results, preserve their
-   chosen sign, and validate finite/discrete values. The driver selects sample time and is not applied again as a
-   blend weight. An inactive entry emits no record and cannot override an active entry. Exact binary64 addition is
-   a package guarantee; the current specification does not mandate that precision policy.
+   elements keep their authored value (`ExpressionAggregateRecord.Contributed` marks the touched ones). The
+   remaining types use host composition, and this package makes these choices (spec 314c95c5):
+   - **Node scale and texture scale** use the same additive formula `b + sum(s - n)` per component, as
+     `KHR_character_expression_joint` and `KHR_character_expression_texture_transform` recommend. Two scale responses
+     from `1` to `2` and from `1` to `3` give `4`, not `3` (highest index) or `6` (multiplication). Scale results are not
+     clamped.
+   - **Rotations** (node `rotation` and any quaternion property) compose approximately additively, as
+     `KHR_character_expression_joint` recommends without prescribing an algorithm. This package's method: each record
+     contributes its change from its own time-zero sample as a rotation vector `r = log(n^-1 * s)` on the shorter arc
+     (the relative quaternion is flipped to `w >= 0`); the vectors are summed exactly in binary64; and the result is
+     `normalize(b * exp(sum(r)))`, with local (right) quaternion products in glTF `[x, y, z, w]` order. The result
+     does not depend on entry order, changes about a shared axis add exactly (10 + 10 degrees is 20 degrees), one
+     record whose neutral sample equals `b` reproduces its sample, and 10 degrees right plus 10 degrees up gives one
+     14.1-degree rotation about the diagonal, which turns the forward axis about 10 degrees right and 10 degrees up.
+     Other runtimes may choose another method.
+   - **Boolean and integer** properties choose the absolute sample from the highest active expression-array index and
+     validate their discrete values. An inactive entry emits no record and cannot override an active entry.
+
+   The driver selects sample time and is not applied again as a blend weight. Exact binary64 addition is a package
+   guarantee; the current specification does not mandate that precision policy.
 3. **Failures.** A sample that is not finite, a rotation sample of zero length (such as a CUBICSPLINE midpoint) or an
    aggregate that is not finite fails only its property: the property gets no record, the failure is logged as an error
    and listed in `ExpressionResponse.Failures` and `ExpressionComposition.Failures`, and the other properties still

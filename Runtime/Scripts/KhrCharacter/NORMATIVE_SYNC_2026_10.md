@@ -12,6 +12,14 @@ Package baseline: `Kjakubzak/UnityGLTF avatar_ext_normative@a7fb6367963ed553540a
   Attenuation` replaces `SuppressionFactor`, which remains as an obsolete `1 - Attenuation` shim. The optional
   suppression `name` is now a defined member (`SuppressionEntry.Name` / `HasName`), preserved and re-exported, never
   used to resolve the target.
+- **Scale composes additively; rotation approximately additively (glTF-private #250, #254).** Node `scale` and
+  `KHR_texture_transform` `scale` use `b + sum(s - n)` per component (both SHOULD). Rotations use this package's
+  method, chosen by the implementer because the specification only says SHOULD be approximately additive for small
+  rotations: `y = normalize(b * exp(sum(log(n^-1 * s))))`, each relative quaternion taken on the shorter arc and
+  the rotation vectors summed exactly. It is order-independent and exact for a shared axis. Boolean and integer
+  properties still select the highest active expression-array index. `ExpressionAggregateRecord.IsSingleWriter`,
+  `IsStandardSingleWriter` and `IsHostComposed` are now true only for Boolean and integer properties; `IsRotation`
+  is new. The "Shared targets and neutral state" policy below is superseded for scale and rotation.
 
 ## Current expression mapping
 
