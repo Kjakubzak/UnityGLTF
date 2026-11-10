@@ -6,9 +6,9 @@ namespace UnityGLTF.VisibilityHints.Tests
 {
     public class SubtreeInheritanceTests
     {
-        private static readonly string[] FirstPerson = { "first_person" };
-        private static readonly string[] ThirdPerson = { "third_person" };
-        private static readonly string[] Untagged = new string[0];
+        private static readonly VisibilityRoleContext FirstPerson = FirstPersonRolePolicy.FirstPersonView;
+        private static readonly VisibilityRoleContext ThirdPerson = FirstPersonRolePolicy.OtherView;
+        private static readonly VisibilityRoleContext NoLogic = VisibilityRoleContext.NoLogic;
 
         private readonly List<Object> _created = new List<Object>();
 
@@ -51,18 +51,20 @@ namespace UnityGLTF.VisibilityHints.Tests
             var set = root.AddComponent<NodeVisibilityHintSet>();
             set.Bind(new[]
             {
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = a.transform, Role = "third_person" },
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = c.transform, Role = "first_person" },
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = a.transform, Roles = new[] { "third_person" } },
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = c.transform, Roles = new[] { "first_person" } },
             });
 
-            Assert.AreEqual("third_person", set.ResolveRole(a.transform));
-            Assert.AreEqual("third_person", set.ResolveRole(b.transform));
-            Assert.AreEqual("first_person", set.ResolveRole(c.transform));
+            CollectionAssert.AreEqual(new[] { "third_person" }, set.ResolveRoles(a.transform));
+            CollectionAssert.AreEqual(new[] { "third_person" }, set.ResolveRoles(b.transform));
+            CollectionAssert.AreEqual(new[] { "first_person" }, set.ResolveRoles(c.transform));
             Assert.IsFalse(set.ShouldRenderVisualContent(a.transform, FirstPerson, true));
             Assert.IsFalse(set.ShouldRenderVisualContent(b.transform, FirstPerson, true));
             Assert.IsFalse(set.ShouldRenderVisualContent(c.transform, FirstPerson, true));
             Assert.IsFalse(set.ShouldRenderVisualContent(c.transform, ThirdPerson, true));
-            Assert.IsTrue(set.ShouldRenderVisualContent(c.transform, new[] { "first_person", "third_person" }, true));
+            Assert.IsTrue(set.ShouldRenderVisualContent(
+                c.transform, new VisibilityRoleContext(new[] { "first_person", "third_person" }, null), true));
+            Assert.IsTrue(set.ShouldRenderVisualContent(c.transform, NoLogic, true), "no role logic hides nothing");
         }
 
         [Test]
@@ -74,8 +76,8 @@ namespace UnityGLTF.VisibilityHints.Tests
             var set = root.AddComponent<NodeVisibilityHintSet>();
             set.Bind(new[]
             {
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = parent.transform, Role = "third_person" },
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = child.transform, Role = "always" },
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = parent.transform, Roles = new[] { "third_person" } },
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = child.transform, Roles = new[] { "always" } },
             });
 
             Assert.IsFalse(set.ShouldRenderVisualContent(parent.transform, FirstPerson, true));
@@ -92,12 +94,12 @@ namespace UnityGLTF.VisibilityHints.Tests
             set.Bind(new[]
             {
                 new NodeVisibilityHintSet.NodeVisibilityEntry
-                    { Node = node.transform, Role = "third_person" },
+                    { Node = node.transform, Roles = new[] { "third_person" } },
                 new NodeVisibilityHintSet.NodeVisibilityEntry
-                    { Node = node.transform, Role = "first_person" },
+                    { Node = node.transform, Roles = new[] { "first_person" } },
             });
 
-            Assert.AreEqual("first_person", set.ResolveRole(node.transform));
+            CollectionAssert.AreEqual(new[] { "first_person" }, set.ResolveRoles(node.transform));
             Assert.IsTrue(set.ShouldRenderVisualContent(node.transform, FirstPerson, true));
             Assert.IsFalse(set.ShouldRenderVisualContent(node.transform, ThirdPerson, true));
         }
@@ -112,10 +114,10 @@ namespace UnityGLTF.VisibilityHints.Tests
             set.Bind(new[]
             {
                 new NodeVisibilityHintSet.NodeVisibilityEntry
-                    { Node = annotated.transform, Role = "third_person" },
+                    { Node = annotated.transform, Roles = new[] { "third_person" } },
             });
 
-            Assert.IsNull(set.ResolveRole(plain.transform));
+            Assert.IsNull(set.ResolveRoles(plain.transform));
             Assert.IsTrue(set.ShouldRenderVisualContent(plain.transform, FirstPerson, true));
         }
 
@@ -128,7 +130,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             root.AddComponent<NodeVisibilityHintSet>().Bind(new[]
             {
                 new NodeVisibilityHintSet.NodeVisibilityEntry
-                    { Node = parent.transform, NodeUnnamed = true, Role = "third_person" },
+                    { Node = parent.transform, NodeUnnamed = true, Roles = new[] { "third_person" } },
             });
 
             var clone = Object.Instantiate(root);
@@ -139,9 +141,9 @@ namespace UnityGLTF.VisibilityHints.Tests
             Assert.IsNotNull(cloneSet);
             Assert.AreEqual("third_person", NodeVisibilityHintSet.GetDisplayName(cloneSet.Entries[0]),
                 "an unnamed imported node stays unnamed after Instantiate");
-            Assert.AreEqual("third_person", cloneSet.ResolveRole(cloneChild));
+            CollectionAssert.AreEqual(new[] { "third_person" }, cloneSet.ResolveRoles(cloneChild));
             Assert.IsFalse(cloneSet.ShouldRenderVisualContent(cloneChild, FirstPerson, true));
-            Assert.IsFalse(cloneSet.ShouldRenderVisualContent(cloneChild, Untagged, true));
+            Assert.IsTrue(cloneSet.ShouldRenderVisualContent(cloneChild, NoLogic, true));
             Assert.IsTrue(cloneSet.ShouldRenderVisualContent(cloneChild, ThirdPerson, true));
             Assert.AreSame(child.transform, FindTransform(root, "child"));
         }

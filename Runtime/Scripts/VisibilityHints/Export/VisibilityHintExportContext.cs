@@ -16,26 +16,26 @@ namespace UnityGLTF.VisibilityHints
     /// <item><see cref="AfterPrimitiveExport"/> adds <c>KHR_mesh_primitive_visibility_hint</c> to any exported
     /// primitive whose <c>(mesh, sub-mesh)</c> is an authored entry.</item>
     /// </list>
-    /// Newly authored entries are declared used-only; an imported required declaration is preserved. The authored
-    /// role and glTFProperty payload are read from serialized entries, never from host rendering state.
+    /// Both extensions are always declared in <c>extensionsUsed</c> only, never in <c>extensionsRequired</c>, as
+    /// the specification requires. The authored roles and glTFProperty payload are read from serialized entries,
+    /// never from host rendering state.
     /// </summary>
     public class VisibilityHintExportContext : GLTFExportPluginContext
     {
         private bool _mapsBuilt;
         private Dictionary<Transform, NodeVisibilityHintSet.NodeVisibilityEntry> _nodeMap;
         private Dictionary<(Mesh mesh, int subMesh), PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry> _primMap;
-        private bool _nodeRequired;
-        private bool _primitiveRequired;
 
         public override void AfterNodeExport(GLTFSceneExporter exporter, GLTFRoot gltfRoot, Transform transform, Node node)
         {
             EnsureMaps(exporter);
             if (transform == null || node == null || !_nodeMap.TryGetValue(transform, out var entry)) return;
 
-            // role is spec-required (minLength:1); a null/empty role could only serialize as an invalid extension.
-            if (string.IsNullOrEmpty(entry.Role))
+            // roles is spec-required (one or more distinct nonempty strings); without one the hint would be invalid.
+            var roles = CleanRoles(entry.Roles);
+            if (roles == null)
             {
-                Debug.LogWarning($"[VisibilityHints] Node '{transform.name}' visibility hint has no 'role' (spec-required, minLength:1); skipping.");
+                Debug.LogWarning($"[VisibilityHints] Node '{transform.name}' visibility hint has no role ('roles' is spec-required); skipping.");
                 return;
             }
 
@@ -43,15 +43,14 @@ namespace UnityGLTF.VisibilityHints
             if (TryAddExtension(node, VisibilityHintExtensionNames.NodeVisibilityHint,
                     new KHR_node_visibility_hint
                     {
-                        Role = entry.Role,
+                        Roles = roles,
                         Label = entry.Label,
                         Extensions = companionExtensions,
                         Extras = ParseToken(entry.ExtrasJson),
                         AdditionalProperties = ParseObject(entry.AdditionalPropertiesJson),
                     }))
             {
-                exporter.DeclareExtensionUsage(
-                    VisibilityHintExtensionNames.NodeVisibilityHint, isRequired: _nodeRequired);
+                exporter.DeclareExtensionUsage(VisibilityHintExtensionNames.NodeVisibilityHint, isRequired: false);
                 DeclareCompanionExtensions(
                     exporter, companionExtensions, entry.RequiredCompanionExtensions);
             }
@@ -62,9 +61,10 @@ namespace UnityGLTF.VisibilityHints
             EnsureMaps(exporter);
             if (mesh == null || primitive == null || !_primMap.TryGetValue((mesh, index), out var entry)) return;
 
-            if (string.IsNullOrEmpty(entry.Role))
+            var roles = CleanRoles(entry.Roles);
+            if (roles == null)
             {
-                Debug.LogWarning($"[VisibilityHints] Mesh '{mesh.name}' primitive {index} visibility hint has no 'role' (spec-required, minLength:1); skipping.");
+                Debug.LogWarning($"[VisibilityHints] Mesh '{mesh.name}' primitive {index} visibility hint has no role ('roles' is spec-required); skipping.");
                 return;
             }
 
@@ -72,7 +72,7 @@ namespace UnityGLTF.VisibilityHints
             if (TryAddExtension(primitive, VisibilityHintExtensionNames.MeshPrimitiveVisibilityHint,
                     new KHR_mesh_primitive_visibility_hint
                     {
-                        Role = entry.Role,
+                        Roles = roles,
                         Label = entry.Label,
                         Extensions = companionExtensions,
                         Extras = ParseToken(entry.ExtrasJson),
@@ -80,7 +80,7 @@ namespace UnityGLTF.VisibilityHints
                     }))
             {
                 exporter.DeclareExtensionUsage(
-                    VisibilityHintExtensionNames.MeshPrimitiveVisibilityHint, isRequired: _primitiveRequired);
+                    VisibilityHintExtensionNames.MeshPrimitiveVisibilityHint, isRequired: false);
                 DeclareCompanionExtensions(
                     exporter, companionExtensions, entry.RequiredCompanionExtensions);
             }
@@ -102,17 +102,25 @@ namespace UnityGLTF.VisibilityHints
                 if (root == null) continue;
                 foreach (var set in root.GetComponentsInChildren<NodeVisibilityHintSet>(true))
                 {
-                    _nodeRequired |= set.RequiredOnImport;
                     foreach (var e in set.Entries)
                         if (e != null && e.Node != null) _nodeMap[e.Node] = e;
                 }
                 foreach (var set in root.GetComponentsInChildren<PrimitiveVisibilityHintSet>(true))
                 {
-                    _primitiveRequired |= set.RequiredOnImport;
                     foreach (var e in set.Entries)
                         if (e != null && e.Mesh != null && e.SubMesh >= 0) _primMap[(e.Mesh, e.SubMesh)] = e;
                 }
             }
+        }
+
+        // Distinct nonempty roles in authored order, or null when none remain.
+        private static string[] CleanRoles(string[] roles)
+        {
+            if (roles == null) return null;
+            var clean = new List<string>();
+            foreach (var role in roles)
+                if (!string.IsNullOrEmpty(role) && !clean.Contains(role)) clean.Add(role);
+            return clean.Count > 0 ? clean.ToArray() : null;
         }
 
         // GLTFProperty.AddExtension throws on a duplicate key; guard so a reused primitive/node is written once.

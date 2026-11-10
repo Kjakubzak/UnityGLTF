@@ -1,86 +1,36 @@
-using System;
 using System.Collections.Generic;
 
 namespace UnityGLTF.VisibilityHints
 {
     /// <summary>
-    /// Pure visibility-hint predicates for one render view, identified by the view tags the host gives it.
+    /// Pure visibility-hint predicates for one render view and asset instance, whose role logic the host supplies as
+    /// a <see cref="VisibilityRoleContext"/>. A null context means <see cref="VisibilityRoleContext.NoLogic"/>.
     /// </summary>
     public static class VisibilityHintEvaluator
     {
-        private static readonly string[] NoTags = Array.Empty<string>();
-
         /// <summary>
-        /// Evaluates one resolved role for a render view. A null role (no hint) and <c>always</c> are visible in every
-        /// view, including an untagged one. <c>first_person</c> and <c>third_person</c> are visible only when the view
-        /// carries the same tag. Any other role is custom: <paramref name="resolver"/> decides when it supports the
-        /// role, and otherwise the role is unsupported and visible only when <paramref name="renderUnsupportedRoles"/>
-        /// is set. Roles and tags are compared ordinally.
+        /// Whether one hint allows the view (<c>ownHintVisible</c>): true for no hint (null or empty roles), when any
+        /// recognized role applies, or when no role is recognized. See <see cref="VisibilityRoleContext.Allows"/>.
         /// </summary>
-        public static bool IsRoleVisible(
-            string role,
-            IReadOnlyCollection<string> viewTags,
-            IVisibilityRoleResolver resolver = null,
-            bool renderUnsupportedRoles = false)
-        {
-            switch (role)
-            {
-                case null:
-                case VisibilityHintExtensionNames.RoleAlways:
-                    return true;
-                case VisibilityHintExtensionNames.RoleFirstPerson:
-                case VisibilityHintExtensionNames.RoleThirdPerson:
-                    return HasTag(viewTags, role);
-                default:
-                    if (resolver != null && resolver.TryResolve(role, viewTags ?? NoTags, out bool visible))
-                        return visible;
-                    return renderUnsupportedRoles;
-            }
-        }
+        public static bool HintAllows(IReadOnlyCollection<string> roles, VisibilityRoleContext context)
+            => (context ?? VisibilityRoleContext.NoLogic).Allows(roles);
 
-        /// <summary><c>renderNodeVisualContent = hintVisible AND coreVisible</c> for one node instance and view.</summary>
+        /// <summary><c>renderNodeVisualContent = hintVisible AND coreVisible</c> for one node instance and view, where
+        /// <paramref name="ancestorInclusiveHintVisible"/> is already the AND over the node and its ancestors.</summary>
         public static bool ShouldRenderNodeVisualContent(
-            string resolvedNodeRole,
-            IReadOnlyCollection<string> viewTags,
-            bool ancestorInclusiveCoreVisible,
-            IVisibilityRoleResolver resolver = null,
-            bool renderUnsupportedRoles = false)
-            => ancestorInclusiveCoreVisible
-               && IsRoleVisible(resolvedNodeRole, viewTags, resolver, renderUnsupportedRoles);
+            bool ancestorInclusiveHintVisible, bool ancestorInclusiveCoreVisible)
+            => ancestorInclusiveHintVisible && ancestorInclusiveCoreVisible;
 
         /// <summary>
         /// <c>renderPrimitiveInstance = primitiveHintVisible AND nodeHintVisible AND coreVisible</c> for one primitive
-        /// instance and view.
+        /// instance and view. <paramref name="nodeHintVisible"/> is the containing node's ancestor-inclusive hint
+        /// result; a primitive hint can only add a restriction, even when it lists <c>always</c>.
         /// </summary>
         public static bool ShouldRenderPrimitiveInstance(
-            string resolvedNodeRole,
-            string primitiveRole,
-            IReadOnlyCollection<string> viewTags,
-            bool ancestorInclusiveCoreVisible,
-            IVisibilityRoleResolver resolver = null,
-            bool renderUnsupportedRoles = false)
-            => ancestorInclusiveCoreVisible
-               && IsRoleVisible(resolvedNodeRole, viewTags, resolver, renderUnsupportedRoles)
-               && IsRoleVisible(primitiveRole, viewTags, resolver, renderUnsupportedRoles);
-
-        /// <summary>Combines an already ancestor-inclusive node hint with the local primitive role.</summary>
-        public static bool ShouldRenderPrimitiveInstance(
             bool nodeHintVisible,
-            string primitiveRole,
-            IReadOnlyCollection<string> viewTags,
-            bool ancestorInclusiveCoreVisible,
-            IVisibilityRoleResolver resolver = null,
-            bool renderUnsupportedRoles = false)
-            => ancestorInclusiveCoreVisible && nodeHintVisible
-               && IsRoleVisible(primitiveRole, viewTags, resolver, renderUnsupportedRoles);
-
-        // Iterates instead of calling Contains so a caller's case-insensitive set cannot loosen the exact comparison.
-        private static bool HasTag(IReadOnlyCollection<string> viewTags, string tag)
-        {
-            if (viewTags == null) return false;
-            foreach (var candidate in viewTags)
-                if (string.Equals(candidate, tag, StringComparison.Ordinal)) return true;
-            return false;
-        }
+            IReadOnlyCollection<string> primitiveRoles,
+            VisibilityRoleContext context,
+            bool ancestorInclusiveCoreVisible)
+            => ancestorInclusiveCoreVisible && nodeHintVisible && HintAllows(primitiveRoles, context);
     }
 }

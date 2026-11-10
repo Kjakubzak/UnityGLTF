@@ -7,11 +7,13 @@ namespace UnityGLTF.VisibilityHints.Tests
 {
     public class ViewContextControllerTests
     {
-        private static readonly string[] Untagged = new string[0];
-        private static readonly string[] FirstPerson = { "first_person" };
-        private static readonly string[] ThirdPerson = { "third_person" };
-        private static readonly string[] ThirdPersonMirror = { "third_person", "ACME_mirror" };
-        private static readonly string[] BothStandard = { "first_person", "third_person" };
+        private static readonly VisibilityRoleContext NoLogic = VisibilityRoleContext.NoLogic;
+        private static readonly VisibilityRoleContext FirstPerson = FirstPersonRolePolicy.FirstPersonView;
+        private static readonly VisibilityRoleContext ThirdPerson = FirstPersonRolePolicy.OtherView;
+        private static readonly VisibilityRoleContext Mirror =
+            FirstPersonRolePolicy.ForView(false, new[] { "ACME_mirror_only" });
+        private static readonly VisibilityRoleContext BothStandard =
+            new VisibilityRoleContext(new[] { "first_person", "third_person" }, null);
 
         private readonly List<Object> _created = new List<Object>();
 
@@ -54,96 +56,109 @@ namespace UnityGLTF.VisibilityHints.Tests
             return go.AddComponent<MeshRenderer>();
         }
 
-        private sealed class MirrorOnlyResolver : IVisibilityRoleResolver
-        {
-            public readonly List<string> Seen = new List<string>();
-
-            public bool TryResolve(string role, IReadOnlyCollection<string> viewTags, out bool visible)
-            {
-                Seen.Add(role);
-                visible = false;
-                if (role != "ACME_mirror_only") return false;
-                foreach (var tag in viewTags)
-                    if (tag == "ACME_mirror") visible = true;
-                return true;
-            }
-        }
+        private static string[] R(params string[] roles) => roles;
 
         private static IEnumerable<TestCaseData> RoleTable()
         {
-            yield return new TestCaseData(null, Untagged, true).SetName("NoHint_Untagged_Visible");
-            yield return new TestCaseData("always", Untagged, true).SetName("Always_Untagged_Visible");
-            yield return new TestCaseData("first_person", Untagged, false).SetName("FirstPerson_Untagged_Hidden");
-            yield return new TestCaseData("third_person", Untagged, false).SetName("ThirdPerson_Untagged_Hidden");
-            yield return new TestCaseData("first_person", FirstPerson, true).SetName("FirstPerson_FirstPersonView_Visible");
-            yield return new TestCaseData("third_person", FirstPerson, false).SetName("ThirdPerson_FirstPersonView_Hidden");
-            yield return new TestCaseData("first_person", ThirdPerson, false).SetName("FirstPerson_ThirdPersonView_Hidden");
-            yield return new TestCaseData("third_person", ThirdPersonMirror, true).SetName("ThirdPerson_ThirdPersonMirrorView_Visible");
-            yield return new TestCaseData("first_person", ThirdPersonMirror, false).SetName("FirstPerson_ThirdPersonMirrorView_Hidden");
-            yield return new TestCaseData("always", ThirdPersonMirror, true).SetName("Always_ThirdPersonMirrorView_Visible");
-            yield return new TestCaseData("first_person", BothStandard, true).SetName("FirstPerson_BothTags_Visible");
-            yield return new TestCaseData("third_person", BothStandard, true).SetName("ThirdPerson_BothTags_Visible");
-            yield return new TestCaseData("ACME_mirror_only", ThirdPersonMirror, false).SetName("UnsupportedCustomRole_Hidden");
-            yield return new TestCaseData("First_Person", FirstPerson, false).SetName("DifferentlyCasedRole_IsCustomAndHidden");
-            yield return new TestCaseData("first_person", new[] { "First_Person" }, false).SetName("ViewTags_AreCaseSensitive");
+            // An application with no role logic hides nothing.
+            yield return new TestCaseData(null, NoLogic, true).SetName("NoHint_NoLogic_Visible");
+            yield return new TestCaseData(R("always"), NoLogic, true).SetName("Always_NoLogic_Visible");
+            yield return new TestCaseData(R("first_person"), NoLogic, true).SetName("FirstPerson_NoLogic_Visible");
+            yield return new TestCaseData(R("third_person"), NoLogic, true).SetName("ThirdPerson_NoLogic_Visible");
+            yield return new TestCaseData(R("ACME_mirror_only"), NoLogic, true).SetName("UnrecognizedCustom_NoLogic_Visible");
+            // First-person logic: first_person in the user's own view, third_person everywhere else.
+            yield return new TestCaseData(R("first_person"), FirstPerson, true).SetName("FirstPerson_FirstPersonView_Visible");
+            yield return new TestCaseData(R("third_person"), FirstPerson, false).SetName("ThirdPerson_FirstPersonView_Hidden");
+            yield return new TestCaseData(R("first_person"), ThirdPerson, false).SetName("FirstPerson_OtherView_Hidden");
+            yield return new TestCaseData(R("third_person"), ThirdPerson, true).SetName("ThirdPerson_OtherView_Visible");
+            yield return new TestCaseData(R("always"), FirstPerson, true).SetName("Always_FirstPersonView_Visible");
+            yield return new TestCaseData(R("first_person"), BothStandard, true).SetName("FirstPerson_BothApply_Visible");
+            yield return new TestCaseData(R("third_person"), BothStandard, true).SetName("ThirdPerson_BothApply_Visible");
+            // Roles in one hint are alternatives; unrecognized custom roles are ignored.
+            yield return new TestCaseData(R("first_person", "ACME_mirror_only"), ThirdPerson, false)
+                .SetName("MultiRole_UnrecognizedCustomIgnored_Hidden");
+            yield return new TestCaseData(R("first_person", "ACME_mirror_only"), Mirror, true)
+                .SetName("MultiRole_RecognizedCustomApplies_Visible");
+            yield return new TestCaseData(R("first_person", "ACME_mirror_only"), FirstPerson, true)
+                .SetName("MultiRole_FirstPersonApplies_Visible");
+            yield return new TestCaseData(R("ACME_mirror_only"), ThirdPerson, true).SetName("OnlyUnrecognizedCustom_NoRestriction");
+            yield return new TestCaseData(R("ACME_mirror_only"), Mirror, true).SetName("RecognizedCustom_Applies_Visible");
+            yield return new TestCaseData(R("ACME_mirror_only"),
+                    FirstPersonRolePolicy.ForView(true, null, new[] { "ACME_mirror_only" }), false)
+                .SetName("RecognizedCustom_DoesNotApply_Hidden");
+            yield return new TestCaseData(R("always", "first_person"), ThirdPerson, true).SetName("AlwaysPlusRole_NoRestriction");
+            yield return new TestCaseData(R("First_Person"), ThirdPerson, true)
+                .SetName("DifferentlyCasedRole_IsUnrecognizedCustom_NoRestriction");
+            yield return new TestCaseData(R("first_person"), new VisibilityRoleContext(new[] { "First_Person" }, new[] { "first_person" }), false)
+                .SetName("AppliedRoles_AreCaseSensitive");
         }
 
         [TestCaseSource(nameof(RoleTable))]
-        public void StandardRoles_FollowViewTagMembership(string role, string[] viewTags, bool expected)
+        public void Hints_FollowTheApplicationsRoleLogic(string[] roles, VisibilityRoleContext context, bool expected)
         {
-            Assert.AreEqual(expected, VisibilityHintEvaluator.IsRoleVisible(role, viewTags));
+            Assert.AreEqual(expected, VisibilityHintEvaluator.HintAllows(roles, context));
         }
 
         [Test]
-        public void CustomRoles_AreHiddenUnlessTheOverrideOrAResolverAllowsThem()
+        public void RoleContext_StandardRolesWithoutLogicApplyEverywhere()
         {
-            Assert.IsFalse(VisibilityHintEvaluator.IsRoleVisible("ACME_mirror_only", ThirdPersonMirror));
-            Assert.IsTrue(VisibilityHintEvaluator.IsRoleVisible(
-                "ACME_mirror_only", ThirdPersonMirror, renderUnsupportedRoles: true));
+            var thirdOnly = new VisibilityRoleContext(new[] { "third_person" }, null);
+            Assert.IsTrue(thirdOnly.Applies("third_person"));
+            Assert.IsTrue(thirdOnly.Applies("first_person"), "no logic for first_person: it applies in every view");
+            Assert.IsTrue(thirdOnly.Applies("always"));
+            Assert.IsFalse(thirdOnly.Applies("ACME_mirror_only"));
+            Assert.IsFalse(thirdOnly.IsRecognized("ACME_mirror_only"));
+            Assert.IsTrue(thirdOnly.HasLogicFor("third_person"), "an applied role counts as having logic");
+            Assert.IsFalse(thirdOnly.HasLogicFor("first_person"));
 
-            var resolver = new MirrorOnlyResolver();
-            Assert.IsTrue(VisibilityHintEvaluator.IsRoleVisible("ACME_mirror_only", ThirdPersonMirror, resolver));
-            Assert.IsFalse(VisibilityHintEvaluator.IsRoleVisible("ACME_mirror_only", ThirdPerson, resolver));
-            Assert.IsFalse(VisibilityHintEvaluator.IsRoleVisible("ACME_mirror_only", ThirdPerson, resolver, true),
-                "a supported custom role follows its resolver, not the unsupported-role override");
-            Assert.IsFalse(VisibilityHintEvaluator.IsRoleVisible("ACME_other", ThirdPersonMirror, resolver),
-                "a role the resolver does not support falls back to the role-support rule");
-            Assert.IsFalse(VisibilityHintEvaluator.IsRoleVisible("First_Person", FirstPerson, resolver));
-            Assert.IsTrue(VisibilityHintEvaluator.IsRoleVisible("third_person", ThirdPerson, resolver));
-            CollectionAssert.AreEqual(
-                new[] { "ACME_mirror_only", "ACME_mirror_only", "ACME_mirror_only", "ACME_other", "First_Person" },
-                resolver.Seen,
-                "standard roles never reach the resolver; differently cased tokens do, as custom roles");
+            Assert.IsFalse(ThirdPerson.Applies("first_person"));
+            CollectionAssert.AreEqual(new[] { "third_person" }, ThirdPerson.AppliedRoles);
+            CollectionAssert.AreEquivalent(new[] { "first_person", "third_person" }, ThirdPerson.RolesWithLogic);
+            Assert.IsTrue(VisibilityHintEvaluator.HintAllows(R("first_person"), null), "a null context is no logic");
         }
 
         [Test]
-        public void Controller_DefaultsToUntaggedViewAndHidesUnsupportedRoles()
+        public void RoleContext_IgnoresNullEmptyAndDuplicateRoles()
+        {
+            var context = new VisibilityRoleContext(
+                new[] { "first_person", null, "", "first_person", "ACME_mirror_only" },
+                new[] { "third_person", "first_person", null });
+            CollectionAssert.AreEqual(new[] { "first_person", "ACME_mirror_only" }, context.AppliedRoles);
+            CollectionAssert.AreEqual(new[] { "first_person", "ACME_mirror_only", "third_person" }, context.RolesWithLogic);
+        }
+
+        [Test]
+        public void Controller_DefaultsToNoLogicAndHidesNothing()
         {
             var root = NewGo("root");
             var custom = NewGo("custom");
             custom.transform.SetParent(root.transform, false);
             var third = NewGo("third");
             third.transform.SetParent(root.transform, false);
+            var first = NewGo("first");
+            first.transform.SetParent(root.transform, false);
             root.AddComponent<NodeVisibilityHintSet>().Bind(new[]
             {
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = custom.transform, Role = "ACME_mirror_only" },
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = third.transform, Role = "third_person" },
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = custom.transform, Roles = R("ACME_mirror_only") },
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = third.transform, Roles = R("third_person") },
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = first.transform, Roles = R("first_person") },
             });
             var controller = root.AddComponent<ViewContextController>();
 
-            CollectionAssert.IsEmpty(controller.DefaultViewTags);
-            Assert.IsFalse(controller.RenderUnsupportedRoles);
-            Assert.IsNull(controller.CustomRoleResolver);
-            Assert.IsFalse(controller.ShouldRenderNode(third.transform, true), "an untagged view hides third_person");
+            CollectionAssert.IsEmpty(controller.DefaultRoles.AppliedRoles);
+            CollectionAssert.IsEmpty(controller.DefaultRoles.RolesWithLogic);
+            Assert.IsTrue(controller.ShouldRenderNode(third.transform, true), "no logic: third_person is visible");
+            Assert.IsTrue(controller.ShouldRenderNode(first.transform, true), "no logic: first_person is visible");
+            Assert.IsTrue(controller.ShouldRenderNode(custom.transform, true), "an unrecognized custom role is ignored");
             Assert.IsTrue(controller.ShouldRenderNode(root.transform, true), "un-hinted content is visible");
-            Assert.IsFalse(controller.ShouldRenderNodeForView(custom.transform, ThirdPersonMirror, true));
 
-            controller.RenderUnsupportedRoles = true;
+            Assert.IsFalse(controller.ShouldRenderNodeForView(third.transform, FirstPerson, true));
+            Assert.IsFalse(controller.ShouldRenderNodeForView(first.transform, ThirdPerson, true));
             Assert.IsTrue(controller.ShouldRenderNodeForView(custom.transform, ThirdPerson, true));
-            controller.RenderUnsupportedRoles = false;
-            controller.CustomRoleResolver = new MirrorOnlyResolver();
-            Assert.IsTrue(controller.ShouldRenderNodeForView(custom.transform, ThirdPersonMirror, true));
-            Assert.IsFalse(controller.ShouldRenderNodeForView(custom.transform, ThirdPerson, true));
+            Assert.IsFalse(controller.ShouldRenderNodeForView(custom.transform,
+                FirstPersonRolePolicy.ForView(false, null, new[] { "ACME_mirror_only" }), true),
+                "a recognized custom role that does not apply hides its content");
+            Assert.IsTrue(controller.ShouldRenderNodeForView(custom.transform, Mirror, true));
         }
 
         [Test]
@@ -157,12 +172,12 @@ namespace UnityGLTF.VisibilityHints.Tests
 
             root.AddComponent<NodeVisibilityHintSet>().Bind(new[]
             {
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = body.transform, Role = "always" },
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = body.transform, Roles = R("always") },
             });
             root.AddComponent<PrimitiveVisibilityHintSet>().Bind(new[]
             {
                 new PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry
-                    { Mesh = mesh, SubMesh = 0, Role = "third_person" },
+                    { Mesh = mesh, SubMesh = 0, Roles = R("third_person") },
             });
             var controller = root.AddComponent<ViewContextController>();
 
@@ -170,9 +185,9 @@ namespace UnityGLTF.VisibilityHints.Tests
             var originalMesh = body.GetComponent<MeshFilter>().sharedMesh;
             var originalMaterials = renderer.sharedMaterials;
 
-            Assert.IsFalse(controller.ShouldRenderPrimitiveForView(renderer, 0, Untagged, true));
+            Assert.IsTrue(controller.ShouldRenderPrimitiveForView(renderer, 0, NoLogic, true));
             Assert.IsFalse(controller.ShouldRenderPrimitiveForView(renderer, 0, FirstPerson, true));
-            Assert.IsTrue(controller.ShouldRenderPrimitiveForView(renderer, 0, ThirdPersonMirror, true));
+            Assert.IsTrue(controller.ShouldRenderPrimitiveForView(renderer, 0, Mirror, true));
 
             Assert.AreEqual(originalEnabled, renderer.enabled);
             Assert.AreSame(originalMesh, body.GetComponent<MeshFilter>().sharedMesh);
@@ -188,44 +203,44 @@ namespace UnityGLTF.VisibilityHints.Tests
             var mesh = NewMesh();
             var renderer = AddRenderer(body, mesh);
             var nodeEntry = new NodeVisibilityHintSet.NodeVisibilityEntry
-                { Node = body.transform, Role = "third_person" };
+                { Node = body.transform, Roles = R("third_person") };
             var primitiveEntry = new PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry
-                { Mesh = mesh, SubMesh = 0, Role = "first_person" };
+                { Mesh = mesh, SubMesh = 0, Roles = R("first_person") };
             root.AddComponent<NodeVisibilityHintSet>().Bind(new[] { nodeEntry });
             root.AddComponent<PrimitiveVisibilityHintSet>().Bind(new[]
             {
                 new PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry
-                    { Mesh = mesh, SubMesh = 0, Role = "third_person" },
+                    { Mesh = mesh, SubMesh = 0, Roles = R("third_person") },
                 primitiveEntry,
             });
             var controller = root.AddComponent<ViewContextController>();
 
             Assert.IsFalse(controller.ShouldRenderPrimitiveForView(renderer, 0, FirstPerson, true));
-            nodeEntry.Role = "first_person";
+            nodeEntry.Roles = R("first_person");
             Assert.IsTrue(controller.ShouldRenderPrimitiveForView(renderer, 0, FirstPerson, true));
-            primitiveEntry.Role = "third_person";
+            primitiveEntry.Roles = R("third_person");
             Assert.IsFalse(controller.ShouldRenderPrimitiveForView(renderer, 0, FirstPerson, true));
         }
 
         [Test]
-        public void ExplicitViewQueries_DoNotContaminateEachOtherOrDefaultTags()
+        public void ExplicitViewQueries_DoNotContaminateEachOtherOrDefaultRoles()
         {
             var root = NewGo("root");
             var node = NewGo("node");
             node.transform.SetParent(root.transform, false);
             root.AddComponent<NodeVisibilityHintSet>().Bind(new[]
             {
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = node.transform, Role = "third_person" },
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = node.transform, Roles = R("third_person") },
             });
             var controller = root.AddComponent<ViewContextController>();
-            controller.SetDefaultViewTags(FirstPerson);
+            controller.SetDefaultRoles(FirstPerson);
 
             Assert.IsTrue(controller.ShouldRenderNodeForView(node.transform, ThirdPerson, true));
             Assert.IsFalse(controller.ShouldRenderNodeForView(node.transform, FirstPerson, true));
             Assert.IsTrue(controller.ShouldRenderNodeForView(node.transform, BothStandard, true));
             Assert.IsFalse(controller.ShouldRenderNode(node.transform, true));
-            CollectionAssert.AreEqual(FirstPerson, controller.DefaultViewTags,
-                "explicit per-view queries do not change the default tags");
+            Assert.AreSame(FirstPerson, controller.DefaultRoles,
+                "explicit per-view queries do not change the default roles");
         }
 
         [Test]
@@ -240,13 +255,13 @@ namespace UnityGLTF.VisibilityHints.Tests
 
             root.AddComponent<NodeVisibilityHintSet>().Bind(new[]
             {
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = first.transform, Role = "first_person" },
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = third.transform, Role = "third_person" },
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = first.transform, Roles = R("first_person") },
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = third.transform, Roles = R("third_person") },
             });
             root.AddComponent<PrimitiveVisibilityHintSet>().Bind(new[]
             {
                 new PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry
-                    { Mesh = mesh, SubMesh = 0, Role = "always" },
+                    { Mesh = mesh, SubMesh = 0, Roles = R("always") },
             });
             var controller = root.AddComponent<ViewContextController>();
 
@@ -259,12 +274,13 @@ namespace UnityGLTF.VisibilityHints.Tests
         [Test]
         public void CoreVisibility_IsConjoinedAndCannotBeOverridden()
         {
-            Assert.IsFalse(VisibilityHintEvaluator.ShouldRenderNodeVisualContent("always", Untagged, false));
-            Assert.IsFalse(VisibilityHintEvaluator.ShouldRenderNodeVisualContent("first_person", FirstPerson, false));
-            Assert.IsFalse(VisibilityHintEvaluator.ShouldRenderNodeVisualContent(
-                "ACME_mirror_only", ThirdPersonMirror, false, renderUnsupportedRoles: true));
-            Assert.IsFalse(VisibilityHintEvaluator.ShouldRenderPrimitiveInstance(
-                "always", "always", FirstPerson, false));
+            Assert.IsFalse(VisibilityHintEvaluator.ShouldRenderNodeVisualContent(true, false));
+            Assert.IsFalse(VisibilityHintEvaluator.ShouldRenderNodeVisualContent(false, true));
+            Assert.IsFalse(VisibilityHintEvaluator.ShouldRenderPrimitiveInstance(true, R("always"), NoLogic, false),
+                "KHR_node_visibility always wins");
+            Assert.IsFalse(VisibilityHintEvaluator.ShouldRenderPrimitiveInstance(false, R("always"), NoLogic, true),
+                "a primitive hint cannot restore what the node hints hide");
+            Assert.IsTrue(VisibilityHintEvaluator.ShouldRenderPrimitiveInstance(true, null, FirstPerson, true));
         }
 
         [Test]
@@ -282,7 +298,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             root.AddComponent<NodeVisibilityHintSet>().Bind(new[]
             {
                 new NodeVisibilityHintSet.NodeVisibilityEntry
-                    { Node = body.transform, Role = "third_person" },
+                    { Node = body.transform, Roles = R("third_person") },
             });
             root.AddComponent<ViewContextController>();
             var adapter = root.AddComponent<ScopedMaterialVisibilityAdapter>();
@@ -293,10 +309,10 @@ namespace UnityGLTF.VisibilityHints.Tests
 
             Assert.AreSame(authored, renderer.sharedMaterials[0],
                 "disposing the per-view scope restores the exact authored material reference");
-            using (adapter.ApplyForView(renderer, Untagged, true))
-                Assert.AreSame(noDraw, renderer.sharedMaterials[0],
-                    "an untagged view hides third_person content");
-            using (adapter.ApplyForView(renderer, ThirdPersonMirror, true))
+            using (adapter.ApplyForView(renderer, NoLogic, true))
+                Assert.AreSame(authored, renderer.sharedMaterials[0],
+                    "an application without role logic hides nothing");
+            using (adapter.ApplyForView(renderer, Mirror, true))
                 Assert.AreSame(authored, renderer.sharedMaterials[0]);
         }
 
@@ -318,7 +334,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             root.AddComponent<PrimitiveVisibilityHintSet>().Bind(new[]
             {
                 new PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry
-                    { Mesh = mesh, SubMesh = 1, Role = "third_person" },
+                    { Mesh = mesh, SubMesh = 1, Roles = R("third_person") },
             });
             root.AddComponent<ViewContextController>();
             var adapter = root.AddComponent<ScopedMaterialVisibilityAdapter>();
@@ -347,7 +363,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             renderer.shadowCastingMode = ShadowCastingMode.TwoSided;
             root.AddComponent<NodeVisibilityHintSet>().Bind(new[]
             {
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = body.transform, Role = "third_person" },
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = body.transform, Roles = R("third_person") },
             });
             root.AddComponent<ViewContextController>();
             var adapter = root.AddComponent<ScopedMaterialVisibilityAdapter>();
@@ -379,8 +395,8 @@ namespace UnityGLTF.VisibilityHints.Tests
             var alwaysLight = alwaysNode.AddComponent<Light>();
             root.AddComponent<NodeVisibilityHintSet>().Bind(new[]
             {
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = thirdNode.transform, Role = "third_person" },
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = alwaysNode.transform, Role = "always" },
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = thirdNode.transform, Roles = R("third_person") },
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = alwaysNode.transform, Roles = R("always") },
             });
             root.AddComponent<ViewContextController>();
             var adapter = root.AddComponent<ScopedMaterialVisibilityAdapter>();
@@ -418,7 +434,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             root.AddComponent<NodeVisibilityHintSet>().Bind(new[]
             {
                 new NodeVisibilityHintSet.NodeVisibilityEntry
-                    { Node = body.transform, Role = "third_person" },
+                    { Node = body.transform, Roles = R("third_person") },
             });
             root.AddComponent<ViewContextController>();
             var adapter = root.AddComponent<ScopedMaterialVisibilityAdapter>();
@@ -444,7 +460,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             root.AddComponent<NodeVisibilityHintSet>().Bind(new[]
             {
                 new NodeVisibilityHintSet.NodeVisibilityEntry
-                    { Node = body.transform, Role = "third_person" },
+                    { Node = body.transform, Roles = R("third_person") },
             });
             root.AddComponent<ViewContextController>();
             var adapter = root.AddComponent<ScopedMaterialVisibilityAdapter>();
@@ -476,21 +492,30 @@ namespace UnityGLTF.VisibilityHints.Tests
         }
 
         [Test]
-        public void DefaultViewTags_ChangeRaisesOnceAndCanReturnToUntagged()
+        public void DefaultRoles_ChangeRaisesOnceAndCanReturnToNoLogic()
         {
             var controller = NewGo("root").AddComponent<ViewContextController>();
-            var observed = new List<string[]>();
-            controller.OnDefaultViewTagsChanged += tags => observed.Add(new List<string>(tags).ToArray());
+            var observed = new List<VisibilityRoleContext>();
+            controller.OnDefaultRolesChanged += roles => observed.Add(roles);
 
-            controller.SetDefaultViewTags(new[] { "first_person", "ACME_mirror", "first_person", null, "" });
-            controller.SetDefaultViewTags(new[] { "first_person", "ACME_mirror" });
-            controller.SetDefaultViewTags(null);
+            controller.SetDefaultRoles(FirstPersonRolePolicy.ForView(true, new[] { "ACME_mirror_only" }));
+            controller.SetDefaultRoles(new VisibilityRoleContext(
+                new[] { "ACME_mirror_only", "first_person" }, new[] { "third_person" }));
+            controller.SetDefaultRoles(null);
 
-            Assert.AreEqual(2, observed.Count);
-            CollectionAssert.AreEqual(new[] { "first_person", "ACME_mirror" }, observed[0],
-                "null, empty and duplicate tags are dropped");
-            CollectionAssert.IsEmpty(observed[1]);
-            CollectionAssert.IsEmpty(controller.DefaultViewTags);
+            Assert.AreEqual(2, observed.Count, "an equal set of roles raises no event");
+            CollectionAssert.AreEquivalent(new[] { "first_person", "ACME_mirror_only" }, observed[0].AppliedRoles);
+            Assert.AreSame(VisibilityRoleContext.NoLogic, observed[1]);
+            CollectionAssert.IsEmpty(controller.DefaultRoles.RolesWithLogic);
+        }
+
+        [Test]
+        public void DisplayNames_ListAllRolesWhenNoLabelOrNodeName()
+        {
+            Assert.AreEqual("first_person, ACME_mirror_only", NodeVisibilityHintSet.GetDisplayName(
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Roles = R("first_person", "ACME_mirror_only") }));
+            Assert.IsNull(PrimitiveVisibilityHintSet.GetDisplayName(
+                new PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry()));
         }
 
         [Test]
@@ -500,18 +525,18 @@ namespace UnityGLTF.VisibilityHints.Tests
             var unnamed = NewGo(string.Empty).transform;
 
             Assert.AreEqual("Head", NodeVisibilityHintSet.GetDisplayName(new NodeVisibilityHintSet.NodeVisibilityEntry
-                { Node = node, Role = "third_person", Label = "Head" }));
+                { Node = node, Roles = R("third_person"), Label = "Head" }));
             Assert.AreEqual("HeadNode", NodeVisibilityHintSet.GetDisplayName(new NodeVisibilityHintSet.NodeVisibilityEntry
-                { Node = node, Role = "third_person", Label = string.Empty }));
+                { Node = node, Roles = R("third_person"), Label = string.Empty }));
             Assert.AreEqual("third_person", NodeVisibilityHintSet.GetDisplayName(
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = unnamed, Role = "third_person" }));
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = unnamed, Roles = R("third_person") }));
             Assert.AreEqual("first_person", NodeVisibilityHintSet.GetDisplayName(
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Role = "first_person" }));
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Roles = R("first_person") }));
 
             Assert.AreEqual("Mask Shell", PrimitiveVisibilityHintSet.GetDisplayName(
-                new PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry { Role = "third_person", Label = "Mask Shell" }));
+                new PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry { Roles = R("third_person"), Label = "Mask Shell" }));
             Assert.AreEqual("third_person", PrimitiveVisibilityHintSet.GetDisplayName(
-                new PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry { Role = "third_person", Label = string.Empty }));
+                new PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry { Roles = R("third_person"), Label = string.Empty }));
         }
     }
 }

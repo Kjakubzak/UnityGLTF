@@ -25,7 +25,8 @@ namespace UnityGLTF.VisibilityHints.Editor
             var root = new GameObject("VisibilityHintsSample");
             Undo.RegisterCreatedObjectUndo(root, "Generate Visibility Hints Sample");
 
-            // Head: a single-sub-mesh node, hinted third_person (visible only in views tagged third_person).
+            // Head: a single-sub-mesh node, hinted third_person (hidden where an application's first-person logic
+            // applies first_person and therefore not third_person).
             var head = MakeMeshChild(root, "Head", SingleTriangleMesh("HeadMesh"), NewMaterial("HeadMat"));
             head.transform.localPosition = new Vector3(0f, 1f, 0f);
 
@@ -33,15 +34,14 @@ namespace UnityGLTF.VisibilityHints.Editor
             var bodyMesh = TwoSubMeshMesh("BodyMesh");
             MakeMeshChild(root, "Body", bodyMesh, NewMaterial("BodyMat0"), NewMaterial("BodyMat1"));
 
-            root.AddComponent<ViewContextController>().SetDefaultViewTags(
-                new[] { VisibilityHintExtensionNames.ViewTagThirdPerson });
+            root.AddComponent<ViewContextController>().SetDefaultRoles(FirstPersonRolePolicy.OtherView);
 
             root.AddComponent<NodeVisibilityHintSet>().Bind(new List<NodeVisibilityHintSet.NodeVisibilityEntry>
             {
                 new NodeVisibilityHintSet.NodeVisibilityEntry
                 {
                     Node = head.transform,
-                    Role = VisibilityHintExtensionNames.RoleThirdPerson,
+                    Roles = new[] { VisibilityHintExtensionNames.RoleThirdPerson },
                     Label = "Head",
                 },
             });
@@ -52,7 +52,7 @@ namespace UnityGLTF.VisibilityHints.Editor
                 {
                     Mesh = bodyMesh,
                     SubMesh = 1,
-                    Role = VisibilityHintExtensionNames.RoleFirstPerson,
+                    Roles = new[] { VisibilityHintExtensionNames.RoleFirstPerson },
                     Label = "BodyArms",
                 },
             });

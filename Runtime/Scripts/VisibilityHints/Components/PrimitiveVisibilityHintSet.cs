@@ -15,7 +15,9 @@ namespace UnityGLTF.VisibilityHints
         {
             public Mesh Mesh;
             public int SubMesh;
-            public string Role;
+
+            /// <summary>The authored roles (alternatives; order has no meaning).</summary>
+            public string[] Roles;
             public string Label;
             public string ExtensionsJson;
             public string ExtrasJson;
@@ -24,18 +26,15 @@ namespace UnityGLTF.VisibilityHints
         }
 
         [SerializeField, HideInInspector] private List<PrimitiveVisibilityEntry> _entries = new List<PrimitiveVisibilityEntry>();
-        [SerializeField, HideInInspector] private bool _requiredOnImport;
         [System.NonSerialized]
         private Dictionary<(Mesh mesh, int subMesh), PrimitiveVisibilityEntry> _entryByPrimitive;
         [System.NonSerialized] private bool _indexDirty = true;
 
         public IReadOnlyList<PrimitiveVisibilityEntry> Entries => _entries;
-        public bool RequiredOnImport => _requiredOnImport;
 
-        public void Bind(IReadOnlyList<PrimitiveVisibilityEntry> entries, bool requiredOnImport = false)
+        public void Bind(IReadOnlyList<PrimitiveVisibilityEntry> entries)
         {
             _entries = entries != null ? new List<PrimitiveVisibilityEntry>(entries) : new List<PrimitiveVisibilityEntry>();
-            _requiredOnImport = requiredOnImport;
             _indexDirty = true;
         }
 
@@ -55,46 +54,31 @@ namespace UnityGLTF.VisibilityHints
             _indexDirty = false;
         }
 
-        public string ResolveRole(Renderer renderer, int subMesh)
-            => ResolveRole(GetRendererMesh(renderer), subMesh);
+        public IReadOnlyList<string> ResolveRoles(Renderer renderer, int subMesh)
+            => ResolveRoles(GetRendererMesh(renderer), subMesh);
 
-        public string ResolveRole(Mesh mesh, int subMesh)
+        public IReadOnlyList<string> ResolveRoles(Mesh mesh, int subMesh)
         {
             if (mesh == null || subMesh < 0) return null;
             EnsureIndex();
-            return _entryByPrimitive.TryGetValue((mesh, subMesh), out var entry) ? entry.Role : null;
+            return _entryByPrimitive.TryGetValue((mesh, subMesh), out var entry) ? entry.Roles : null;
         }
-
-        public bool ShouldRenderPrimitiveInstance(
-            Renderer renderer,
-            int subMesh,
-            string resolvedNodeRole,
-            IReadOnlyCollection<string> viewTags,
-            bool ancestorInclusiveCoreVisible,
-            IVisibilityRoleResolver resolver = null,
-            bool renderUnsupportedRoles = false)
-            => VisibilityHintEvaluator.ShouldRenderPrimitiveInstance(
-                resolvedNodeRole, ResolveRole(renderer, subMesh), viewTags, ancestorInclusiveCoreVisible,
-                resolver, renderUnsupportedRoles);
 
         /// <summary>Uses the cumulative node hint result for the containing instance.</summary>
         public bool ShouldRenderPrimitiveInstance(
             Renderer renderer,
             int subMesh,
             bool nodeHintVisible,
-            IReadOnlyCollection<string> viewTags,
-            bool ancestorInclusiveCoreVisible,
-            IVisibilityRoleResolver resolver = null,
-            bool renderUnsupportedRoles = false)
+            VisibilityRoleContext roles,
+            bool ancestorInclusiveCoreVisible)
             => VisibilityHintEvaluator.ShouldRenderPrimitiveInstance(
-                nodeHintVisible, ResolveRole(renderer, subMesh), viewTags, ancestorInclusiveCoreVisible,
-                resolver, renderUnsupportedRoles);
+                nodeHintVisible, ResolveRoles(renderer, subMesh), roles, ancestorInclusiveCoreVisible);
 
-        /// <summary>Presentation name for an entry: its label, else its role.</summary>
+        /// <summary>Presentation name for an entry: its label, else its roles.</summary>
         public static string GetDisplayName(PrimitiveVisibilityEntry entry)
         {
             if (entry == null) return null;
-            return !string.IsNullOrEmpty(entry.Label) ? entry.Label : entry.Role;
+            return !string.IsNullOrEmpty(entry.Label) ? entry.Label : NodeVisibilityHintSet.FormatRoles(entry.Roles);
         }
 
         private static Mesh GetRendererMesh(Renderer renderer)

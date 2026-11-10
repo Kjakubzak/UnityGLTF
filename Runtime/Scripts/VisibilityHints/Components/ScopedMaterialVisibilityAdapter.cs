@@ -27,12 +27,12 @@ namespace UnityGLTF.VisibilityHints
         }
 
         /// <summary>
-        /// Applies one renderer instance's node and primitive predicates for one view with the given view tags.
+        /// Applies one renderer instance's node and primitive predicates for one view with the given role logic.
         /// Dispose the returned scope in a <c>finally</c> block immediately after that view renders. Call this
         /// independently for every descendant renderer; every ancestor hint remains a restriction.
         /// </summary>
         public IDisposable ApplyForView(
-            Renderer renderer, IReadOnlyCollection<string> viewTags, bool ancestorInclusiveCoreVisible)
+            Renderer renderer, VisibilityRoleContext roles, bool ancestorInclusiveCoreVisible)
         {
             if (renderer == null) throw new ArgumentNullException(nameof(renderer));
             var controller = GetComponent<ViewContextController>();
@@ -53,7 +53,7 @@ namespace UnityGLTF.VisibilityHints
                 for (int subMesh = 0; subMesh < replacement.Length; subMesh++)
                 {
                     if (controller.ShouldRenderPrimitiveForView(
-                            renderer, subMesh, viewTags, ancestorInclusiveCoreVisible))
+                            renderer, subMesh, roles, ancestorInclusiveCoreVisible))
                         continue;
                     if (_noDrawMaterial == null)
                         throw new InvalidOperationException(
@@ -65,7 +65,7 @@ namespace UnityGLTF.VisibilityHints
 
                 bool disableShadows = renderer.shadowCastingMode != ShadowCastingMode.Off
                     && !controller.ShouldRenderNodeForView(
-                        renderer.transform, viewTags, ancestorInclusiveCoreVisible);
+                        renderer.transform, roles, ancestorInclusiveCoreVisible);
                 if (replacedSlots.Count == 0 && !disableShadows)
                     return new EmptyScope(() => _activeRenderers.Remove(renderer));
 
@@ -91,7 +91,7 @@ namespace UnityGLTF.VisibilityHints
         /// <summary>Scopes every supplied renderer for one view and restores them in reverse order.</summary>
         public IDisposable ApplyForView(
             IReadOnlyList<Renderer> renderers,
-            IReadOnlyCollection<string> viewTags,
+            VisibilityRoleContext roles,
             Func<Transform, bool> ancestorInclusiveCoreVisibility)
         {
             if (renderers == null) throw new ArgumentNullException(nameof(renderers));
@@ -104,7 +104,7 @@ namespace UnityGLTF.VisibilityHints
                 {
                     if (renderer == null) continue;
                     scopes.Add(ApplyForView(
-                        renderer, viewTags, ancestorInclusiveCoreVisibility(renderer.transform)));
+                        renderer, roles, ancestorInclusiveCoreVisibility(renderer.transform)));
                 }
                 return new CompositeScope(scopes);
             }
@@ -123,7 +123,7 @@ namespace UnityGLTF.VisibilityHints
         /// </summary>
         public IDisposable ApplyLightsForView(
             IReadOnlyList<Light> lights,
-            IReadOnlyCollection<string> viewTags,
+            VisibilityRoleContext roles,
             Func<Transform, bool> ancestorInclusiveCoreVisibility)
         {
             if (lights == null) throw new ArgumentNullException(nameof(lights));
@@ -143,7 +143,7 @@ namespace UnityGLTF.VisibilityHints
                             "Overlapping visibility-light scopes for one light are unsupported.");
                     bool keep = !light.enabled
                         || controller.ShouldRenderNodeForView(
-                            light.transform, viewTags, ancestorInclusiveCoreVisibility(light.transform));
+                            light.transform, roles, ancestorInclusiveCoreVisibility(light.transform));
                     var activeLight = light;
                     _activeLights.Add(activeLight);
                     void Release() => _activeLights.Remove(activeLight);
