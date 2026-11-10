@@ -5,6 +5,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+- change: suppressions follow glTF-private #251 (spec 314c95c5): attenuations that share a target are summed and clamped, `v[t] = u[t] * (1 - clamp(sum, 0, 1))`, instead of multiplying factors; an unsupported custom type contributes 0; `ExpressionDriverPipeline.Attenuation` replaces `SuppressionFactor` (kept as an obsolete shim); the optional suppression `name` is read, kept (`SuppressionEntry.Name` / `HasName`) and written back, and never used to resolve the target
 - add: KHR Character extension support (Khronos glTF PR #2512, `KHR_character*`) — non-ratified, disabled by default
 - add: export of `KHR_character`, `KHR_character_expression` (+ `_morphtarget` / `_joint` / `_texture_transform` / `_suppression` / `_mapping`), `KHR_character_skeleton_mapping`, and `KHR_character_reference_pose` — joints and the reference pose export as native TRS; morph weights and texture (UV-transform / index-swap) channels export via `KHR_animation_pointer`
 - add: runtime rig-mode switcher (`SkeletonMap.SwitchRigMode`) to toggle an imported character between Generic and a Mecanim humanoid Avatar without re-importing

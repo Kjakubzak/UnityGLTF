@@ -318,6 +318,8 @@ namespace UnityGLTF.KhrCharacter
                     SourceIndex = entry.SourceIndex,
                     Type = entry.Type,
                     CustomType = entry.CustomType,
+                    Name = entry.Name,
+                    HasName = entry.HasName,
                     RawExtensionsJson = entry.RawExtensionsJson,
                     RawExtrasJson = entry.RawExtrasJson,
                     RawAdditionalPropertiesJson = entry.RawAdditionalPropertiesJson,

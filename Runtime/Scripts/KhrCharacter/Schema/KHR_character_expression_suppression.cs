@@ -26,6 +26,12 @@ namespace GLTF.Schema
             /// <summary>Required index of the attenuated expression; -1 when absent.</summary>
             public int Target = -1;
 
+            /// <summary>
+            /// Optional name of this suppression, or null when omitted. It names the suppression only; consumers
+            /// resolve the suppressed expression by <see cref="Target"/>, never by this value.
+            /// </summary>
+            public string Name;
+
             /// <summary><c>"blend"</c>, <c>"block"</c> or a vendor-qualified custom token; null when omitted (blend).</summary>
             public string Type;
 
@@ -38,7 +44,7 @@ namespace GLTF.Schema
             public JObject Extensions;        // preserved companion and unrelated extension payloads
             public JToken Extras;
 
-            /// <summary>Members this extension does not define, such as a legacy <c>name</c>, preserved verbatim.</summary>
+            /// <summary>Members this extension does not define, preserved verbatim.</summary>
             public JObject AdditionalProperties;
         }
 
@@ -66,9 +72,12 @@ namespace GLTF.Schema
                 foreach (var node in arr)
                 {
                     if (!(node is JObject s)) continue;
+                    // A non-string name is invalid; it stays an unknown member rather than being coerced.
+                    bool hasStringName = s["name"]?.Type == JTokenType.String;
                     ext.Suppressions.Add(new Suppression
                     {
                         Target = s["target"]?.Value<int>() ?? -1,
+                        Name = hasStringName ? s["name"].Value<string>() : null,
                         Type = s["type"]?.Value<string>(),
                         Amount = s["amount"]?.Value<double>(),
                         Threshold = s["threshold"]?.Value<double>(),
@@ -76,8 +85,11 @@ namespace GLTF.Schema
                             ? (JObject)suppressionExtensions.DeepClone()
                             : null,
                         Extras = s["extras"]?.DeepClone(),
-                        AdditionalProperties = GetAdditionalProperties(
-                            s, "target", "type", "amount", "threshold", "extensions", "extras"),
+                        AdditionalProperties = hasStringName
+                            ? GetAdditionalProperties(
+                                s, "target", "name", "type", "amount", "threshold", "extensions", "extras")
+                            : GetAdditionalProperties(
+                                s, "target", "type", "amount", "threshold", "extensions", "extras"),
                     });
                 }
             }
@@ -97,6 +109,8 @@ namespace GLTF.Schema
                         : new JObject();
                     if (s.Target >= 0) so["target"] = s.Target;
                     else so.Remove("target");
+                    // A null name leaves any name preserved among the additional properties untouched.
+                    if (s.Name != null) so["name"] = s.Name;
                     if (s.Type != null) so["type"] = s.Type;
                     else so.Remove("type");
                     if (s.Amount.HasValue) so["amount"] = s.Amount.Value;
@@ -147,6 +161,7 @@ namespace GLTF.Schema
                 clone.Add(new Suppression
                 {
                     Target = suppression.Target,
+                    Name = suppression.Name,
                     Type = suppression.Type,
                     Amount = suppression.Amount,
                     Threshold = suppression.Threshold,

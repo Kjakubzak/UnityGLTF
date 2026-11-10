@@ -1057,6 +1057,9 @@ namespace UnityGLTF.KhrCharacter
                     suppressions.Add(new KHR_character_expression_suppression.Suppression
                     {
                         Target = targetIndex,
+                        Name = suppression.HasName || !string.IsNullOrEmpty(suppression.Name)
+                            ? suppression.Name ?? string.Empty
+                            : null,
                         Type = SuppressionTypeToken(suppression),
                         Amount = WritesAmount(suppression) ? suppression.Amount : (double?)null,
                         Threshold = WritesThreshold(suppression) ? suppression.Threshold : (double?)null,
