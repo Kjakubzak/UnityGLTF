@@ -336,6 +336,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         {
             var ext = ParseExpressionProvenanceToken();
             var item = ext.Expressions[0];
+            Assert.AreEqual("original", item.Suppression.Suppressions[0].Name, "name is a defined optional member");
 
             item.Name = "edited";
             item.Animation = 7;
@@ -380,7 +381,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(14, texture["futureTextureField"].Value<int>());
 
             Assert.AreEqual("original", suppressionEntry["name"].Value<string>(),
-                "a legacy suppression name is an unknown member, preserved verbatim");
+                "the optional suppression name is preserved verbatim");
             Assert.AreEqual("block", suppressionEntry["type"].Value<string>());
             Assert.AreEqual(0.75, suppressionEntry["amount"].Value<double>());
             Assert.AreEqual(0.5, suppressionEntry["threshold"].Value<double>());

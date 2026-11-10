@@ -177,7 +177,7 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void ACustomTypeHasFactorOne()
+        public void ACustomTypeContributesNoAttenuation()
         {
             var custom = Suppression(0, SuppressionType.Identity, amount: 0.25d, threshold: 0.1d);
             custom.CustomType = "ACME_expression_suppression_curve";
@@ -186,7 +186,23 @@ namespace UnityGLTF.KhrCharacter.Tests
             var snapshot = ExpressionDriverPipeline.BuildSnapshot(new double?[] { 0.7d, 1d }, suppressions);
 
             Assert.That(snapshot.V, Is.EqualTo(new[] { 0.7d, 1d }));
-            Assert.That(ExpressionDriverPipeline.SuppressionFactor(custom, 1d), Is.EqualTo(1d));
+            Assert.That(ExpressionDriverPipeline.Attenuation(custom, 1d), Is.EqualTo(0d));
+        }
+
+        [Test]
+        public void ACustomTypeAddsNothingToTheSumOfItsTarget()
+        {
+            var custom = Suppression(0, SuppressionType.Identity, amount: 1d);
+            custom.CustomType = "ACME_expression_suppression_curve";
+            var suppressions = new IReadOnlyList<SuppressionEntry>[]
+            {
+                null,
+                new[] { Suppression(0, SuppressionType.Blend, amount: 0.5d), custom },
+            };
+
+            var snapshot = ExpressionDriverPipeline.BuildSnapshot(new double?[] { 1d, 1d }, suppressions);
+
+            Assert.That(snapshot.V[0], Is.EqualTo(0.5d), "only the blend attenuates");
         }
 
         [Test]
@@ -197,9 +213,87 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.IsFalse(blend.HasAmount);
             Assert.IsFalse(block.HasThreshold);
 
-            Assert.That(ExpressionDriverPipeline.SuppressionFactor(blend, 0.25d), Is.EqualTo(0.75d));
-            Assert.That(ExpressionDriverPipeline.SuppressionFactor(block, 0.01d), Is.EqualTo(0d));
-            Assert.That(ExpressionDriverPipeline.SuppressionFactor(block, 0d), Is.EqualTo(1d));
+            Assert.That(ExpressionDriverPipeline.Attenuation(blend, 0.25d), Is.EqualTo(0.25d));
+            Assert.That(ExpressionDriverPipeline.Attenuation(block, 0.01d), Is.EqualTo(1d));
+            Assert.That(ExpressionDriverPipeline.Attenuation(block, 0d), Is.EqualTo(0d));
+        }
+
+        [Test]
+        public void OverlappingBlendsSumTheirAttenuations()
+        {
+            // Blends of 0.4 and 0.5 on one target, both sources fully driven: the attenuations sum to 0.9, so
+            // v = 0.1 * u. The former product rule gave (1 - 0.4) * (1 - 0.5) = 0.3.
+            var suppressions = new IReadOnlyList<SuppressionEntry>[]
+            {
+                null,
+                new[] { Suppression(0, SuppressionType.Blend, amount: 0.4d) },
+                new[] { Suppression(0, SuppressionType.Blend, amount: 0.5d) },
+            };
+
+            var full = ExpressionDriverPipeline.BuildSnapshot(new double?[] { 1d, 1d, 1d }, suppressions);
+            var half = ExpressionDriverPipeline.BuildSnapshot(new double?[] { 0.5d, 1d, 1d }, suppressions);
+
+            Assert.That(full.V[0], Is.EqualTo(0.1d).Within(1e-12d));
+            Assert.That(full.V[0], Is.Not.EqualTo(0.3d).Within(1e-3d), "not the product of factors");
+            Assert.That(half.V[0], Is.EqualTo(0.05d).Within(1e-12d), "v = 0.1 * u");
+        }
+
+        [Test]
+        public void TheAttenuationSumIsClampedToOne()
+        {
+            // 0.6 + 0.6 = 1.2 clamps to 1 and fully suppresses the target (the product rule gave 0.16); a block
+            // above its threshold adds 1 to a partial blend, which also clamps to 1.
+            var blends = new IReadOnlyList<SuppressionEntry>[]
+            {
+                null,
+                new[] { Suppression(0, SuppressionType.Blend, amount: 0.6d) },
+                new[] { Suppression(0, SuppressionType.Blend, amount: 0.6d) },
+            };
+            var blendAndBlock = new IReadOnlyList<SuppressionEntry>[]
+            {
+                null,
+                new[] { Suppression(0, SuppressionType.Blend, amount: 0.5d) },
+                new[] { Suppression(0, SuppressionType.Block, amount: 1d, threshold: 0.2d) },
+            };
+
+            Assert.That(ExpressionDriverPipeline.BuildSnapshot(new double?[] { 1d, 1d, 1d }, blends).V[0],
+                Is.EqualTo(0d));
+            Assert.That(ExpressionDriverPipeline.BuildSnapshot(new double?[] { 1d, 0.5d, 0.6d }, blendAndBlock).V[0],
+                Is.EqualTo(0d));
+        }
+
+        [Test]
+        public void DuplicateSuppressionsFromOneSourceEachContribute()
+        {
+            var suppressions = new IReadOnlyList<SuppressionEntry>[]
+            {
+                null,
+                new[]
+                {
+                    Suppression(0, SuppressionType.Blend, amount: 0.25d),
+                    Suppression(0, SuppressionType.Blend, amount: 0.25d),
+                },
+            };
+
+            var snapshot = ExpressionDriverPipeline.BuildSnapshot(new double?[] { 1d, 1d }, suppressions);
+
+            Assert.That(snapshot.V[0], Is.EqualTo(0.5d));
+        }
+
+        [Test]
+        public void TheEffectiveDriversDoNotDependOnSuppressionOrder()
+        {
+            var a = Suppression(0, SuppressionType.Blend, amount: 0.1d);
+            var b = Suppression(0, SuppressionType.Blend, amount: 0.2d);
+            var c = Suppression(0, SuppressionType.Blend, amount: 0.3d);
+            var forward = new IReadOnlyList<SuppressionEntry>[] { null, new[] { a, b, c } };
+            var reverse = new IReadOnlyList<SuppressionEntry>[] { null, new[] { c, b, a } };
+
+            var u = new double?[] { 1d, 0.7d };
+            double first = ExpressionDriverPipeline.BuildSnapshot(u, forward).V[0];
+            double second = ExpressionDriverPipeline.BuildSnapshot(u, reverse).V[0];
+
+            Assert.That(BitConverter.DoubleToInt64Bits(first), Is.EqualTo(BitConverter.DoubleToInt64Bits(second)));
         }
 
         [Test]

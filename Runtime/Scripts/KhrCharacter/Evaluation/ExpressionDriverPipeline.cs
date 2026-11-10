@@ -21,7 +21,7 @@ namespace UnityGLTF.KhrCharacter
         public IReadOnlyList<double> U { get; }
 
         /// <summary>
-        /// The effective drivers, produced after every suppression factor has been evaluated from <see cref="U"/>.
+        /// The effective drivers, produced after every suppression attenuation has been evaluated from <see cref="U"/>.
         /// Each expression entry is evaluated with its value from this vector.
         /// </summary>
         public IReadOnlyList<double> V { get; }
@@ -58,9 +58,11 @@ namespace UnityGLTF.KhrCharacter
         }
 
         /// <summary>
-        /// Builds <c>v</c> from <c>u</c>. Each target driver is multiplied by the factor of every suppression that
-        /// targets it, and every factor reads its source from <paramref name="u"/>, never from a suppressed value, so
-        /// cycles and self-suppression are well defined.
+        /// Builds <c>v</c> from <c>u</c>. For each target, the attenuation of every suppression that targets it is
+        /// summed, the sum is clamped to [0, 1], and <c>v[t] = u[t] * (1 - clamp(sum, 0, 1))</c>. Every attenuation
+        /// reads its source from <paramref name="u"/>, never from a suppressed value, so cycles and self-suppression
+        /// are well defined. The sum is exact in binary64 and rounded once, so <c>v</c> does not depend on the order
+        /// of entries or suppressions.
         /// </summary>
         /// <param name="u">The clamped pre-suppression drivers.</param>
         /// <param name="suppressionsByEntry">One suppression list per expression entry, holding the suppressions that
@@ -77,6 +79,7 @@ namespace UnityGLTF.KhrCharacter
                 throw new ArgumentException(
                     "There are more suppression lists than expression drivers.", nameof(suppressionsByEntry));
 
+            var attenuations = new List<double>[v.Length];
             for (int source = 0; source < suppressionsByEntry.Count; source++)
             {
                 var suppressions = suppressionsByEntry[source];
@@ -89,30 +92,51 @@ namespace UnityGLTF.KhrCharacter
                             nameof(suppressionsByEntry),
                             $"Suppression of expression {source} targets expression {suppression.TargetIndex}, " +
                             "which does not exist.");
-                    v[suppression.TargetIndex] *= SuppressionFactor(suppression, u[source]);
+                    var operands = attenuations[suppression.TargetIndex] ??
+                                   (attenuations[suppression.TargetIndex] = new List<double>());
+                    operands.Add(Attenuation(suppression, u[source]));
                 }
+            }
+
+            for (int target = 0; target < v.Length; target++)
+            {
+                if (attenuations[target] == null) continue;
+                var operands = attenuations[target].ToArray();
+                if (!ExactBinary64Sum.TrySum(operands, operands.Length, out double sum))
+                    throw new ArgumentOutOfRangeException(
+                        nameof(suppressionsByEntry), $"The attenuation sum of expression {target} is not finite.");
+                v[target] = u[target] * (1d - Math.Min(1d, Math.Max(0d, sum)));
             }
             return v;
         }
 
         /// <summary>
-        /// The factor of one suppression for its source's pre-suppression driver: <c>1 - amount * u</c> for blend,
-        /// <c>1 - amount</c> when <c>u</c> is strictly above the threshold for block, and 1 for a custom type, whose
-        /// companion this implementation does not support.
+        /// The attenuation one suppression contributes to its target for its source's pre-suppression driver:
+        /// <c>amount * u</c> for blend, <c>amount</c> when <c>u</c> is strictly above the threshold for block (0
+        /// otherwise), and 0 for a custom type, whose companion this implementation does not support.
         /// </summary>
-        public static double SuppressionFactor(SuppressionEntry suppression, double sourceDriver)
+        public static double Attenuation(SuppressionEntry suppression, double sourceDriver)
         {
             if (suppression == null) throw new ArgumentNullException(nameof(suppression));
             switch (suppression.Type)
             {
                 case SuppressionType.Blend:
-                    return 1d - suppression.Amount * sourceDriver;
+                    return suppression.Amount * sourceDriver;
                 case SuppressionType.Block:
-                    return sourceDriver > suppression.Threshold ? 1d - suppression.Amount : 1d;
+                    return sourceDriver > suppression.Threshold ? suppression.Amount : 0d;
                 default:
-                    return 1d;
+                    return 0d;
             }
         }
+
+        /// <summary>
+        /// <c>1 - </c><see cref="Attenuation"/>. Suppressions no longer multiply: the attenuations that share a
+        /// target are summed and clamped before they are applied (see <see cref="ApplySuppressions"/>), so this value
+        /// is the effect of one suppression only when it is the sole suppression of its target.
+        /// </summary>
+        [Obsolete("Suppressions sum attenuations per target and clamp the sum; use Attenuation and ApplySuppressions.")]
+        public static double SuppressionFactor(SuppressionEntry suppression, double sourceDriver)
+            => 1d - Attenuation(suppression, sourceDriver);
 
         /// <summary>Builds the driver snapshot: <c>u</c> from the supplied drivers, then <c>v</c> by suppression.</summary>
         /// <param name="supplied">The host's final native drivers by expression index.</param>

@@ -62,14 +62,17 @@ ordinary content, because additional characters are out of scope for one asset.
 
 ## Suppressions
 
-`KHR_character_expression_suppression` objects carry `target`, `type`, `amount` and `threshold`. Import keeps the
+`KHR_character_expression_suppression` objects carry `target`, an optional `name`, `type`, `amount` and
+`threshold`. Import keeps the
 authored `amount` and `threshold` as JSON doubles together with whether each was present
 (`SuppressionEntry.HasAmount` / `HasThreshold`); an omitted value reads as `1` or `0`. Export writes back what was
 authored: `amount` when its flag is set or it differs from `1`, and `threshold` when its flag is set or it differs from
 `0`. A value omitted on import keeps its default and stays omitted, while a non-default value whose flag is clear
 (pre-rename serialized masks, inspector or code edits) is still written, because the runtime applies it. A threshold is
 never written on a `blend` or omitted type. A custom type keeps its token and its uninterpreted `amount` and
-`threshold`. A legacy suppression `name` is an unknown member: preserved, never compared with the target.
+`threshold`. The optional `name` (`SuppressionEntry.Name` / `HasName`) names the suppression itself: it is kept and
+written back when authored, never compared with the target expression's name, and never used to resolve the target,
+which is always `target`.
 
 ## Expression import and validation
 
@@ -122,10 +125,14 @@ never writes scene objects; applying the results and mixing them with other writ
 
 1. **Driver snapshot.** `BuildSnapshot(finalNativeDrivers)` takes the host's final native drivers by expression index,
    after any input mapping and arbitration. Each supplied driver must be finite and is clamped to `[0, 1]`; an absent
-   driver is `0`. That vector `u` is turned into the effective vector `v` by every entry's suppressions: a `blend`
-   factor is `1 - amount * u[source]`, a `block` factor is `1 - amount` when `u[source] > threshold` and `1`
-   otherwise, and a custom type has factor `1`. Every factor reads `u`, so cycles and self-suppression are well
-   defined. `ExpressionDriverSnapshot.U` and `V` expose both vectors.
+   driver is `0`. That vector `u` is turned into the effective vector `v` by every entry's suppressions. Each
+   suppression contributes an attenuation (`ExpressionDriverPipeline.Attenuation`): `amount * u[source]` for
+   `blend`, `amount` when `u[source] > threshold` and `0` otherwise for `block`, and `0` for a custom type, whose
+   companion this package does not support. The attenuations of all suppressions that share a target are summed
+   (exactly, in binary64), the sum is clamped to `[0, 1]`, and `v[t] = u[t] * (1 - clamp(sum, 0, 1))`. Overlapping
+   blends of `0.4` and `0.5` therefore give `v = 0.1 * u`, not the `0.3 * u` of the former product rule. Every
+   attenuation reads `u`, so cycles and self-suppression are well defined and the result does not depend on order.
+   `ExpressionDriverSnapshot.U` and `V` expose both vectors.
 2. **Sampling and composition.** `Compose(snapshot)` evaluates every entry with `v[i]` at `t = v[i] * T` and composes
    all responses in one step (`ExpressionComposer`). Each response record carries its sample `s` and the same channel
    sampled at time zero, `n` (`ExpressionResponseRecord.NeutralValue`). An additive component is `b + sum(s - n)`,

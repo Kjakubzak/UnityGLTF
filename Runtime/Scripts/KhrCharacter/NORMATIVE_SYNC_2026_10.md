@@ -1,7 +1,17 @@
 # October 2026 normative synchronization
 
-Specification: `Kjakubzak/glTF-private@9dc0781cebd1a24a0869aa98d2a3b902754ecd92`.
+Specification: `Kjakubzak/glTF-private@9dc0781cebd1a24a0869aa98d2a3b902754ecd92`, updated below to
+`avatar_ext_normative@314c95c5` (the payload of KhronosGroup/glTF#2512 at 7ab5368a).
 Package baseline: `Kjakubzak/UnityGLTF avatar_ext_normative@a7fb6367963ed553540a96c19730df8475a0dfff`.
+
+## Changes for specification 314c95c5
+
+- **Suppression sums and clamps (glTF-private #251).** Each suppression contributes an attenuation: `amount * u[src]`
+  for `blend`, `amount` when `u[src] > threshold` (else `0`) for `block`, and `0` for an unsupported custom type.
+  Per target, `v[t] = u[t] * (1 - clamp(sum, 0, 1))`; factors are no longer multiplied. `ExpressionDriverPipeline.
+  Attenuation` replaces `SuppressionFactor`, which remains as an obsolete `1 - Attenuation` shim. The optional
+  suppression `name` is now a defined member (`SuppressionEntry.Name` / `HasName`), preserved and re-exported, never
+  used to resolve the target.
 
 ## Current expression mapping
 

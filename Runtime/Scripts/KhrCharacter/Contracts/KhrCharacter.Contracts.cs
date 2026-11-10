@@ -25,8 +25,8 @@ namespace UnityGLTF.KhrCharacter
     public enum TextureTransformTarget { Combined, Scale, Offset }
 
     /// <summary>
-    /// Suppression factor kind. <see cref="Identity"/> is a custom type without supported companion semantics,
-    /// which contributes a factor of 1.
+    /// Suppression kind. <see cref="Identity"/> is a custom type without supported companion semantics, which
+    /// contributes an attenuation of 0 and so leaves its target unchanged.
     /// </summary>
     public enum SuppressionType { Blend, Block, Identity }
 
@@ -105,6 +105,16 @@ namespace UnityGLTF.KhrCharacter
     {
         public int TargetIndex;          // expression index this suppression attenuates
         public SuppressionType Type;     // Custom types without supported companion semantics use Identity
+
+        /// <summary>
+        /// Optional name of the suppression itself; null or empty when not authored. It is a label only: it is never
+        /// compared with the target expression's name and never used to resolve the target.
+        /// </summary>
+        public string Name;
+
+        /// <summary>Whether <see cref="Name"/> was authored (an authored name may be the empty string).</summary>
+        public bool HasName;
+
         public string CustomType;        // Preserved application-defined type; null for blend/block
         public string RawExtensionsJson; // Preserved same-object companion/unrelated extension payloads
         public string RawExtrasJson;     // Preserved suppression extras payload

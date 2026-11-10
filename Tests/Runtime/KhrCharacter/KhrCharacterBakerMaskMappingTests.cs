@@ -132,24 +132,27 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
-        public void BuildSuppressionEntries_LegacyNameIsIgnoredWithoutWarning()
+        public void BuildSuppressionEntries_NameIsKeptButNeverResolved()
         {
             var suppression = KHR_character_expression_suppression.FromJson(new JObject
             {
                 { "suppressions", new JArray
                     {
                         new JObject { { "target", 1 }, { "name", "not-the-target-name" }, { "type", "blend" } },
+                        new JObject { { "target", 1 }, { "type", "blend" } },
                     }
                 },
             });
 
             var entries = KhrCharacterBaker.BuildSuppressionEntries(suppression, sourceIndex: 0, WireToTrackIndex);
 
-            Assert.AreEqual(1, entries.Length);
-            Assert.AreEqual(1, entries[0].TargetIndex);
-            Assert.AreEqual("not-the-target-name",
-                JObject.Parse(entries[0].RawAdditionalPropertiesJson)["name"].Value<string>(),
-                "a legacy name is an unknown member: preserved verbatim, never compared");
+            Assert.AreEqual(2, entries.Length);
+            Assert.AreEqual(1, entries[0].TargetIndex, "the target index resolves the suppression, not the name");
+            Assert.AreEqual("not-the-target-name", entries[0].Name);
+            Assert.IsTrue(entries[0].HasName);
+            Assert.IsNull(entries[0].RawAdditionalPropertiesJson, "name is a defined member, not an unknown one");
+            Assert.IsNull(entries[1].Name, "name is optional");
+            Assert.IsFalse(entries[1].HasName);
             LogAssert.NoUnexpectedReceived();
         }
 

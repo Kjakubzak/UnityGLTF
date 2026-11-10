@@ -768,6 +768,8 @@ namespace UnityGLTF.KhrCharacter
                         SourceIndex = sourceIndex,
                         Type = isBlock ? SuppressionType.Block : isBlend ? SuppressionType.Blend : SuppressionType.Identity,
                         CustomType = isBlend || isBlock ? null : type,
+                        Name = s.Name,
+                        HasName = s.Name != null,
                         RawExtensionsJson = s.Extensions?.ToString(Newtonsoft.Json.Formatting.None),
                         RawExtrasJson = s.Extras?.ToString(Newtonsoft.Json.Formatting.None),
                         RawAdditionalPropertiesJson = s.AdditionalProperties?.ToString(

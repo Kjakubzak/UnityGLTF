@@ -734,8 +734,8 @@ namespace UnityGLTF.KhrCharacter.Tests
             // suppressions[] carry { target (expression index), type, amount?, threshold? } — the inverse of
             // KhrCharacterBaker.BuildSuppressionEntries. Mirrors the spec example: "happy" blend-suppresses "aa";
             // "angry" block-suppresses "aa". Each suppressing expression also has a driver channel so its item is
-            // emitted. No suppression writes a name, a blend never writes a threshold, and only authored amounts
-            // and thresholds are written back.
+            // emitted. Only an authored suppression name is written, a blend never writes a threshold, and only
+            // authored amounts and thresholds are written back.
             var root = new GameObject("char");
             _created.Add(root);
             var ctrl = new GameObject("ctrl").transform;
@@ -768,12 +768,12 @@ namespace UnityGLTF.KhrCharacter.Tests
                         {
                             new SuppressionEntry
                             {
-                                TargetIndex = 0, Type = SuppressionType.Block,
+                                TargetIndex = 0, Type = SuppressionType.Block, Name = "angry_blocks_aa", HasName = true,
                                 Amount = 1, HasAmount = true, Threshold = 0.2, HasThreshold = true,
                             },
                         },
                     },
-                    new ExpressionTrack // index 3: application-defined type, factor 1 at runtime
+                    new ExpressionTrack // index 3: application-defined type, no attenuation at runtime
                     {
                         Name = "soft", Domains = ExpressionDomain.Joint, JointDrivers = new[] { TranslationDriver(ctrl) },
                         Suppressions = new[]
@@ -822,7 +822,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual("blend", happyWire["type"].Value<string>());
             Assert.AreEqual(0.5, happyWire["amount"].Value<double>());
             Assert.IsNull(happyWire["threshold"], "an exporter must not write a threshold on a blend suppression");
-            Assert.IsNull(happyWire["name"], "suppressions carry no name");
+            Assert.IsNull(happyWire["name"], "an unauthored suppression name is not written");
 
             // "angry": one block suppression on "aa", threshold 0.2.
             var angry = ext.Expressions.Find(e => e.Name == "angry");
@@ -830,7 +830,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual("block", angryWire["type"].Value<string>());
             Assert.AreEqual(1d, angryWire["amount"].Value<double>());
             Assert.AreEqual(0.2, angryWire["threshold"].Value<double>());
-            Assert.IsNull(angryWire["name"]);
+            Assert.AreEqual("angry_blocks_aa", angryWire["name"].Value<string>(), "an authored name is written");
 
             // Round-trip through the real import baker: exported suppressions resolve back to the original entries.
             var happyEntries = KhrCharacterBaker.BuildSuppressionEntries(
@@ -847,6 +847,7 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.AreEqual(nameToIndex["aa"], angryEntries[0].TargetIndex);
             Assert.AreEqual(SuppressionType.Block, angryEntries[0].Type);
             Assert.AreEqual(0.2, angryEntries[0].Threshold);
+            Assert.AreEqual("angry_blocks_aa", angryEntries[0].Name);
 
             // The custom type keeps its token and writes back the exact authored doubles it does not interpret.
             var soft = ext.Expressions.Find(e => e.Name == "soft");
