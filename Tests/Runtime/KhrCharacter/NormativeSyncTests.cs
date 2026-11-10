@@ -233,28 +233,43 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.That(composition.Records[0].Value, Is.EqualTo(new[] { (double)last }));
         }
 
+        // The visibility cases table of KHR_node_visibility_hint (spec 314c95c5). "nologic" is an application with no
+        // role logic; otherwise the listed roles apply and the application has logic for both standard roles.
+        [TestCase("", "third_person", "nologic", true)]
+        [TestCase("", "first_person", "nologic", true)]
+        [TestCase("", "first_person", "third_person", false)]
         [TestCase("third_person", "always", "first_person", false)]
         [TestCase("third_person", "always", "third_person", true)]
         [TestCase("third_person", "first_person", "first_person", false)]
-        [TestCase("third_person", "first_person", "third_person", false)]
         [TestCase("third_person", "first_person", "first_person,third_person", true)]
-        [TestCase("ACME_unknown", "always", "third_person", false)]
-        public void AncestorPredicatesConjoinPerView(string parentRole, string childRole, string tags, bool expected)
+        [TestCase("", "first_person,ACME_mirror_only", "third_person", false)]
+        [TestCase("", "ACME_mirror_only", "third_person", true)]
+        [TestCase("", "ACME_mirror_only", "first_person", true)]
+        [TestCase("ACME_unknown", "always", "third_person", true)]
+        public void AncestorPredicatesConjoinPerView(string parentRoles, string childRoles, string applied, bool expected)
         {
             var root = Object("root");
             var parent = Object("parent"); parent.transform.SetParent(root.transform, false);
             var child = Object("child"); child.transform.SetParent(parent.transform, false);
             var hints = root.AddComponent<NodeVisibilityHintSet>();
-            hints.Bind(new[]
+            var entries = new List<NodeVisibilityHintSet.NodeVisibilityEntry>
             {
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = parent.transform, Role = parentRole },
-                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = child.transform, Role = childRole },
-            });
-            Assert.That(hints.IsHintVisible(child.transform, tags.Split(',')), Is.EqualTo(expected));
-            Assert.AreEqual(childRole, hints.ResolveRole(child.transform), "metadata retains the authored nearest role");
+                new NodeVisibilityHintSet.NodeVisibilityEntry { Node = child.transform, Roles = childRoles.Split(',') },
+            };
+            if (parentRoles.Length > 0)
+                entries.Add(new NodeVisibilityHintSet.NodeVisibilityEntry
+                    { Node = parent.transform, Roles = parentRoles.Split(',') });
+            hints.Bind(entries);
+            var roles = applied == "nologic"
+                ? VisibilityRoleContext.NoLogic
+                : new VisibilityRoleContext(applied.Split(','), new[] { "first_person", "third_person" });
+
+            Assert.That(hints.IsHintVisible(child.transform, roles), Is.EqualTo(expected));
+            CollectionAssert.AreEqual(childRoles.Split(','), hints.ResolveRoles(child.transform),
+                "metadata retains the authored nearest roles");
             Assert.IsTrue(child.activeInHierarchy);
-            Assert.IsFalse(VisibilityHintEvaluator.ShouldRenderPrimitiveInstance(false, "always", tags.Split(','), true));
-            Assert.IsFalse(VisibilityHintEvaluator.ShouldRenderPrimitiveInstance(true, "always", tags.Split(','), false));
+            Assert.IsFalse(VisibilityHintEvaluator.ShouldRenderPrimitiveInstance(false, new[] { "always" }, roles, true));
+            Assert.IsFalse(VisibilityHintEvaluator.ShouldRenderPrimitiveInstance(true, new[] { "always" }, roles, false));
         }
 
         [Test]

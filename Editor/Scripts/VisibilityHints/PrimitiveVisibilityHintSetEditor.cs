@@ -7,7 +7,7 @@ namespace UnityGLTF.VisibilityHints.Editor
 {
     /// <summary>
     /// Editable inspector for <see cref="PrimitiveVisibilityHintSet"/>. Lists per-primitive hints (shared Mesh +
-    /// sub-mesh index, role, optional label) and lets you add / edit / remove them. A "Collect child renderers"
+    /// sub-mesh index, roles, optional label) and lets you add / edit / remove them. A "Collect child renderers"
     /// button (in the style of <c>MaterialVariants</c>) scans the subtree and appends any missing
     /// <c>(mesh, sub-mesh)</c> slots defaulting to role <c>always</c> for you to set. Entries are written through
     /// the serialized backing list, so edits are undoable and never trigger runtime resolution.
@@ -36,7 +36,7 @@ namespace UnityGLTF.VisibilityHints.Editor
                     }
                     EditorGUILayout.PropertyField(element.FindPropertyRelative("Mesh"), new GUIContent("Mesh"));
                     EditorGUILayout.PropertyField(element.FindPropertyRelative("SubMesh"), new GUIContent("Sub Mesh"));
-                    NodeVisibilityHintSetEditor.DrawRolePopup(element.FindPropertyRelative("Role"));
+                    NodeVisibilityHintSetEditor.DrawRoles(element.FindPropertyRelative("Roles"));
                     EditorGUILayout.PropertyField(element.FindPropertyRelative("Label"), new GUIContent("Label"));
                 }
             }
@@ -57,8 +57,8 @@ namespace UnityGLTF.VisibilityHints.Editor
             EditorGUILayout.HelpBox(
                 "A primitive hint targets a shared Mesh + sub-mesh index, so it applies to every renderer that uses " +
                 "that mesh. \"Collect child renderers\" appends any missing (mesh, sub-mesh) slots as role \"always\"; " +
-                "set the ones you want to first_person / third_person. Custom roles are hidden unless the host " +
-                "supports them through a resolver. Enable the \"KHR Visibility Hints (View Context)\" export plugin " +
+                "set the ones you want to first_person / third_person. A host ignores custom roles it does not " +
+                "recognize. Enable the \"KHR Visibility Hints (View Context)\" export plugin " +
                 "to write these hints to glTF.",
                 MessageType.Info);
         }
@@ -66,7 +66,7 @@ namespace UnityGLTF.VisibilityHints.Editor
         private static string DisplayName(SerializedProperty element)
             => PrimitiveVisibilityHintSet.GetDisplayName(new PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry
             {
-                Role = element.FindPropertyRelative("Role").stringValue,
+                Roles = NodeVisibilityHintSetEditor.ReadRoles(element.FindPropertyRelative("Roles")),
                 Label = element.FindPropertyRelative("Label").stringValue,
             });
 
@@ -77,7 +77,7 @@ namespace UnityGLTF.VisibilityHints.Editor
             var el = entriesProp.GetArrayElementAtIndex(idx);
             el.FindPropertyRelative("Mesh").objectReferenceValue = null;
             el.FindPropertyRelative("SubMesh").intValue = 0;
-            el.FindPropertyRelative("Role").stringValue = VisibilityHintExtensionNames.RoleAlways;
+            NodeVisibilityHintSetEditor.WriteRoles(el.FindPropertyRelative("Roles"), VisibilityHintExtensionNames.RoleAlways);
             el.FindPropertyRelative("Label").stringValue = string.Empty;
             NodeVisibilityHintSetEditor.ResetPayload(el);
         }
@@ -107,7 +107,7 @@ namespace UnityGLTF.VisibilityHints.Editor
                     var el = entriesProp.GetArrayElementAtIndex(idx);
                     el.FindPropertyRelative("Mesh").objectReferenceValue = mesh;
                     el.FindPropertyRelative("SubMesh").intValue = sub;
-                    el.FindPropertyRelative("Role").stringValue = VisibilityHintExtensionNames.RoleAlways;
+                    NodeVisibilityHintSetEditor.WriteRoles(el.FindPropertyRelative("Roles"), VisibilityHintExtensionNames.RoleAlways);
                     el.FindPropertyRelative("Label").stringValue = string.Empty;
                     NodeVisibilityHintSetEditor.ResetPayload(el);
                 }

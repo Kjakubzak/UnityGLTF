@@ -9,21 +9,19 @@ namespace UnityGLTF.VisibilityHints
     /// <summary>
     /// Per-import instance that reads visibility hints into queryable metadata components. The shared
     /// <see cref="ViewContextController"/> exposes pure per-view and per-instance predicates; it does not mutate
-    /// scene or rendering state.
+    /// scene or rendering state. The hints must never be listed in <c>extensionsRequired</c>; an asset that lists
+    /// them there is imported with a warning, never rejected, and the listing is not carried over to export.
+    /// A hint without a valid <c>roles</c> array imposes no restriction and is not imported.
     /// </summary>
     public class VisibilityHintImportContext : GLTFImportPluginContext
     {
         private readonly GLTFImportContext _context;
 
-        private readonly bool _hostSupportsRequiredNodeUse;
-        private readonly bool _hostSupportsRequiredPrimitiveUse;
         private readonly List<NodeHintRecord> _nodeHints = new List<NodeHintRecord>();
         // Per shared Unity mesh -> (sub-mesh index -> hint). Keying by the Unity mesh dedupes shared meshes.
         private readonly Dictionary<Mesh, Dictionary<int, HintPayload>> _primitiveHints
             = new Dictionary<Mesh, Dictionary<int, HintPayload>>();
         private readonly HashSet<Mesh> _meshesWithPrimitiveHints = new HashSet<Mesh>();
-        private bool _nodeHintRequired;
-        private bool _primitiveHintRequired;
         private HashSet<string> _requiredExtensions = new HashSet<string>();
 
         private sealed class NodeHintRecord
@@ -35,7 +33,7 @@ namespace UnityGLTF.VisibilityHints
 
         private sealed class HintPayload
         {
-            public string Role;
+            public string[] Roles;
             public string Label;
             public string ExtensionsJson;
             public string ExtrasJson;
@@ -43,21 +41,19 @@ namespace UnityGLTF.VisibilityHints
             public string[] RequiredCompanionExtensions;
         }
 
-        public VisibilityHintImportContext(
-            GLTFImportContext context,
-            bool hostSupportsRequiredNodeUse = false,
-            bool hostSupportsRequiredPrimitiveUse = false)
+        public VisibilityHintImportContext(GLTFImportContext context)
         {
             _context = context;
-            _hostSupportsRequiredNodeUse = hostSupportsRequiredNodeUse;
-            _hostSupportsRequiredPrimitiveUse = hostSupportsRequiredPrimitiveUse;
         }
 
+        /// <summary>
+        /// Accepts both hint extensions in <c>extensionsRequired</c> so that such an (invalid) listing never fails the
+        /// import closed; <see cref="OnAfterImportRoot"/> warns about it. The factories do the same when this plugin
+        /// is disabled.
+        /// </summary>
         public override bool SupportsRequiredExtension(string extensionName)
-            => (extensionName == VisibilityHintExtensionNames.NodeVisibilityHint
-                    && _hostSupportsRequiredNodeUse)
-               || (extensionName == VisibilityHintExtensionNames.MeshPrimitiveVisibilityHint
-                    && _hostSupportsRequiredPrimitiveUse);
+            => extensionName == VisibilityHintExtensionNames.NodeVisibilityHint
+               || extensionName == VisibilityHintExtensionNames.MeshPrimitiveVisibilityHint;
 
         public override bool CanDeduplicateMesh(Mesh mesh)
             => mesh == null || !_meshesWithPrimitiveHints.Contains(mesh);
@@ -75,10 +71,15 @@ namespace UnityGLTF.VisibilityHints
 
         public override void OnAfterImportRoot(GLTFRoot gltfRoot)
         {
-            _nodeHintRequired = gltfRoot?.ExtensionsRequired?.Contains(
-                VisibilityHintExtensionNames.NodeVisibilityHint) == true;
-            _primitiveHintRequired = gltfRoot?.ExtensionsRequired?.Contains(
-                VisibilityHintExtensionNames.MeshPrimitiveVisibilityHint) == true;
+            foreach (var name in new[]
+                     {
+                         VisibilityHintExtensionNames.NodeVisibilityHint,
+                         VisibilityHintExtensionNames.MeshPrimitiveVisibilityHint,
+                     })
+                if (gltfRoot?.ExtensionsRequired?.Contains(name) == true)
+                    Debug.LogWarning(
+                        $"[VisibilityHints] The asset lists {name} in extensionsRequired, which the specification " +
+                        "forbids. The hints are imported as optional metadata, and export never lists them as required.");
             _requiredExtensions = gltfRoot?.ExtensionsRequired != null
                 ? new HashSet<string>(gltfRoot.ExtensionsRequired)
                 : new HashSet<string>();
@@ -93,13 +94,13 @@ namespace UnityGLTF.VisibilityHints
                 && node.Extensions.TryGetValue(VisibilityHintExtensionNames.NodeVisibilityHint, out var nodeExt))
             {
                 var hint = AsNodeHint(nodeExt);
-                if (hint != null && nodeObject != null)
+                if (hint?.Roles != null && nodeObject != null)
                     _nodeHints.Add(new NodeHintRecord
                     {
                         Node = nodeObject.transform,
                         NodeUnnamed = string.IsNullOrEmpty(node.Name),
                         Payload = CreatePayload(
-                            hint.Role, hint.Label, hint.Extensions, hint.Extras, hint.AdditionalProperties),
+                            hint.Roles, hint.Label, hint.Extensions, hint.Extras, hint.AdditionalProperties),
                     });
             }
 
@@ -116,13 +117,13 @@ namespace UnityGLTF.VisibilityHints
                 if (!prim.Extensions.TryGetValue(VisibilityHintExtensionNames.MeshPrimitiveVisibilityHint, out var primExt))
                     continue;
                 var hint = AsPrimitiveHint(primExt);
-                if (hint == null) continue;
+                if (hint?.Roles == null) continue;
 
                 if (!_primitiveHints.TryGetValue(unityMesh, out var subMap))
                     _primitiveHints[unityMesh] = subMap = new Dictionary<int, HintPayload>();
                 _meshesWithPrimitiveHints.Add(unityMesh);
                 subMap[i] = CreatePayload(
-                    hint.Role, hint.Label, hint.Extensions, hint.Extras, hint.AdditionalProperties);
+                    hint.Roles, hint.Label, hint.Extensions, hint.Extras, hint.AdditionalProperties);
             }
         }
 
@@ -148,7 +149,7 @@ namespace UnityGLTF.VisibilityHints
                     {
                         Node = record.Node,
                         NodeUnnamed = record.NodeUnnamed,
-                        Role = payload.Role,
+                        Roles = payload.Roles,
                         Label = payload.Label,
                         ExtensionsJson = payload.ExtensionsJson,
                         ExtrasJson = payload.ExtrasJson,
@@ -159,7 +160,7 @@ namespace UnityGLTF.VisibilityHints
                 if (entries.Count > 0)
                 {
                     var set = sceneObject.GetComponent<NodeVisibilityHintSet>() ?? sceneObject.AddComponent<NodeVisibilityHintSet>();
-                    set.Bind(entries, _nodeHintRequired);
+                    set.Bind(entries);
                 }
             }
 
@@ -172,7 +173,7 @@ namespace UnityGLTF.VisibilityHints
                         {
                             Mesh = meshKv.Key,
                             SubMesh = subKv.Key,
-                            Role = subKv.Value.Role,
+                            Roles = subKv.Value.Roles,
                             Label = subKv.Value.Label,
                             ExtensionsJson = subKv.Value.ExtensionsJson,
                             ExtrasJson = subKv.Value.ExtrasJson,
@@ -182,7 +183,7 @@ namespace UnityGLTF.VisibilityHints
                 if (entries.Count > 0)
                 {
                     var set = sceneObject.GetComponent<PrimitiveVisibilityHintSet>() ?? sceneObject.AddComponent<PrimitiveVisibilityHintSet>();
-                    set.Bind(entries, _primitiveHintRequired);
+                    set.Bind(entries);
                 }
             }
         }
@@ -205,14 +206,14 @@ namespace UnityGLTF.VisibilityHints
         }
 
         private HintPayload CreatePayload(
-            string role,
+            string[] roles,
             string label,
             Newtonsoft.Json.Linq.JObject extensions,
             Newtonsoft.Json.Linq.JToken extras,
             Newtonsoft.Json.Linq.JObject additionalProperties)
             => new HintPayload
             {
-                Role = role,
+                Roles = roles != null ? (string[])roles.Clone() : null,
                 Label = label,
                 ExtensionsJson = extensions?.ToString(Formatting.None),
                 ExtrasJson = extras?.ToString(Formatting.None),

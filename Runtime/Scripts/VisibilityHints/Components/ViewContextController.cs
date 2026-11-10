@@ -1,106 +1,142 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace UnityGLTF.VisibilityHints
 {
     /// <summary>
-    /// Non-mutating facade for evaluating imported node and primitive visibility hints. The host gives each render
-    /// view zero or more view tags; a render integration queries each view and instance with its tags, then omits
-    /// content whose predicate is false. This component does not change renderers, materials, meshes, lights,
-    /// cameras, or authored visibility state.
+    /// Non-mutating facade for evaluating imported node and primitive visibility hints. For each render view and
+    /// asset instance the host supplies its role logic as a <see cref="VisibilityRoleContext"/> (which roles apply,
+    /// and which roles it has logic for); a render integration queries each view and instance, then omits content
+    /// whose predicate is false. This component does not change renderers, materials, meshes, lights, cameras, or
+    /// authored visibility state.
     /// </summary>
     [DisallowMultipleComponent]
-    public class ViewContextController : MonoBehaviour
+    public class ViewContextController : MonoBehaviour, ISerializationCallbackReceiver
     {
-        [SerializeField] private List<string> _defaultViewTags = new List<string>();
-        [SerializeField] private bool _renderUnsupportedRoles;
+        [SerializeField] private List<string> _defaultAppliedRoles = new List<string>();
+        [SerializeField] private List<string> _defaultRolesWithLogic = new List<string>();
+        [NonSerialized] private VisibilityRoleContext _defaultRoles;
 
-        /// <summary>Raised with the new tag list when <see cref="SetDefaultViewTags"/> changes it.</summary>
-        public event Action<IReadOnlyList<string>> OnDefaultViewTagsChanged;
+        // Default view tags serialized by earlier versions of this package; migrated to role logic after
+        // deserialization (see LegacyVisibilityMigration.TryMigrateViewTags) and then cleared.
+        [SerializeField, HideInInspector, FormerlySerializedAs("_defaultViewTags")]
+        private List<string> _legacyDefaultViewTags = new List<string>();
 
-        /// <summary>
-        /// View tags used by the convenience queries <see cref="ShouldRenderNode"/> and
-        /// <see cref="ShouldRenderPrimitive"/>. Empty by default, which is an untagged view: only <c>always</c> and
-        /// un-hinted content is visible there.
-        /// </summary>
-        public IReadOnlyList<string> DefaultViewTags
-            => _defaultViewTags ?? (IReadOnlyList<string>)Array.Empty<string>();
+        /// <summary>Raised with the new context when <see cref="SetDefaultRoles"/> changes it.</summary>
+        public event Action<VisibilityRoleContext> OnDefaultRolesChanged;
 
         /// <summary>
-        /// Application override of the role-support rule. When false (the default), content whose resolved role is
-        /// unsupported (a custom role that <see cref="CustomRoleResolver"/> does not resolve) is hidden.
+        /// Role logic used by the convenience queries <see cref="ShouldRenderNode"/> and
+        /// <see cref="ShouldRenderPrimitive"/>. <see cref="VisibilityRoleContext.NoLogic"/> by default, so an
+        /// application without role logic hides nothing.
         /// </summary>
-        public bool RenderUnsupportedRoles
+        public VisibilityRoleContext DefaultRoles
+            => _defaultRoles ?? (_defaultRoles = HasNoRoles(_defaultAppliedRoles) && HasNoRoles(_defaultRolesWithLogic)
+                ? VisibilityRoleContext.NoLogic
+                : new VisibilityRoleContext(_defaultAppliedRoles, _defaultRolesWithLogic));
+
+        /// <summary>
+        /// Replaces the default role logic; null restores <see cref="VisibilityRoleContext.NoLogic"/>. Raises
+        /// <see cref="OnDefaultRolesChanged"/> only when the applied roles or the roles with logic change.
+        /// </summary>
+        public void SetDefaultRoles(VisibilityRoleContext roles)
         {
-            get => _renderUnsupportedRoles;
-            set => _renderUnsupportedRoles = value;
+            roles = roles ?? VisibilityRoleContext.NoLogic;
+            var current = DefaultRoles;
+            if (SameSet(current.AppliedRoles, roles.AppliedRoles) && SameSet(current.RolesWithLogic, roles.RolesWithLogic))
+                return;
+            _defaultAppliedRoles = new List<string>(roles.AppliedRoles);
+            var withLogic = new List<string>();
+            foreach (var role in roles.RolesWithLogic)
+                if (!_defaultAppliedRoles.Contains(role)) withLogic.Add(role);
+            _defaultRolesWithLogic = withLogic;
+            _defaultRoles = roles;
+            OnDefaultRolesChanged?.Invoke(roles);
         }
 
-        /// <summary>
-        /// Optional resolver for custom roles defined by a separate specification or application profile. Not
-        /// serialized; the host assigns it at runtime.
-        /// </summary>
-        public IVisibilityRoleResolver CustomRoleResolver { get; set; }
-
-        /// <summary>
-        /// Replaces the default view tags. Null and empty strings are ignored and duplicates are kept once, in order.
-        /// Raises <see cref="OnDefaultViewTagsChanged"/> only when the list changes.
-        /// </summary>
-        public void SetDefaultViewTags(IEnumerable<string> tags)
-        {
-            var next = new List<string>();
-            if (tags != null)
-                foreach (var tag in tags)
-                    if (!string.IsNullOrEmpty(tag) && !next.Contains(tag)) next.Add(tag);
-
-            if (_defaultViewTags != null && _defaultViewTags.Count == next.Count)
-            {
-                bool same = true;
-                for (int i = 0; i < next.Count && same; i++)
-                    same = string.Equals(_defaultViewTags[i], next[i], StringComparison.Ordinal);
-                if (same) return;
-            }
-            _defaultViewTags = next;
-            OnDefaultViewTagsChanged?.Invoke(next);
-        }
-
-        /// <summary>Node predicate for a view that carries <see cref="DefaultViewTags"/>.</summary>
+        /// <summary>Node predicate for a view with the <see cref="DefaultRoles"/>.</summary>
         public bool ShouldRenderNode(Transform node, bool ancestorInclusiveCoreVisible)
-            => ShouldRenderNodeForView(node, DefaultViewTags, ancestorInclusiveCoreVisible);
+            => ShouldRenderNodeForView(node, DefaultRoles, ancestorInclusiveCoreVisible);
 
         /// <summary>
-        /// Node predicate for one render view with explicit tags. Tags that differ per asset instance are passed
-        /// with each query.
+        /// Node predicate for one render view and instance with explicit role logic (null means
+        /// <see cref="VisibilityRoleContext.NoLogic"/>).
         /// </summary>
         public bool ShouldRenderNodeForView(
-            Transform node, IReadOnlyCollection<string> viewTags, bool ancestorInclusiveCoreVisible)
+            Transform node, VisibilityRoleContext roles, bool ancestorInclusiveCoreVisible)
         {
             var nodeHints = GetComponent<NodeVisibilityHintSet>();
-            return ancestorInclusiveCoreVisible && (nodeHints == null
-                || nodeHints.IsHintVisible(node, viewTags, CustomRoleResolver, _renderUnsupportedRoles));
+            return ancestorInclusiveCoreVisible && (nodeHints == null || nodeHints.IsHintVisible(node, roles));
         }
 
-        /// <summary>Primitive-instance predicate for a view that carries <see cref="DefaultViewTags"/>.</summary>
+        /// <summary>Primitive-instance predicate for a view with the <see cref="DefaultRoles"/>.</summary>
         public bool ShouldRenderPrimitive(
             Renderer renderer, int subMesh, bool ancestorInclusiveCoreVisible)
-            => ShouldRenderPrimitiveForView(renderer, subMesh, DefaultViewTags, ancestorInclusiveCoreVisible);
+            => ShouldRenderPrimitiveForView(renderer, subMesh, DefaultRoles, ancestorInclusiveCoreVisible);
 
-        /// <summary>Primitive-instance predicate for one render view with explicit tags.</summary>
+        /// <summary>
+        /// Primitive-instance predicate for one render view with explicit role logic: the primitive hint AND the
+        /// containing node's ancestor-inclusive hint AND core visibility.
+        /// </summary>
         public bool ShouldRenderPrimitiveForView(
             Renderer renderer,
             int subMesh,
-            IReadOnlyCollection<string> viewTags,
+            VisibilityRoleContext roles,
             bool ancestorInclusiveCoreVisible)
         {
             var nodeHints = GetComponent<NodeVisibilityHintSet>();
             var primitiveHints = GetComponent<PrimitiveVisibilityHintSet>();
-            bool nodeHintVisible = nodeHints == null || nodeHints.IsHintVisible(
-                renderer != null ? renderer.transform : null, viewTags, CustomRoleResolver, _renderUnsupportedRoles);
-            var primitiveRole = primitiveHints != null ? primitiveHints.ResolveRole(renderer, subMesh) : null;
+            bool nodeHintVisible = nodeHints == null
+                || nodeHints.IsHintVisible(renderer != null ? renderer.transform : null, roles);
+            var primitiveRoles = primitiveHints != null ? primitiveHints.ResolveRoles(renderer, subMesh) : null;
             return VisibilityHintEvaluator.ShouldRenderPrimitiveInstance(
-                nodeHintVisible, primitiveRole, viewTags, ancestorInclusiveCoreVisible,
-                CustomRoleResolver, _renderUnsupportedRoles);
+                nodeHintVisible, primitiveRoles, roles, ancestorInclusiveCoreVisible);
+        }
+
+        private void OnValidate() => _defaultRoles = null;
+
+        void ISerializationCallbackReceiver.OnBeforeSerialize() { }
+
+        void ISerializationCallbackReceiver.OnAfterDeserialize() => MigrateLegacyViewTags();
+
+        internal void MigrateLegacyViewTags()
+        {
+            if (LegacyVisibilityMigration.TryMigrateViewTags(
+                    _legacyDefaultViewTags, _defaultAppliedRoles, _defaultRolesWithLogic,
+                    out var applied, out var withLogic))
+            {
+                _defaultAppliedRoles = applied;
+                _defaultRolesWithLogic = withLogic;
+                _defaultRoles = null;
+            }
+            _legacyDefaultViewTags?.Clear();
+        }
+
+        /// <summary>Test hook: sets the legacy serialized view tags as an older scene would.</summary>
+        internal void SetLegacyDefaultViewTagsForTest(IEnumerable<string> tags)
+            => _legacyDefaultViewTags = tags != null ? new List<string>(tags) : new List<string>();
+
+        private static bool HasNoRoles(List<string> roles)
+        {
+            if (roles == null) return true;
+            foreach (var role in roles)
+                if (!string.IsNullOrEmpty(role)) return false;
+            return true;
+        }
+
+        private static bool SameSet(IReadOnlyList<string> a, IReadOnlyList<string> b)
+        {
+            if (a.Count != b.Count) return false;
+            foreach (var role in a)
+            {
+                bool found = false;
+                foreach (var other in b)
+                    if (string.Equals(role, other, StringComparison.Ordinal)) { found = true; break; }
+                if (!found) return false;
+            }
+            return true;
         }
     }
 }

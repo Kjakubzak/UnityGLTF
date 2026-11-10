@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace UnityGLTF.VisibilityHints
 {
@@ -11,7 +12,7 @@ namespace UnityGLTF.VisibilityHints
     public class NodeVisibilityHintSet : MonoBehaviour
     {
         [System.Serializable]
-        public class NodeVisibilityEntry
+        public class NodeVisibilityEntry : ISerializationCallbackReceiver
         {
             public Transform Node;
 
@@ -21,26 +22,41 @@ namespace UnityGLTF.VisibilityHints
             /// </summary>
             public bool NodeUnnamed;
 
-            public string Role;
+            /// <summary>The authored roles (alternatives; order has no meaning).</summary>
+            public string[] Roles;
             public string Label;
             public string ExtensionsJson;
             public string ExtrasJson;
             public string AdditionalPropertiesJson;
             public string[] RequiredCompanionExtensions;
+
+            /// <summary>
+            /// The single role serialized by earlier versions of this package (field <c>Role</c>). It is moved into
+            /// <see cref="Roles"/> after deserialization, with <c>third_person_only</c> and <c>first_person_only</c>
+            /// mapped to the standard roles, and is never exported.
+            /// </summary>
+            [SerializeField, HideInInspector, FormerlySerializedAs("Role")] internal string LegacyRole;
+
+            void ISerializationCallbackReceiver.OnBeforeSerialize() { }
+
+            void ISerializationCallbackReceiver.OnAfterDeserialize() => MigrateLegacyRole();
+
+            internal void MigrateLegacyRole()
+            {
+                Roles = LegacyVisibilityMigration.RolesWithLegacyRole(Roles, LegacyRole);
+                LegacyRole = null;
+            }
         }
 
         [SerializeField, HideInInspector] private List<NodeVisibilityEntry> _entries = new List<NodeVisibilityEntry>();
-        [SerializeField, HideInInspector] private bool _requiredOnImport;
         [System.NonSerialized] private Dictionary<Transform, NodeVisibilityEntry> _entryByNode;
         [System.NonSerialized] private bool _indexDirty = true;
 
         public IReadOnlyList<NodeVisibilityEntry> Entries => _entries;
-        public bool RequiredOnImport => _requiredOnImport;
 
-        public void Bind(IReadOnlyList<NodeVisibilityEntry> entries, bool requiredOnImport = false)
+        public void Bind(IReadOnlyList<NodeVisibilityEntry> entries)
         {
             _entries = entries != null ? new List<NodeVisibilityEntry>(entries) : new List<NodeVisibilityEntry>();
-            _requiredOnImport = requiredOnImport;
             _indexDirty = true;
         }
 
@@ -59,32 +75,32 @@ namespace UnityGLTF.VisibilityHints
             _indexDirty = false;
         }
 
-        /// <summary>Nearest authored role for metadata presentation; not the effective rendering predicate.</summary>
-        public string ResolveRole(Transform node)
+        /// <summary>Nearest authored roles for metadata presentation; not the effective rendering predicate.</summary>
+        public IReadOnlyList<string> ResolveRoles(Transform node)
         {
             if (node == null || (node != transform && !node.IsChildOf(transform))) return null;
             EnsureIndex();
             for (var current = node; current != null; current = current.parent)
             {
-                if (_entryByNode.TryGetValue(current, out var entry)) return entry.Role;
+                if (_entryByNode.TryGetValue(current, out var entry)) return entry.Roles;
                 if (current == transform) break;
             }
             return null;
         }
 
-        /// <summary>ANDs each local role on this node and its ancestors within this imported instance root.</summary>
-        public bool IsHintVisible(
-            Transform node,
-            IReadOnlyCollection<string> viewTags,
-            IVisibilityRoleResolver resolver = null,
-            bool renderUnsupportedRoles = false)
+        /// <summary>
+        /// <c>hintVisible</c>: ANDs the hint of this node and of every ancestor within this imported instance root for
+        /// one view, whose role logic is <paramref name="roles"/> (null means
+        /// <see cref="VisibilityRoleContext.NoLogic"/>).
+        /// </summary>
+        public bool IsHintVisible(Transform node, VisibilityRoleContext roles)
         {
             if (node == null || (node != transform && !node.IsChildOf(transform))) return true;
             EnsureIndex();
             for (var current = node; current != null; current = current.parent)
             {
                 if (_entryByNode.TryGetValue(current, out var entry)
-                    && !VisibilityHintEvaluator.IsRoleVisible(entry.Role, viewTags, resolver, renderUnsupportedRoles))
+                    && !VisibilityHintEvaluator.HintAllows(entry.Roles, roles))
                     return false;
                 if (current == transform) break;
             }
@@ -92,15 +108,11 @@ namespace UnityGLTF.VisibilityHints
         }
 
         public bool ShouldRenderVisualContent(
-            Transform node,
-            IReadOnlyCollection<string> viewTags,
-            bool ancestorInclusiveCoreVisible,
-            IVisibilityRoleResolver resolver = null,
-            bool renderUnsupportedRoles = false)
-            => ancestorInclusiveCoreVisible && IsHintVisible(node, viewTags, resolver, renderUnsupportedRoles);
+            Transform node, VisibilityRoleContext roles, bool ancestorInclusiveCoreVisible)
+            => ancestorInclusiveCoreVisible && IsHintVisible(node, roles);
 
         /// <summary>
-        /// Presentation name for an entry: its label, else the node's nonempty name, else its role. The node name is
+        /// Presentation name for an entry: its label, else the node's nonempty name, else its roles. The node name is
         /// the GameObject's name, except for an entry imported from an unnamed glTF node
         /// (<see cref="NodeVisibilityEntry.NodeUnnamed"/>). Export still writes the synthesized GameObject name back.
         /// </summary>
@@ -110,7 +122,17 @@ namespace UnityGLTF.VisibilityHints
             if (!string.IsNullOrEmpty(entry.Label)) return entry.Label;
             if (!entry.NodeUnnamed && entry.Node != null && !string.IsNullOrEmpty(entry.Node.name))
                 return entry.Node.name;
-            return entry.Role;
+            return FormatRoles(entry.Roles);
+        }
+
+        /// <summary>The roles joined with ", "; null when there are none.</summary>
+        public static string FormatRoles(IReadOnlyList<string> roles)
+        {
+            if (roles == null || roles.Count == 0) return null;
+            var parts = new List<string>();
+            foreach (var role in roles)
+                if (!string.IsNullOrEmpty(role)) parts.Add(role);
+            return parts.Count > 0 ? string.Join(", ", parts) : null;
         }
     }
 }

@@ -1,8 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
-using System.IO;
-using System.Threading;
-using System.Threading.Tasks;
+using System.Text.RegularExpressions;
 using GLTF.Schema;
 using NUnit.Framework;
 using UnityEngine;
@@ -72,7 +70,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             var ctx = new VisibilityHintImportContext(null);
             var node = new Node { Name = "head" };
             node.AddExtension(KHR_node_visibility_hint.EXTENSION_NAME,
-                new KHR_node_visibility_hint { Role = "third_person", Label = "Head" });
+                new KHR_node_visibility_hint { Roles = new[] { "third_person" }, Label = "Head" });
 
             ctx.OnAfterImportNode(node, 0, head);
             ctx.OnAfterImportScene(null, 0, scene);
@@ -80,17 +78,17 @@ namespace UnityGLTF.VisibilityHints.Tests
             var set = scene.GetComponent<NodeVisibilityHintSet>();
             Assert.IsNotNull(set, "import should add a NodeVisibilityHintSet to the scene root");
             Assert.AreEqual(1, set.Entries.Count);
-            Assert.AreEqual("third_person", set.Entries[0].Role);
+            CollectionAssert.AreEqual(new[] { "third_person" }, set.Entries[0].Roles);
             Assert.AreEqual("Head", set.Entries[0].Label);
             Assert.AreSame(head.transform, set.Entries[0].Node);
 
             var view = scene.GetComponent<ViewContextController>();
             Assert.IsNotNull(view, "import should add a ViewContextController");
-            CollectionAssert.IsEmpty(view.DefaultViewTags, "import starts with an untagged default view");
-            Assert.IsFalse(view.ShouldRenderNode(head.transform, true),
-                "an untagged view hides third_person content");
-            Assert.IsTrue(view.ShouldRenderNodeForView(head.transform, new[] { "third_person" }, true));
-            Assert.IsFalse(view.ShouldRenderNodeForView(head.transform, new[] { "first_person" }, true));
+            Assert.AreSame(VisibilityRoleContext.NoLogic, view.DefaultRoles, "import starts with no role logic");
+            Assert.IsTrue(view.ShouldRenderNode(head.transform, true),
+                "without role logic third_person content is visible");
+            Assert.IsTrue(view.ShouldRenderNodeForView(head.transform, FirstPersonRolePolicy.OtherView, true));
+            Assert.IsFalse(view.ShouldRenderNodeForView(head.transform, FirstPersonRolePolicy.FirstPersonView, true));
             Assert.IsTrue(headRenderer.enabled, "predicate queries do not mutate renderer state");
         }
 
@@ -105,7 +103,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             Node HintNode(string name, string role)
             {
                 var node = new Node { Name = name };
-                node.AddExtension(KHR_node_visibility_hint.EXTENSION_NAME, new KHR_node_visibility_hint { Role = role });
+                node.AddExtension(KHR_node_visibility_hint.EXTENSION_NAME, new KHR_node_visibility_hint { Roles = new[] { role } });
                 return node;
             }
 
@@ -141,7 +139,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             var gltf = new GLTFRoot { Meshes = new List<GLTFMesh>(), Nodes = new List<Node>() };
             var prim = new MeshPrimitive();
             prim.AddExtension(KHR_mesh_primitive_visibility_hint.EXTENSION_NAME,
-                new KHR_mesh_primitive_visibility_hint { Role = "first_person", Label = "BodyPrim" });
+                new KHR_mesh_primitive_visibility_hint { Roles = new[] { "first_person" }, Label = "BodyPrim" });
             gltf.Meshes.Add(new GLTFMesh { Primitives = new List<MeshPrimitive> { prim } });
             var node = new Node { Name = "body", Mesh = new MeshId { Id = 0, Root = gltf } };
 
@@ -154,13 +152,13 @@ namespace UnityGLTF.VisibilityHints.Tests
             Assert.AreEqual(1, set.Entries.Count);
             Assert.AreSame(unityMesh, set.Entries[0].Mesh);
             Assert.AreEqual(0, set.Entries[0].SubMesh);
-            Assert.AreEqual("first_person", set.Entries[0].Role);
+            CollectionAssert.AreEqual(new[] { "first_person" }, set.Entries[0].Roles);
 
             var view = scene.GetComponent<ViewContextController>();
             Assert.IsNotNull(view);
-            Assert.IsFalse(view.ShouldRenderPrimitiveForView(renderer, 0, new string[0], true));
-            Assert.IsTrue(view.ShouldRenderPrimitiveForView(renderer, 0, new[] { "first_person" }, true));
-            Assert.IsFalse(view.ShouldRenderPrimitiveForView(renderer, 0, new[] { "third_person" }, true));
+            Assert.IsTrue(view.ShouldRenderPrimitiveForView(renderer, 0, VisibilityRoleContext.NoLogic, true));
+            Assert.IsTrue(view.ShouldRenderPrimitiveForView(renderer, 0, FirstPersonRolePolicy.FirstPersonView, true));
+            Assert.IsFalse(view.ShouldRenderPrimitiveForView(renderer, 0, FirstPersonRolePolicy.OtherView, true));
             Assert.AreSame(original, renderer.sharedMaterials[0], "predicate queries preserve authored materials");
         }
 
@@ -190,7 +188,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             var headRenderer = head.AddComponent<MeshRenderer>();
             var headNode = new Node { Name = "head" };
             headNode.AddExtension(KHR_node_visibility_hint.EXTENSION_NAME,
-                new KHR_node_visibility_hint { Role = "third_person" });
+                new KHR_node_visibility_hint { Roles = new[] { "third_person" } });
 
             // Primitive hint on "body".
             var body = NewChild(scene, "body");
@@ -204,7 +202,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             var gltf = new GLTFRoot { Meshes = new List<GLTFMesh>(), Nodes = new List<Node>() };
             var prim = new MeshPrimitive();
             prim.AddExtension(KHR_mesh_primitive_visibility_hint.EXTENSION_NAME,
-                new KHR_mesh_primitive_visibility_hint { Role = "third_person" });
+                new KHR_mesh_primitive_visibility_hint { Roles = new[] { "third_person" } });
             gltf.Meshes.Add(new GLTFMesh { Primitives = new List<MeshPrimitive> { prim } });
             var bodyNode = new Node { Name = "body", Mesh = new MeshId { Id = 0, Root = gltf } };
 
@@ -219,25 +217,25 @@ namespace UnityGLTF.VisibilityHints.Tests
             Assert.AreEqual(1, controllers.Length, "both sets must share a single ViewContextController");
 
             var view = controllers[0];
-            Assert.IsFalse(view.ShouldRenderNodeForView(head.transform, new[] { "first_person" }, true));
-            Assert.IsFalse(view.ShouldRenderPrimitiveForView(bodyRenderer, 0, new[] { "first_person" }, true));
-            Assert.IsTrue(view.ShouldRenderNodeForView(head.transform, new[] { "third_person" }, true));
-            Assert.IsTrue(view.ShouldRenderPrimitiveForView(bodyRenderer, 0, new[] { "third_person" }, true));
+            Assert.IsFalse(view.ShouldRenderNodeForView(head.transform, FirstPersonRolePolicy.FirstPersonView, true));
+            Assert.IsFalse(view.ShouldRenderPrimitiveForView(bodyRenderer, 0, FirstPersonRolePolicy.FirstPersonView, true));
+            Assert.IsTrue(view.ShouldRenderNodeForView(head.transform, FirstPersonRolePolicy.OtherView, true));
+            Assert.IsTrue(view.ShouldRenderPrimitiveForView(bodyRenderer, 0, FirstPersonRolePolicy.OtherView, true));
             Assert.IsTrue(headRenderer.enabled);
             Assert.AreSame(original, bodyRenderer.sharedMaterials[0],
                 "evaluating either extension does not mutate shared scene state");
         }
 
         [Test]
-        public void RequiredHints_FailWithoutAnExplicitCompleteHostCapability()
+        public void RequiredHints_AreToleratedWithAWarningNotRejected()
         {
             var nodeFactory = GLTFProperty.TryGetExtension(KHR_node_visibility_hint.EXTENSION_NAME);
             var primitiveFactory = GLTFProperty.TryGetExtension(
                 KHR_mesh_primitive_visibility_hint.EXTENSION_NAME);
             Assert.IsNotNull(nodeFactory, "runtime schema registration must run before import");
             Assert.IsNotNull(primitiveFactory, "runtime schema registration must run before import");
-            Assert.IsTrue(nodeFactory.RequiresRuntimeSupportForRequiredUse);
-            Assert.IsTrue(primitiveFactory.RequiresRuntimeSupportForRequiredUse);
+            Assert.IsFalse(nodeFactory.RequiresRuntimeSupportForRequiredUse);
+            Assert.IsFalse(primitiveFactory.RequiresRuntimeSupportForRequiredUse);
             var root = new GLTFRoot
             {
                 ExtensionsRequired = new List<string>
@@ -247,61 +245,28 @@ namespace UnityGLTF.VisibilityHints.Tests
                 },
             };
 
-            Assert.Throws<UnityGLTF.GLTFLoadException>(() =>
-                GLTFSceneImporter.ValidateRequiredExtensionSupport(
-                    root, new List<GLTFImportPluginContext>()));
-            Assert.Throws<UnityGLTF.GLTFLoadException>(() =>
-                GLTFSceneImporter.ValidateRequiredExtensionSupport(
-                    root, new List<GLTFImportPluginContext>
-                    {
-                        new VisibilityHintImportContext(null),
-                    }));
-
+            // Full scene loads pass the plugins; partial loads (LoadNodeAsync, LoadMeshAsync, ...) pass none.
+            Assert.DoesNotThrow(() => GLTFSceneImporter.ValidateRequiredExtensionSupport(root, plugins: null));
             Assert.DoesNotThrow(() => GLTFSceneImporter.ValidateRequiredExtensionSupport(
-                root, new List<GLTFImportPluginContext>
-                {
-                    new VisibilityHintImportContext(
-                        null,
-                        hostSupportsRequiredNodeUse: true,
-                        hostSupportsRequiredPrimitiveUse: true),
-                }));
+                root, new List<GLTFImportPluginContext>()));
+            Assert.DoesNotThrow(() => GLTFSceneImporter.ValidateRequiredExtensionSupport(
+                root, new List<GLTFImportPluginContext> { new VisibilityHintImportContext(null) }));
 
-            Assert.Throws<UnityGLTF.GLTFLoadException>(() =>
-                GLTFSceneImporter.ValidateRequiredExtensionSupport(
-                    root, new List<GLTFImportPluginContext>
-                    {
-                        new VisibilityHintImportContext(
-                            null,
-                            hostSupportsRequiredNodeUse: false,
-                            hostSupportsRequiredPrimitiveUse: true),
-                    }));
+            LogAssert.Expect(LogType.Warning, new Regex("KHR_node_visibility_hint in extensionsRequired"));
+            LogAssert.Expect(LogType.Warning, new Regex("KHR_mesh_primitive_visibility_hint in extensionsRequired"));
+            new VisibilityHintImportContext(null).OnAfterImportRoot(root);
         }
 
         [Test]
-        public void ImportPlugin_PropagatesIndependentRequiredUseCapabilities()
+        public void ImportPlugin_ContextToleratesRequiredHints()
         {
             var plugin = ScriptableObject.CreateInstance<VisibilityHintImportPlugin>();
             _created.Add(plugin);
 
-            var defaultContext = plugin.CreateInstance(null);
-            Assert.IsFalse(defaultContext.SupportsRequiredExtension(
-                VisibilityHintExtensionNames.NodeVisibilityHint));
-            Assert.IsFalse(defaultContext.SupportsRequiredExtension(
-                VisibilityHintExtensionNames.MeshPrimitiveVisibilityHint));
-
-            plugin.HostSupportsRequiredNodeUse = true;
-            var nodeOnlyContext = plugin.CreateInstance(null);
-            Assert.IsTrue(nodeOnlyContext.SupportsRequiredExtension(
-                VisibilityHintExtensionNames.NodeVisibilityHint));
-            Assert.IsFalse(nodeOnlyContext.SupportsRequiredExtension(
-                VisibilityHintExtensionNames.MeshPrimitiveVisibilityHint));
-
-            plugin.HostSupportsRequiredPrimitiveUse = true;
-            var completeContext = plugin.CreateInstance(null);
-            Assert.IsTrue(completeContext.SupportsRequiredExtension(
-                VisibilityHintExtensionNames.NodeVisibilityHint));
-            Assert.IsTrue(completeContext.SupportsRequiredExtension(
-                VisibilityHintExtensionNames.MeshPrimitiveVisibilityHint));
+            var context = plugin.CreateInstance(null);
+            Assert.IsTrue(context.SupportsRequiredExtension(VisibilityHintExtensionNames.NodeVisibilityHint));
+            Assert.IsTrue(context.SupportsRequiredExtension(VisibilityHintExtensionNames.MeshPrimitiveVisibilityHint));
+            Assert.IsFalse(context.SupportsRequiredExtension("ACME_unrelated"));
         }
 
         [Test]
@@ -315,50 +280,21 @@ namespace UnityGLTF.VisibilityHints.Tests
                 root, new List<GLTFImportPluginContext>()));
         }
 
-        [UnityTest]
-        public IEnumerator RequiredHints_AreRejectedByEveryPartialLoadApi()
+        [Test]
+        public void HintsWithoutRoles_AreNotImported()
         {
-            GLTFRoot RequiredRoot() => new GLTFRoot
-            {
-                ExtensionsRequired = new List<string>
-                    { KHR_node_visibility_hint.EXTENSION_NAME },
-            };
+            var scene = NewGo("scene");
+            var legacy = NewChild(scene, "legacy");
+            var node = new Node { Name = "legacy" };
+            // A legacy single-role hint parses with no roles; it imposes no restriction and is not imported.
+            node.AddExtension(KHR_node_visibility_hint.EXTENSION_NAME, new KHR_node_visibility_hint { Roles = null });
 
-            GLTFSceneImporter Importer()
-            {
-                var settings = GLTFSettings.GetDefaultSettings();
-                foreach (var plugin in settings.ImportPlugins)
-                    if (plugin is VisibilityHintImportPlugin visibility)
-                    {
-                        visibility.Enabled = true;
-                        visibility.HostSupportsRequiredNodeUse = true;
-                    }
-                var options = new ImportOptions
-                {
-                    ThrowOnLowMemory = false,
-                    ImportContext = new GLTFImportContext(settings),
-                };
-                return new GLTFSceneImporter(RequiredRoot(), new MemoryStream(), options);
-            }
+            var context = new VisibilityHintImportContext(null);
+            context.OnAfterImportNode(node, 0, legacy);
+            context.OnAfterImportScene(null, 0, scene);
 
-            var nodeImporter = Importer();
-            yield return AssertRequiredBehaviorRejected(
-                nodeImporter.LoadNodeAsync(0, CancellationToken.None));
-            var meshImporter = Importer();
-            yield return AssertRequiredBehaviorRejected(
-                meshImporter.LoadMeshAsync(0, CancellationToken.None));
-            var materialImporter = Importer();
-            yield return AssertRequiredBehaviorRejected(materialImporter.LoadMaterialAsync(0));
-        }
-
-        private static IEnumerator AssertRequiredBehaviorRejected(Task load)
-        {
-            while (!load.IsCompleted) yield return null;
-            Assert.IsFalse(load.IsCanceled);
-            var exception = load.Exception?.Flatten().InnerException as UnityGLTF.GLTFLoadException;
-            Assert.IsNotNull(exception,
-                "partial load unexpectedly accepted a required scene-level behavior");
-            StringAssert.Contains("required runtime behavior is unsupported", exception.Message);
+            Assert.IsNull(scene.GetComponent<NodeVisibilityHintSet>());
+            Assert.IsNull(scene.GetComponent<ViewContextController>());
         }
 
         [Test]
@@ -369,7 +305,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             var secondInstance = NewChild(scene, "secondInstance");
             var node = new Node();
             node.AddExtension(KHR_node_visibility_hint.EXTENSION_NAME,
-                new KHR_node_visibility_hint { Role = "third_person" });
+                new KHR_node_visibility_hint { Roles = new[] { "third_person" } });
             var context = new VisibilityHintImportContext(null);
 
             context.OnAfterImportNode(node, 4, firstInstance);
@@ -392,7 +328,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             var root = new GLTFRoot { Meshes = new List<GLTFMesh>() };
             var primitive = new MeshPrimitive();
             primitive.AddExtension(KHR_mesh_primitive_visibility_hint.EXTENSION_NAME,
-                new KHR_mesh_primitive_visibility_hint { Role = "third_person" });
+                new KHR_mesh_primitive_visibility_hint { Roles = new[] { "third_person" } });
             root.Meshes.Add(new GLTFMesh { Primitives = new List<MeshPrimitive> { primitive } });
             var node = new Node { Mesh = new MeshId { Id = 0, Root = root } };
             var context = new VisibilityHintImportContext(null);
@@ -408,7 +344,7 @@ namespace UnityGLTF.VisibilityHints.Tests
         {
             var hintedPrimitive = new MeshPrimitive();
             hintedPrimitive.AddExtension(KHR_mesh_primitive_visibility_hint.EXTENSION_NAME,
-                new KHR_mesh_primitive_visibility_hint { Role = "third_person" });
+                new KHR_mesh_primitive_visibility_hint { Roles = new[] { "third_person" } });
             var context = new VisibilityHintImportContext(null);
 
             Assert.IsFalse(context.CanShareMeshData(
@@ -434,7 +370,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             var root = new GLTFRoot { Meshes = new List<GLTFMesh>() };
             var primitive = new MeshPrimitive();
             primitive.AddExtension(KHR_mesh_primitive_visibility_hint.EXTENSION_NAME,
-                new KHR_mesh_primitive_visibility_hint { Role = "third_person" });
+                new KHR_mesh_primitive_visibility_hint { Roles = new[] { "third_person" } });
             root.Meshes.Add(new GLTFMesh { Primitives = new List<MeshPrimitive> { primitive } });
             var node = new Node { Mesh = new MeshId { Id = 0, Root = root } };
             var context = new VisibilityHintImportContext(null);

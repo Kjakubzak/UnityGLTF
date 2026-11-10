@@ -7,46 +7,59 @@ This non-ratified, disabled-by-default plugin imports and exports:
 
 The runtime's semantic layer exposes pure predicates. It does not mutate `Renderer.enabled`, materials, meshes, lights, node activation, cameras, or authored/animated `KHR_node_visibility` state. Render integrations may use material/shader substitution, draw filtering, primitive splitting, or another observably equivalent route.
 
-## View tags
+## Roles and role logic
 
-The host gives each render view zero, one, or several view tags. The standard tags are `first_person` (a view from the character's own viewpoint) and `third_person` (a third-person view of the character, such as a spectator or mirror view). A host may add custom tags defined by a separate specification or application profile; they should be vendor-qualified, for example `ACME_mirror`. Tags are exact, case-sensitive strings and are not stored in the asset. How a host tags its views, including giving different instances of the asset different tags within one view, is host-defined.
+Each hint carries `roles`: one or more distinct, nonempty, case-sensitive strings that say when the author intends
+the content to be visible. Roles are author labels; the application's logic decides which roles apply in each render
+view and asset instance. The host passes that logic to every query as a `VisibilityRoleContext`:
 
-A render view is a rendered viewpoint whose image is presented, directly or inside another view: a camera view, one eye of a stereo pair, or a mirror view. A shadow map or a lighting or reflection probe is not a render view.
+- `appliedRoles`: the roles that apply in this view for this instance;
+- `rolesWithLogic`: further roles the application has logic for but that do not apply here (an applied role counts
+  as having logic).
+
+Evaluation follows the specification (spec 314c95c5, glTF-private #256):
+
+| role in a hint | applies when |
+|---|---|
+| `always` | always |
+| `first_person`, `third_person` with no application logic | always (an application with no logic hides nothing) |
+| `first_person`, `third_person` with application logic | the role is in `appliedRoles` |
+| a custom role the application has logic for | the role is in `appliedRoles` |
+| a custom role the application does not recognize | ignored |
+
+A hint allows a view when any of its recognized roles applies (roles in one hint are alternatives). A hint whose roles
+include `always`, or that has no recognized role, imposes no restriction. A differently cased standard token such as
+`First_Person` is a custom role. A render view is a rendered viewpoint whose image is presented (a camera view, one
+eye of a stereo pair, a mirror view); a shadow map or a lighting or reflection probe is not.
+
+Two ready-made sources of role logic:
+
+- `VisibilityRoleContext.NoLogic`, the default everywhere: no role logic, so every hint allows every view. Suitable for
+  inspectors, thumbnails, and hosts without first- or third-person logic.
+- `FirstPersonRolePolicy`: `first_person` applies where the application's first-person logic says, and `third_person`
+  wherever `first_person` does not, as the specification recommends. `FirstPersonView`, `OtherView`, and
+  `ForView(isFirstPersonView, appliedCustomRoles, recognizedCustomRoles)` build the context of one view; for example a
+  mirror view is `ForView(false, new[] { "ACME_mirror_only" })`. When a view is first-person is the application's
+  decision; the `first_person` role itself is informative.
 
 ## Runtime query
 
-Import attaches the authored `NodeVisibilityHintSet` and/or `PrimitiveVisibilityHintSet` plus one `ViewContextController` to the scene root. The controller starts with no default view tags, so its convenience queries describe an untagged view.
+Import attaches the authored `NodeVisibilityHintSet` and/or `PrimitiveVisibilityHintSet` plus one `ViewContextController` to the scene root. The controller's default role logic is `VisibilityRoleContext.NoLogic`.
 
 ```csharp
 var visibility = importedRoot.GetComponent<ViewContextController>();
 
 // Independent queries for two views in the same frame; neither changes asset state.
-bool renderInFirstPerson = visibility.ShouldRenderPrimitiveForView(
-    renderer, subMeshIndex, new[] { "first_person" }, ancestorInclusiveCoreVisible);
+bool renderInOwnEyes = visibility.ShouldRenderPrimitiveForView(
+    renderer, subMeshIndex, FirstPersonRolePolicy.FirstPersonView, ancestorInclusiveCoreVisible);
 bool renderInMirror = visibility.ShouldRenderPrimitiveForView(
-    renderer, subMeshIndex, new[] { "third_person", "ACME_mirror" }, ancestorInclusiveCoreVisible);
+    renderer, subMeshIndex, FirstPersonRolePolicy.ForView(false, new[] { "ACME_mirror_only" }),
+    ancestorInclusiveCoreVisible);
 ```
 
 `ancestorInclusiveCoreVisible` is required: it is the caller's logical AND of current `KHR_node_visibility.visible` values on the node and its ancestors. The hints plugin does not infer that value from general-purpose Unity activation state.
 
-For a host with one main view, call `SetDefaultViewTags(tags)` and use `ShouldRenderNode` / `ShouldRenderPrimitive`; `OnDefaultViewTagsChanged` reports changes. Tags that differ per view or per instance are passed to the explicit `*ForView` queries.
-
-## Standard roles
-
-Roles are exact and case-sensitive. For a render view with view tags `T`:
-
-| role | visible when |
-|---|---|
-| `always`, or no hint | always, including when `T` is empty |
-| `first_person` | `T` contains `first_person` |
-| `third_person` | `T` contains `third_person` |
-| any other role | the custom-role resolver says so; otherwise only when `RenderUnsupportedRoles` is set |
-
-Custom tags in `T` never affect the standard roles. An untagged view therefore shows only `always` and un-hinted content: `third_person` content disappears from views that do not carry the `third_person` tag, such as an untagged Scene view or thumbnail camera.
-
-## Custom roles
-
-Any other role string, including a differently cased standard token such as `First_Person`, is a custom role. A consumer supports a custom role only through a separate specification or application profile. Register that support as an `IVisibilityRoleResolver` on `ViewContextController.CustomRoleResolver` (not serialized): `TryResolve(role, viewTags, out visible)` returns true for a role it supports. Content whose role no resolver supports is hidden by default, as the role-support rule recommends; `RenderUnsupportedRoles = true` is the application's override to render it anyway. The evaluator takes the same resolver and override as optional arguments.
+For a host with one main view, call `SetDefaultRoles(context)` and use `ShouldRenderNode` / `ShouldRenderPrimitive`; `OnDefaultRolesChanged` reports changes. Role logic that differs per view or per instance is passed to the explicit `*ForView` queries. `VisibilityHintEvaluator.HintAllows(roles, context)` evaluates one hint on its own.
 
 ## Rendering boundary
 
@@ -54,17 +67,15 @@ The plugin preserves metadata and supplies pure predicates. The host omits direc
 
 Core Boolean state lives on `UnityGLTF.CoreNodeVisibility.Visible`, with `IsVisibleInHierarchy(node, instanceRoot)` as the cumulative query. Import and pointer animation do not deactivate GameObjects. Imported scenes and `LoadNodeAsync` subtrees receive `CoreVisibilityController`, which filters renderers and lights while preserving cameras and hierarchy; export writes each own Boolean, rather than an inherited false result. Partial node loads evaluate their instantiated subtree, without inferring source ancestors outside it. A host may separately include manual Unity activation or renderer state in its rendering policy; those are not authored core Boolean values.
 
-A consumer claiming support when either extension is listed in `extensionsRequired` must integrate these predicates into each visual render view and omit hidden node or primitive content from all relevant visual passes. The stock metadata plugin does not make that claim and rejects required use unless the host explicitly enables the corresponding `HostSupportsRequiredNodeUse` or `HostSupportsRequiredPrimitiveUse` capability after providing a complete integration.
-
-Newly authored entries use a conservative `extensionsUsed`-only export policy. An imported required declaration is preserved on round-trip.
+Both extensions must not be listed in `extensionsRequired`. An asset that lists them there anyway is imported with a warning, never rejected (the factories do not require runtime support, and the import context accepts the listing), and export always declares the hints in `extensionsUsed` only.
 
 ### Optional scoped material adapter
 
 `ScopedMaterialVisibilityAdapter` is one Unity-specific renderer route. The host supplies a pipeline-compatible no-draw material and applies it in a short-lived scope around one view render:
 
 ```csharp
-using (adapter.ApplyForView(renderers, viewTags, ResolveAncestorInclusiveCoreVisibility))
-using (adapter.ApplyLightsForView(lights, viewTags, ResolveAncestorInclusiveCoreVisibility))
+using (adapter.ApplyForView(renderers, roles, ResolveAncestorInclusiveCoreVisibility))
+using (adapter.ApplyLightsForView(lights, roles, ResolveAncestorInclusiveCoreVisibility))
 {
     RenderOneView(camera); // host/render-pipeline-specific
 }
@@ -94,7 +105,9 @@ A descendant node hint adds a restriction to all ancestor predicates. It cannot 
 
 - Enable `VisibilityHintImportPlugin` or `VisibilityHintExportPlugin` on the relevant `GLTFSettings`; both are disabled by default.
 - Export reads authored entries, not runtime query results, and preserves `extensions`, `extras`, and additional JSON properties.
-- Empty roles are skipped on export because `role` is required and nonempty.
-- Primitive entries are keyed by Unity `Mesh` and sub-mesh index; the same primitive role is combined independently with each containing node's predicate.
+- Export writes `roles` (distinct, nonempty, in authored order). A hint with no role is skipped with a warning because `roles` is required.
+- Import reads `roles`; invalid or duplicate items are dropped with a warning. A hint without a valid `roles` array, including one with only the retired single `role` string, imposes no restriction and is not imported (warning). A retired `role` next to `roles` is ignored with a warning; it is never kept as an additional property or written on export.
+- Scenes and prefabs saved by earlier versions migrate on load: an entry's serialized single `Role` becomes `Roles = [Role]` (`third_person_only` and `first_person_only` become the standard roles), and a controller's serialized default view tags become its default role logic (the tags apply, and the application has logic for `first_person` and `third_person`). An empty tag list, the old default, becomes no role logic.
+- Primitive entries are keyed by Unity `Mesh` and sub-mesh index; the same primitive roles are combined independently with each containing node's predicate.
 - Primitive-hinted meshes opt out of UnityGLTF's geometry-only mesh deduplication so distinct glTF primitive metadata cannot collapse.
-- The editor inspectors author the serialized hint entries and name each one by its label, else (for node hints) the node name, else its role (`NodeVisibilityHintSet.GetDisplayName`, `PrimitiveVisibilityHintSet.GetDisplayName`). An entry imported from an unnamed node has `NodeUnnamed` set, so the `GLTFNode<index>` name UnityGLTF gives its GameObject is never shown as a node name. The controller inspector edits the default view tags and the unsupported-role override; it does not preview rendering by mutating the scene.
+- The editor inspectors author the serialized hint entries and name each one by its label, else (for node hints) the node name, else its roles (`NodeVisibilityHintSet.GetDisplayName`, `PrimitiveVisibilityHintSet.GetDisplayName`). An entry imported from an unnamed node has `NodeUnnamed` set, so the `GLTFNode<index>` name UnityGLTF gives its GameObject is never shown as a node name. The controller inspector edits the default role logic (presets for no logic, a first-person view and other views, plus custom roles); it does not preview rendering by mutating the scene.

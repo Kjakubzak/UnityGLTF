@@ -99,7 +99,7 @@ namespace UnityGLTF.VisibilityHints.Tests
                 new NodeVisibilityHintSet.NodeVisibilityEntry
                 {
                     Node = head.transform,
-                    Role = "third_person",
+                    Roles = new[] { "third_person", "ACME_mirror_only" },
                     Label = "Head",
                     ExtensionsJson = "{\"ACME_visibility\":{\"mode\":3}}",
                     ExtrasJson = "{\"author\":\"test\"}",
@@ -121,6 +121,8 @@ namespace UnityGLTF.VisibilityHints.Tests
             WireMeshRoot(gltf, headNode);
             gltf.ExtensionsRequired = gltf.ExtensionsRequired ?? new List<string>();
             gltf.ExtensionsRequired.Add("ACME_visibility");
+            // An invalid asset that lists the hint as required: import warns, export drops the listing.
+            gltf.ExtensionsRequired.Add(KHR_node_visibility_hint.EXTENSION_NAME);
 
             // Re-import the exported node into a fresh scene.
             var dst = NewGo("dstRoot");
@@ -128,6 +130,8 @@ namespace UnityGLTF.VisibilityHints.Tests
             var head2Renderer = head2.AddComponent<MeshRenderer>();
 
             var ctx = new VisibilityHintImportContext(null);
+            LogAssert.Expect(LogType.Warning,
+                new System.Text.RegularExpressions.Regex("KHR_node_visibility_hint in extensionsRequired"));
             ctx.OnAfterImportRoot(gltf);
             ctx.OnAfterImportNode(headNode, 0, head2);
             ctx.OnAfterImportScene(null, 0, dst);
@@ -135,7 +139,8 @@ namespace UnityGLTF.VisibilityHints.Tests
             var set = dst.GetComponent<NodeVisibilityHintSet>();
             Assert.IsNotNull(set, "re-import should add a NodeVisibilityHintSet");
             Assert.AreEqual(1, set.Entries.Count);
-            Assert.AreEqual("third_person", set.Entries[0].Role, "role survives export -> import");
+            CollectionAssert.AreEqual(new[] { "third_person", "ACME_mirror_only" }, set.Entries[0].Roles,
+                "roles survive export -> import");
             Assert.AreEqual("Head", set.Entries[0].Label, "label survives export -> import");
             Assert.AreEqual(3, JObject.Parse(set.Entries[0].ExtensionsJson)["ACME_visibility"]["mode"].Value<int>());
             Assert.AreEqual("test", JToken.Parse(set.Entries[0].ExtrasJson)["author"].Value<string>());
@@ -145,12 +150,18 @@ namespace UnityGLTF.VisibilityHints.Tests
             var reexported = ExportToGltfRoot(dst);
             CollectionAssert.Contains(reexported.ExtensionsUsed, "ACME_visibility");
             CollectionAssert.Contains(reexported.ExtensionsRequired, "ACME_visibility");
+            CollectionAssert.Contains(reexported.ExtensionsUsed, KHR_node_visibility_hint.EXTENSION_NAME);
+            CollectionAssert.DoesNotContain(reexported.ExtensionsRequired, KHR_node_visibility_hint.EXTENSION_NAME,
+                "export never lists the hint as required");
 
             var view = dst.GetComponent<ViewContextController>();
             Assert.IsNotNull(view);
-            Assert.IsTrue(view.ShouldRenderNodeForView(head2.transform, new[] { "third_person" }, true));
-            Assert.IsFalse(view.ShouldRenderNodeForView(head2.transform, new[] { "first_person" }, true));
-            Assert.IsFalse(view.ShouldRenderNodeForView(head2.transform, new string[0], true));
+            Assert.IsTrue(view.ShouldRenderNodeForView(head2.transform, FirstPersonRolePolicy.OtherView, true));
+            Assert.IsFalse(view.ShouldRenderNodeForView(head2.transform, FirstPersonRolePolicy.FirstPersonView, true));
+            Assert.IsTrue(view.ShouldRenderNodeForView(head2.transform,
+                FirstPersonRolePolicy.ForView(true, new[] { "ACME_mirror_only" }), true),
+                "a recognized custom role that applies allows the view");
+            Assert.IsTrue(view.ShouldRenderNodeForView(head2.transform, VisibilityRoleContext.NoLogic, true));
             Assert.IsTrue(head2Renderer.enabled, "round-trip evaluation does not mutate renderer state");
         }
 
@@ -162,7 +173,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             MakeMeshChild(src, "body", out var srcMesh);
             src.AddComponent<PrimitiveVisibilityHintSet>().Bind(new List<PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry>
             {
-                new PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry { Mesh = srcMesh, SubMesh = 0, Role = "first_person", Label = "BodyPrim" },
+                new PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry { Mesh = srcMesh, SubMesh = 0, Roles = new[] { "first_person" }, Label = "BodyPrim" },
             });
 
             var gltf = ExportToGltfRoot(src);
@@ -191,15 +202,15 @@ namespace UnityGLTF.VisibilityHints.Tests
             var set = dst.GetComponent<PrimitiveVisibilityHintSet>();
             Assert.IsNotNull(set, "re-import should add a PrimitiveVisibilityHintSet");
             Assert.AreEqual(1, set.Entries.Count);
-            Assert.AreEqual("first_person", set.Entries[0].Role, "role survives export -> import");
+            CollectionAssert.AreEqual(new[] { "first_person" }, set.Entries[0].Roles, "roles survive export -> import");
             Assert.AreSame(dstMesh, set.Entries[0].Mesh);
             Assert.AreEqual(0, set.Entries[0].SubMesh);
 
             var view = dst.GetComponent<ViewContextController>();
             Assert.IsNotNull(view);
-            Assert.IsFalse(view.ShouldRenderPrimitiveForView(renderer, 0, new string[0], true));
-            Assert.IsFalse(view.ShouldRenderPrimitiveForView(renderer, 0, new[] { "third_person" }, true));
-            Assert.IsTrue(view.ShouldRenderPrimitiveForView(renderer, 0, new[] { "first_person" }, true));
+            Assert.IsTrue(view.ShouldRenderPrimitiveForView(renderer, 0, VisibilityRoleContext.NoLogic, true));
+            Assert.IsFalse(view.ShouldRenderPrimitiveForView(renderer, 0, FirstPersonRolePolicy.OtherView, true));
+            Assert.IsTrue(view.ShouldRenderPrimitiveForView(renderer, 0, FirstPersonRolePolicy.FirstPersonView, true));
             Assert.AreSame(original, renderer.sharedMaterials[0],
                 "round-trip evaluation preserves the authored material");
         }
@@ -218,7 +229,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             src.AddComponent<PrimitiveVisibilityHintSet>().Bind(new[]
             {
                 new PrimitiveVisibilityHintSet.PrimitiveVisibilityEntry
-                    { Mesh = sharedMesh, SubMesh = 0, Role = "first_person" },
+                    { Mesh = sharedMesh, SubMesh = 0, Roles = new[] { "first_person" } },
             });
 
             var exportSettings = GLTFSettings.GetDefaultSettings();
@@ -241,7 +252,7 @@ namespace UnityGLTF.VisibilityHints.Tests
                 KHR_mesh_primitive_visibility_hint.EXTENSION_NAME]
                 as KHR_mesh_primitive_visibility_hint;
             Assert.IsNotNull(secondHint);
-            secondHint.Role = "third_person";
+            secondHint.Roles = new[] { "third_person" };
 
             var importSettings = GLTFSettings.GetDefaultSettings();
             foreach (var plugin in importSettings.ImportPlugins)
@@ -266,7 +277,7 @@ namespace UnityGLTF.VisibilityHints.Tests
             Assert.AreEqual(2, set.Entries.Count);
             CollectionAssert.AreEquivalent(
                 new[] { "first_person", "third_person" },
-                new[] { set.Entries[0].Role, set.Entries[1].Role });
+                new[] { set.Entries[0].Roles[0], set.Entries[1].Roles[0] });
             Assert.AreNotSame(set.Entries[0].Mesh, set.Entries[1].Mesh,
                 "geometry-only importer caches must not collapse distinct primitive metadata");
 

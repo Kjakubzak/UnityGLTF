@@ -20,6 +20,15 @@ Package baseline: `Kjakubzak/UnityGLTF avatar_ext_normative@a7fb6367963ed553540a
   properties still select the highest active expression-array index. `ExpressionAggregateRecord.IsSingleWriter`,
   `IsStandardSingleWriter` and `IsHostComposed` are now true only for Boolean and integer properties; `IsRotation`
   is new. The "Shared targets and neutral state" policy below is superseded for scale and rotation.
+- **Visibility roles (glTF-private #256).** Both hint extensions carry `roles` (one or more distinct nonempty strings);
+  the single `role` is retired, and a hint with only `role` imposes no restriction (warning). View tags,
+  `IVisibilityRoleResolver`, `RenderUnsupportedRoles` and the `ViewTag*` constants are removed. Each query takes a
+  `VisibilityRoleContext` (the roles that apply in the view and the roles the application has logic for): a standard
+  role without logic applies everywhere, an unrecognized custom role is ignored, and a hint with no recognized role
+  imposes no restriction. Roles in one hint are ORed; node and ancestor hints, the primitive hint and
+  `KHR_node_visibility` are ANDed. `VisibilityRoleContext.NoLogic` is the default and `FirstPersonRolePolicy`
+  implements the recommended first/third-person logic. The hints are never exported as required; a required
+  listing on import only warns.
 
 ## Current expression mapping
 
@@ -77,10 +86,10 @@ to earlier writers. The final mix with ordinary animations and other systems is 
 
 `NodeVisibilityHintSet.IsHintVisible` evaluates the queried node and every ancestor within the current instance and
 ANDs their predicates independently for each view. A child's `always` cannot restore a false ancestor. A node below
-`first_person` and `third_person` requires both tags. Unknown roles fail closed unless the host explicitly supports
-them or selects its unsupported-role policy. Custom-role resolver signatures remain unchanged and run for each hint.
+`first_person` and `third_person` hints is drawn only where both roles apply. Unrecognized custom roles are ignored
+(updated for spec 314c95c5; see above).
 
-`ResolveRole` remains nearest authored metadata for presentation. It cannot represent the composite Boolean and
+`ResolveRoles` remains nearest authored metadata for presentation. It cannot represent the composite Boolean and
 must not drive rendering. Existing node/primitive view-controller signatures now consume cumulative visibility;
 primitive predicates further restrict that node result. Authored tags, exports, GameObject activation, transforms,
 ordinary animation and cameras are preserved. Hint omission of direct color/depth content is scoped per view.
