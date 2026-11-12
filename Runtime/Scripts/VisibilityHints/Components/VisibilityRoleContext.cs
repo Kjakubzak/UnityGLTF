@@ -29,7 +29,10 @@ namespace UnityGLTF.VisibilityHints
         /// ignored.</param>
         /// <param name="rolesWithLogic">Further roles the application has logic for (and that therefore do not apply
         /// unless listed in <paramref name="appliedRoles"/>), such as <c>third_person</c> in a first-person view or a
-        /// recognized custom role that does not apply in this view.</param>
+        /// recognized custom role that does not apply in this view. A context with logic for <c>first_person</c> but
+        /// not for <c>third_person</c> applies <c>third_person</c> in every view, so content marked
+        /// <c>third_person</c> (such as a head) is also drawn in first-person views; see
+        /// <see cref="PairsThirdPersonWithFirstPerson"/> and <see cref="FirstPersonRolePolicy"/>.</param>
         public VisibilityRoleContext(IEnumerable<string> appliedRoles, IEnumerable<string> rolesWithLogic)
         {
             _applied = Distinct(appliedRoles, null);
@@ -51,6 +54,20 @@ namespace UnityGLTF.VisibilityHints
                 return all;
             }
         }
+
+        /// <summary>
+        /// False when this context has logic for <c>first_person</c> and either has no logic for <c>third_person</c>
+        /// or applies neither role; otherwise true. The specification says an application that applies
+        /// <c>first_person</c> SHOULD apply <c>third_person</c> wherever <c>first_person</c> does not apply. Without
+        /// logic for <c>third_person</c>, that role also applies in first-person views, so <c>third_person</c>
+        /// content is drawn there. <see cref="FirstPersonRolePolicy"/> contexts are always true; a host that builds
+        /// contexts itself can assert this property.
+        /// </summary>
+        public bool PairsThirdPersonWithFirstPerson
+            => !HasLogicFor(VisibilityHintExtensionNames.RoleFirstPerson)
+               || (HasLogicFor(VisibilityHintExtensionNames.RoleThirdPerson)
+                   && (Applies(VisibilityHintExtensionNames.RoleFirstPerson)
+                       || Applies(VisibilityHintExtensionNames.RoleThirdPerson)));
 
         /// <summary>True when the application has logic for <paramref name="role"/>.</summary>
         public bool HasLogicFor(string role) => Contains(_applied, role) || Contains(_withLogic, role);

@@ -42,6 +42,12 @@ Two ready-made sources of role logic:
   mirror view is `ForView(false, new[] { "ACME_mirror_only" })`. When a view is first-person is the application's
   decision; the `first_person` role itself is informative.
 
+A context built by hand with logic for `first_person` only, such as `new VisibilityRoleContext(new[] { "first_person" },
+null)`, leaves `third_person` without logic, so it applies in every view and `third_person` content (a head, say) is
+drawn in first-person views too. List `third_person` among the roles with logic, or use `FirstPersonRolePolicy`.
+`PairsThirdPersonWithFirstPerson` is false for such a context, and for one with logic for both roles that applies
+neither, so a host can assert it.
+
 ## Runtime query
 
 Import attaches the authored `NodeVisibilityHintSet` and/or `PrimitiveVisibilityHintSet` plus one `ViewContextController` to the scene root. The controller's default role logic is `VisibilityRoleContext.NoLogic`.

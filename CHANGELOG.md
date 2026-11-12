@@ -5,6 +5,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+- add: `VisibilityRoleContext.PairsThirdPersonWithFirstPerson`, false for a context with logic for `first_person` but none for `third_person` (which then applies in first-person views too) or one that applies neither; the constructor and README document the trap, and `FirstPersonRolePolicy` contexts are always true
 - fix: a visibility hint without a valid role is never written: `KHR_node_visibility_hint.Serialize` / `KHR_mesh_primitive_visibility_hint.Serialize` return null when `Roles` has no valid role, and `GLTFProperty` omits a null extension (and an `extensions` object left empty), so re-serializing a parsed `GLTFRoot` that held a legacy `role`-only hint no longer writes `{}`
 - fix: `ExpressionDriverPipeline.ApplySuppressions` (run by `ExpressionController` every frame) reuses per-thread attenuation buffers instead of allocating a list and an array per suppressed target on each evaluation; results are unchanged
 - fix: a suppression `name` that is not a string is dropped on import with a warning instead of being kept as an unknown member, and `name` is written only from `Suppression.Name`, so an export never carries the schema-invalid value

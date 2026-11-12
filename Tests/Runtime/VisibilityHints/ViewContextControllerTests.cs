@@ -118,6 +118,23 @@ namespace UnityGLTF.VisibilityHints.Tests
         }
 
         [Test]
+        public void RoleContext_ReportsFirstPersonLogicWithoutThirdPerson()
+        {
+            var firstPersonOnly = new VisibilityRoleContext(new[] { "first_person" }, null);
+            Assert.IsFalse(firstPersonOnly.PairsThirdPersonWithFirstPerson);
+            Assert.IsTrue(firstPersonOnly.Applies("third_person"), "third_person without logic applies in this view too");
+            Assert.IsFalse(new VisibilityRoleContext(null, new[] { "first_person", "third_person" })
+                .PairsThirdPersonWithFirstPerson, "neither role applies");
+
+            Assert.IsTrue(FirstPerson.PairsThirdPersonWithFirstPerson);
+            Assert.IsTrue(ThirdPerson.PairsThirdPersonWithFirstPerson);
+            Assert.IsTrue(Mirror.PairsThirdPersonWithFirstPerson);
+            Assert.IsTrue(BothStandard.PairsThirdPersonWithFirstPerson);
+            Assert.IsTrue(NoLogic.PairsThirdPersonWithFirstPerson);
+            Assert.IsTrue(new VisibilityRoleContext(new[] { "third_person" }, null).PairsThirdPersonWithFirstPerson);
+        }
+
+        [Test]
         public void RoleContext_IgnoresNullEmptyAndDuplicateRoles()
         {
             var context = new VisibilityRoleContext(
