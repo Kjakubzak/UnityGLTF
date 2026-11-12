@@ -297,6 +297,28 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
+        public void AttenuationsDoNotCarryOverBetweenEvaluations()
+        {
+            var suppressed = new IReadOnlyList<SuppressionEntry>[]
+            {
+                null,
+                new[] { Suppression(0, SuppressionType.Blend), Suppression(0, SuppressionType.Blend, amount: 0.5d) },
+            };
+            var unsuppressed = new IReadOnlyList<SuppressionEntry>[] { null, new SuppressionEntry[0] };
+            var larger = new IReadOnlyList<SuppressionEntry>[]
+            {
+                null, null, null, new[] { Suppression(2, SuppressionType.Blend, amount: 0.25d) },
+            };
+
+            Assert.That(ExpressionDriverPipeline.BuildSnapshot(new double?[] { 1d, 1d }, suppressed).V[0], Is.EqualTo(0d));
+            Assert.That(ExpressionDriverPipeline.BuildSnapshot(new double?[] { 1d, 1d }, unsuppressed).V[0], Is.EqualTo(1d));
+            var snapshot = ExpressionDriverPipeline.BuildSnapshot(new double?[] { 1d, 1d, 1d, 1d }, larger);
+            CollectionAssert.AreEqual(new[] { 1d, 1d, 0.75d, 1d }, snapshot.V);
+            Assert.That(ExpressionDriverPipeline.BuildSnapshot(new double?[] { 1d, 0.5d }, suppressed).V[0],
+                Is.EqualTo(0.25d));
+        }
+
+        [Test]
         public void TheForwardMappingReadsUWhileItsSourceIsSuppressed()
         {
             var suppressions = new IReadOnlyList<SuppressionEntry>[]
