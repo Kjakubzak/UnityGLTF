@@ -263,6 +263,35 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
+        public void TheSuppressionReadmeExampleGivesItsStatedDrivers()
+        {
+            // KHR_character_expression_suppression README, "Suppression example" (KhronosGroup/glTF#2512 @ 7ab5368a):
+            // aa is expression 0, happy is 1 and angry is 2.
+            var happy = KHR_character_expression_suppression.FromJson(JObject.Parse(
+                @"{ ""suppressions"": [ { ""target"": 0, ""name"": ""attenuate_viseme_for_happy"", ""type"": ""blend"", ""amount"": 0.5 } ] }"));
+            var angry = KHR_character_expression_suppression.FromJson(JObject.Parse(
+                @"{ ""suppressions"": [ { ""target"": 0, ""type"": ""block"", ""amount"": 1.0, ""threshold"": 0.2 } ] }"));
+            var wireToTrackIndex = new Dictionary<int, int> { { 0, 0 }, { 1, 1 }, { 2, 2 } };
+            var suppressions = new IReadOnlyList<SuppressionEntry>[]
+            {
+                null,
+                KhrCharacterBaker.BuildSuppressionEntries(happy, 1, wireToTrackIndex),
+                KhrCharacterBaker.BuildSuppressionEntries(angry, 2, wireToTrackIndex),
+            };
+
+            // u = [1, 0.5, 0.1]: the blend and block contributions are 0.25 and 0, giving v[0] = 0.75.
+            var low = ExpressionDriverPipeline.BuildSnapshot(new double?[] { 1d, 0.5d, 0.1d }, suppressions);
+            Assert.That(ExpressionDriverPipeline.Attenuation(suppressions[1][0], low.U[1]), Is.EqualTo(0.25d));
+            Assert.That(ExpressionDriverPipeline.Attenuation(suppressions[2][0], low.U[2]), Is.EqualTo(0d));
+            Assert.That(low.V[0], Is.EqualTo(0.75d));
+
+            // With u[2] = 0.6 the block contributes 1, so the sum is clamped to 1 and v[0] = 0.
+            var high = ExpressionDriverPipeline.BuildSnapshot(new double?[] { 1d, 0.5d, 0.6d }, suppressions);
+            Assert.That(ExpressionDriverPipeline.Attenuation(suppressions[2][0], high.U[2]), Is.EqualTo(1d));
+            Assert.That(high.V[0], Is.EqualTo(0d));
+        }
+
+        [Test]
         public void DuplicateSuppressionsFromOneSourceEachContribute()
         {
             var suppressions = new IReadOnlyList<SuppressionEntry>[]
@@ -294,6 +323,28 @@ namespace UnityGLTF.KhrCharacter.Tests
             double second = ExpressionDriverPipeline.BuildSnapshot(u, reverse).V[0];
 
             Assert.That(BitConverter.DoubleToInt64Bits(first), Is.EqualTo(BitConverter.DoubleToInt64Bits(second)));
+        }
+
+        [Test]
+        public void AttenuationsDoNotCarryOverBetweenEvaluations()
+        {
+            var suppressed = new IReadOnlyList<SuppressionEntry>[]
+            {
+                null,
+                new[] { Suppression(0, SuppressionType.Blend), Suppression(0, SuppressionType.Blend, amount: 0.5d) },
+            };
+            var unsuppressed = new IReadOnlyList<SuppressionEntry>[] { null, new SuppressionEntry[0] };
+            var larger = new IReadOnlyList<SuppressionEntry>[]
+            {
+                null, null, null, new[] { Suppression(2, SuppressionType.Blend, amount: 0.25d) },
+            };
+
+            Assert.That(ExpressionDriverPipeline.BuildSnapshot(new double?[] { 1d, 1d }, suppressed).V[0], Is.EqualTo(0d));
+            Assert.That(ExpressionDriverPipeline.BuildSnapshot(new double?[] { 1d, 1d }, unsuppressed).V[0], Is.EqualTo(1d));
+            var snapshot = ExpressionDriverPipeline.BuildSnapshot(new double?[] { 1d, 1d, 1d, 1d }, larger);
+            CollectionAssert.AreEqual(new[] { 1d, 1d, 0.75d, 1d }, snapshot.V);
+            Assert.That(ExpressionDriverPipeline.BuildSnapshot(new double?[] { 1d, 0.5d }, suppressed).V[0],
+                Is.EqualTo(0.25d));
         }
 
         [Test]

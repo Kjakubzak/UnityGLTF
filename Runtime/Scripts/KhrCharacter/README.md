@@ -141,7 +141,7 @@ never writes scene objects; applying the results and mixing them with other writ
    translation, texture offset and texture rotation are additive; rotation angles add as raw scalars, so whole turns
    survive. Morph weights fold whole-array and element records into one complete vector per node, whose untouched
    elements keep their authored value (`ExpressionAggregateRecord.Contributed` marks the touched ones). The
-   remaining types use host composition, and this package makes these choices (spec 314c95c5):
+   remaining types use host composition, and this package makes these choices (KhronosGroup/glTF#2512 @ `7ab5368a`):
    - **Node scale and texture scale** use the same additive formula `b + sum(s - n)` per component, as
      `KHR_character_expression_joint` and `KHR_character_expression_texture_transform` recommend. Two scale responses
      from `1` to `2` and from `1` to `3` give `4`, not `3` (highest index) or `6` (multiplication). Scale results are not
@@ -154,7 +154,11 @@ never writes scene objects; applying the results and mixing them with other writ
      does not depend on entry order, changes about a shared axis add exactly (10 + 10 degrees is 20 degrees), one
      record whose neutral sample equals `b` reproduces its sample, and 10 degrees right plus 10 degrees up gives one
      14.1-degree rotation about the diagonal, which turns the forward axis about 10 degrees right and 10 degrees up.
-     Other runtimes may choose another method.
+     A change near 180 degrees is ill-conditioned: there `w` of the relative quaternion is about 0, so rounding can
+     flip its sign and with it the direction of `r` (`+pi` or `-pi` about the axis). Such a record alone gives the same
+     rotation either way, but combined with a rotation about another axis the result can jump. The specification's
+     recommendation covers only small rotations, so this is outside it; keep each response's change from its
+     time-zero sample well below 180 degrees. Other runtimes may choose another method.
    - **Boolean and integer** properties choose the absolute sample from the highest active expression-array index and
      validate their discrete values. An inactive entry emits no record and cannot override an active entry.
 

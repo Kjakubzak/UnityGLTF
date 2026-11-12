@@ -17,7 +17,7 @@ view and asset instance. The host passes that logic to every query as a `Visibil
 - `rolesWithLogic`: further roles the application has logic for but that do not apply here (an applied role counts
   as having logic).
 
-Evaluation follows the specification (spec 314c95c5, glTF-private #256):
+Evaluation follows the specification (KhronosGroup/glTF#2512 @ `7ab5368a`):
 
 | role in a hint | applies when |
 |---|---|
@@ -41,6 +41,12 @@ Two ready-made sources of role logic:
   `ForView(isFirstPersonView, appliedCustomRoles, recognizedCustomRoles)` build the context of one view; for example a
   mirror view is `ForView(false, new[] { "ACME_mirror_only" })`. When a view is first-person is the application's
   decision; the `first_person` role itself is informative.
+
+A context built by hand with logic for `first_person` only, such as `new VisibilityRoleContext(new[] { "first_person" },
+null)`, leaves `third_person` without logic, so it applies in every view and `third_person` content (a head, say) is
+drawn in first-person views too. List `third_person` among the roles with logic, or use `FirstPersonRolePolicy`.
+`PairsThirdPersonWithFirstPerson` is false for such a context, and for one with logic for both roles that applies
+neither, so a host can assert it.
 
 ## Runtime query
 
@@ -106,7 +112,7 @@ A descendant node hint adds a restriction to all ancestor predicates. It cannot 
 - Enable `VisibilityHintImportPlugin` or `VisibilityHintExportPlugin` on the relevant `GLTFSettings`; both are disabled by default.
 - Export reads authored entries, not runtime query results, and preserves `extensions`, `extras`, and additional JSON properties.
 - Export writes `roles` (distinct, nonempty, in authored order). A hint with no role is skipped with a warning because `roles` is required.
-- Import reads `roles`; invalid or duplicate items are dropped with a warning. A hint without a valid `roles` array, including one with only the retired single `role` string, imposes no restriction and is not imported (warning). A retired `role` next to `roles` is ignored with a warning; it is never kept as an additional property or written on export.
+- Import reads `roles`; invalid or duplicate items are dropped with a warning. A hint without a valid `roles` array, including one with only the retired single `role` string, imposes no restriction and is not imported (warning); the schema object it parses to serializes to nothing, so re-serializing a parsed `GLTFRoot` drops it, with a warning, rather than writing a hint without `roles`. A retired `role` next to `roles` is ignored with a warning; it is never kept as an additional property or written on export.
 - Scenes and prefabs saved by earlier versions migrate on load: an entry's serialized single `Role` becomes `Roles = [Role]` (`third_person_only` and `first_person_only` become the standard roles), and a controller's serialized default view tags become its default role logic (the tags apply, and the application has logic for `first_person` and `third_person`). An empty tag list, the old default, becomes no role logic.
 - Primitive entries are keyed by Unity `Mesh` and sub-mesh index; the same primitive roles are combined independently with each containing node's predicate.
 - Primitive-hinted meshes opt out of UnityGLTF's geometry-only mesh deduplication so distinct glTF primitive metadata cannot collapse.

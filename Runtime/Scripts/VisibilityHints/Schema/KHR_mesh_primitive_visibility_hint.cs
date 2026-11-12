@@ -15,7 +15,8 @@ namespace GLTF.Schema
 
         /// <summary>
         /// The authored roles: distinct nonempty strings in authored order (order has no meaning). Null when the
-        /// hint has no valid <c>roles</c>, in which case importers ignore it and exporters skip it.
+        /// hint has no valid <c>roles</c>, in which case importers ignore it and <see cref="Serialize"/> returns null,
+        /// so the hint is not written.
         /// </summary>
         public string[] Roles;
 
@@ -25,8 +26,10 @@ namespace GLTF.Schema
         public JObject AdditionalProperties;
         public JProperty RawData;
 
+        /// <summary>The wire property, or null when there is no valid role; <see cref="GLTFProperty"/> omits a null
+        /// extension with a warning.</summary>
         public JProperty Serialize()
-            => new JProperty(EXTENSION_NAME, VisibilityHintJson.Serialize(Roles, Label, Extensions, Extras, AdditionalProperties));
+            => VisibilityHintJson.ToProperty(EXTENSION_NAME, Roles, Label, Extensions, Extras, AdditionalProperties);
 
         public IExtension Clone(GLTFRoot root) => new KHR_mesh_primitive_visibility_hint
         {

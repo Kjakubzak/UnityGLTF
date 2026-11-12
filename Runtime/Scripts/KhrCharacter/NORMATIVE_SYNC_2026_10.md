@@ -1,18 +1,21 @@
 # October 2026 normative synchronization
 
-Specification: `Kjakubzak/glTF-private@9dc0781cebd1a24a0869aa98d2a3b902754ecd92`, updated below to
-`avatar_ext_normative@314c95c5` (the payload of KhronosGroup/glTF#2512 at 7ab5368a).
+Specification: KhronosGroup/glTF#2512 @ `7ab5368a87d1d303dff33ec5f9aad42752e84c78`
+(`extensions/2.0/Khronos/KHR_character*` and the two visibility-hint extensions). Same payload: the extension folders
+are identical in `Kjakubzak/glTF-private` `avatar_ext_normative@314c95c5`, where the changes below were reviewed as
+#250, #251, #254 and #256. The later sections were first written against an earlier draft and are updated where the
+specification changed.
 Package baseline: `Kjakubzak/UnityGLTF avatar_ext_normative@a7fb6367963ed553540a96c19730df8475a0dfff`.
 
-## Changes for specification 314c95c5
+## Changes in KhronosGroup/glTF#2512 @ 7ab5368a
 
-- **Suppression sums and clamps (glTF-private #251).** Each suppression contributes an attenuation: `amount * u[src]`
+- **Suppression sums and clamps.** Each suppression contributes an attenuation: `amount * u[src]`
   for `blend`, `amount` when `u[src] > threshold` (else `0`) for `block`, and `0` for an unsupported custom type.
   Per target, `v[t] = u[t] * (1 - clamp(sum, 0, 1))`; factors are no longer multiplied. `ExpressionDriverPipeline.
   Attenuation` replaces `SuppressionFactor`, which remains as an obsolete `1 - Attenuation` shim. The optional
   suppression `name` is now a defined member (`SuppressionEntry.Name` / `HasName`), preserved and re-exported, never
   used to resolve the target.
-- **Scale composes additively; rotation approximately additively (glTF-private #250, #254).** Node `scale` and
+- **Scale composes additively; rotation approximately additively.** Node `scale` and
   `KHR_texture_transform` `scale` use `b + sum(s - n)` per component (both SHOULD). Rotations use this package's
   method, chosen by the implementer because the specification only says SHOULD be approximately additive for small
   rotations: `y = normalize(b * exp(sum(log(n^-1 * s))))`, each relative quaternion taken on the shorter arc and
@@ -20,7 +23,7 @@ Package baseline: `Kjakubzak/UnityGLTF avatar_ext_normative@a7fb6367963ed553540a
   properties still select the highest active expression-array index. `ExpressionAggregateRecord.IsSingleWriter`,
   `IsStandardSingleWriter` and `IsHostComposed` are now true only for Boolean and integer properties; `IsRotation`
   is new. The "Shared targets and neutral state" policy below is superseded for scale and rotation.
-- **Visibility roles (glTF-private #256).** Both hint extensions carry `roles` (one or more distinct nonempty strings);
+- **Visibility roles.** Both hint extensions carry `roles` (one or more distinct nonempty strings);
   the single `role` is retired, and a hint with only `role` imposes no restriction (warning). View tags,
   `IVisibilityRoleResolver`, `RenderUnsupportedRoles` and the `ViewTag*` constants are removed. Each query takes a
   `VisibilityRoleContext` (the roles that apply in the view and the roles the application has logic for): a standard
@@ -87,7 +90,7 @@ to earlier writers. The final mix with ordinary animations and other systems is 
 `NodeVisibilityHintSet.IsHintVisible` evaluates the queried node and every ancestor within the current instance and
 ANDs their predicates independently for each view. A child's `always` cannot restore a false ancestor. A node below
 `first_person` and `third_person` hints is drawn only where both roles apply. Unrecognized custom roles are ignored
-(updated for spec 314c95c5; see above).
+(updated for KhronosGroup/glTF#2512 @ 7ab5368a; see above).
 
 `ResolveRoles` remains nearest authored metadata for presentation. It cannot represent the composite Boolean and
 must not drive rendering. Existing node/primitive view-controller signatures now consume cumulative visibility;

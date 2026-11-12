@@ -34,6 +34,11 @@ namespace UnityGLTF.KhrCharacter
     /// </summary>
     public static class ExpressionDriverPipeline
     {
+        // Per-target attenuation operands of ApplySuppressions, reused on each thread so per-frame evaluation does
+        // not allocate once the buffers have grown.
+        [ThreadStatic] private static double[][] s_attenuations;
+        [ThreadStatic] private static int[] s_attenuationCounts;
+
         /// <summary>
         /// Builds <c>u</c>: every supplied driver must be finite and is clamped to [0, 1]; a null or missing driver
         /// is 0.
@@ -79,7 +84,18 @@ namespace UnityGLTF.KhrCharacter
                 throw new ArgumentException(
                     "There are more suppression lists than expression drivers.", nameof(suppressionsByEntry));
 
-            var attenuations = new List<double>[v.Length];
+            var attenuations = s_attenuations;
+            var counts = s_attenuationCounts;
+            if (attenuations == null || attenuations.Length < v.Length)
+            {
+                Array.Resize(ref s_attenuations, v.Length);
+                attenuations = s_attenuations;
+                s_attenuationCounts = counts = new int[v.Length];
+            }
+            else
+            {
+                Array.Clear(counts, 0, v.Length);
+            }
             for (int source = 0; source < suppressionsByEntry.Count; source++)
             {
                 var suppressions = suppressionsByEntry[source];
@@ -92,17 +108,17 @@ namespace UnityGLTF.KhrCharacter
                             nameof(suppressionsByEntry),
                             $"Suppression of expression {source} targets expression {suppression.TargetIndex}, " +
                             "which does not exist.");
-                    var operands = attenuations[suppression.TargetIndex] ??
-                                   (attenuations[suppression.TargetIndex] = new List<double>());
-                    operands.Add(Attenuation(suppression, u[source]));
+                    int target = suppression.TargetIndex;
+                    if (attenuations[target] == null || counts[target] == attenuations[target].Length)
+                        Array.Resize(ref attenuations[target], Math.Max(4, 2 * counts[target]));
+                    attenuations[target][counts[target]++] = Attenuation(suppression, u[source]);
                 }
             }
 
             for (int target = 0; target < v.Length; target++)
             {
-                if (attenuations[target] == null) continue;
-                var operands = attenuations[target].ToArray();
-                if (!ExactBinary64Sum.TrySum(operands, operands.Length, out double sum))
+                if (counts[target] == 0) continue;
+                if (!ExactBinary64Sum.TrySum(attenuations[target], counts[target], out double sum))
                     throw new ArgumentOutOfRangeException(
                         nameof(suppressionsByEntry), $"The attenuation sum of expression {target} is not finite.");
                 v[target] = u[target] * (1d - Math.Min(1d, Math.Max(0d, sum)));

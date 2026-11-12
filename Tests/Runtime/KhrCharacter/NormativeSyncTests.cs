@@ -233,8 +233,9 @@ namespace UnityGLTF.KhrCharacter.Tests
             Assert.That(composition.Records[0].Value, Is.EqualTo(new[] { (double)last }));
         }
 
-        // The visibility cases table of KHR_node_visibility_hint (spec 314c95c5). "nologic" is an application with no
-        // role logic; otherwise the listed roles apply and the application has logic for both standard roles.
+        // The visibility cases table of KHR_node_visibility_hint (KhronosGroup/glTF#2512 @ 7ab5368a). "nologic" is an
+        // application with no role logic; otherwise the listed roles apply and the application has logic for both
+        // standard roles.
         [TestCase("", "third_person", "nologic", true)]
         [TestCase("", "first_person", "nologic", true)]
         [TestCase("", "first_person", "third_person", false)]
