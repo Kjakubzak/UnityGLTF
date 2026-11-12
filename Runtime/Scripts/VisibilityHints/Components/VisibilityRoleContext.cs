@@ -62,6 +62,8 @@ namespace UnityGLTF.VisibilityHints
         /// logic for <c>third_person</c>, that role also applies in first-person views, so <c>third_person</c>
         /// content is drawn there. <see cref="FirstPersonRolePolicy"/> contexts are always true; a host that builds
         /// contexts itself can assert this property.
+        /// The specification's recommendation is about an application's role logic across all its views, so
+        /// check this on the context of every view; one context describes one view only.
         /// </summary>
         public bool PairsThirdPersonWithFirstPerson
             => !HasLogicFor(VisibilityHintExtensionNames.RoleFirstPerson)
