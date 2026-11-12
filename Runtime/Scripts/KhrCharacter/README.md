@@ -154,7 +154,11 @@ never writes scene objects; applying the results and mixing them with other writ
      does not depend on entry order, changes about a shared axis add exactly (10 + 10 degrees is 20 degrees), one
      record whose neutral sample equals `b` reproduces its sample, and 10 degrees right plus 10 degrees up gives one
      14.1-degree rotation about the diagonal, which turns the forward axis about 10 degrees right and 10 degrees up.
-     Other runtimes may choose another method.
+     A change near 180 degrees is ill-conditioned: there `w` of the relative quaternion is about 0, so rounding can
+     flip its sign and with it the direction of `r` (`+pi` or `-pi` about the axis). Such a record alone gives the same
+     rotation either way, but combined with a rotation about another axis the result can jump. The specification's
+     recommendation covers only small rotations, so this is outside it; keep each response's change from its
+     time-zero sample well below 180 degrees. Other runtimes may choose another method.
    - **Boolean and integer** properties choose the absolute sample from the highest active expression-array index and
      validate their discrete values. An inactive entry emits no record and cannot override an active entry.
 
