@@ -157,6 +157,31 @@ namespace UnityGLTF.KhrCharacter.Tests
         }
 
         [Test]
+        public void SuppressionSchema_NonStringNameIsDroppedWithAWarningAndNeverWritten()
+        {
+            LogAssert.Expect(LogType.Warning, new Regex("'name' that is not a string"));
+            var suppression = KHR_character_expression_suppression.FromJson(new JObject
+            {
+                { "suppressions", new JArray
+                    {
+                        new JObject { { "target", 1 }, { "name", 7 }, { "ACME_note", 1 } },
+                    }
+                },
+            });
+
+            var read = suppression.Suppressions[0];
+            Assert.IsNull(read.Name);
+            Assert.IsNull(read.AdditionalProperties["name"], "the invalid name is not kept as an unknown member");
+            Assert.AreEqual(1, read.AdditionalProperties["ACME_note"].Value<int>());
+
+            // Entries baked by an earlier version may hold the invalid name in their stored additional properties.
+            read.AdditionalProperties["name"] = 7;
+            var wire = (JObject)((JArray)((JObject)suppression.Serialize().Value)["suppressions"])[0];
+            Assert.IsNull(wire["name"], "name is written only from Name");
+            Assert.AreEqual(1, wire["ACME_note"].Value<int>());
+        }
+
+        [Test]
         public void BuildSuppressionEntries_PreservesCustomTypeWithIdentityFallback()
         {
             var suppression = new KHR_character_expression_suppression

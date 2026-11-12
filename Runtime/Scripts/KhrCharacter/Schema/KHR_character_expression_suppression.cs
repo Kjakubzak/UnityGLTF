@@ -28,7 +28,8 @@ namespace GLTF.Schema
 
             /// <summary>
             /// Optional name of this suppression, or null when omitted. It names the suppression only; consumers
-            /// resolve the suppressed expression by <see cref="Target"/>, never by this value.
+            /// resolve the suppressed expression by <see cref="Target"/>, never by this value. A wire value that is
+            /// not a string is dropped with a warning.
             /// </summary>
             public string Name;
 
@@ -72,8 +73,11 @@ namespace GLTF.Schema
                 foreach (var node in arr)
                 {
                     if (!(node is JObject s)) continue;
-                    // A non-string name is invalid; it stays an unknown member rather than being coerced.
                     bool hasStringName = s["name"]?.Type == JTokenType.String;
+                    if (s["name"] != null && !hasStringName)
+                        UnityEngine.Debug.LogWarning(
+                            $"{EXTENSION_NAME}: ignoring a suppression 'name' that is not a string; it is not " +
+                            "re-exported.");
                     ext.Suppressions.Add(new Suppression
                     {
                         Target = s["target"]?.Value<int>() ?? -1,
@@ -85,11 +89,8 @@ namespace GLTF.Schema
                             ? (JObject)suppressionExtensions.DeepClone()
                             : null,
                         Extras = s["extras"]?.DeepClone(),
-                        AdditionalProperties = hasStringName
-                            ? GetAdditionalProperties(
-                                s, "target", "name", "type", "amount", "threshold", "extensions", "extras")
-                            : GetAdditionalProperties(
-                                s, "target", "type", "amount", "threshold", "extensions", "extras"),
+                        AdditionalProperties = GetAdditionalProperties(
+                            s, "target", "name", "type", "amount", "threshold", "extensions", "extras"),
                     });
                 }
             }
@@ -109,8 +110,9 @@ namespace GLTF.Schema
                         : new JObject();
                     if (s.Target >= 0) so["target"] = s.Target;
                     else so.Remove("target");
-                    // A null name leaves any name preserved among the additional properties untouched.
+                    // Name is the only source of "name", even when stored additional properties hold one.
                     if (s.Name != null) so["name"] = s.Name;
+                    else so.Remove("name");
                     if (s.Type != null) so["type"] = s.Type;
                     else so.Remove("type");
                     if (s.Amount.HasValue) so["amount"] = s.Amount.Value;
