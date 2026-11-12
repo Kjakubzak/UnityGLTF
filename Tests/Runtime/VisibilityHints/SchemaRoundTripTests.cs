@@ -1,4 +1,7 @@
+using System.IO;
+using System.Text;
 using System.Text.RegularExpressions;
+using GLTF;
 using GLTF.Schema;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
@@ -128,6 +131,7 @@ namespace UnityGLTF.VisibilityHints.Tests
 
             Assert.IsNotNull(ext);
             Assert.IsNull(ext.Roles, "a missing roles array deserializes as null");
+            Assert.IsNull(ext.Serialize(), "roles is required, so a hint without it is not written");
         }
 
         [Test]
@@ -139,6 +143,7 @@ namespace UnityGLTF.VisibilityHints.Tests
 
             Assert.IsNotNull(ext);
             Assert.IsNull(ext.Roles);
+            Assert.IsNull(ext.Serialize());
         }
 
         [Test]
@@ -152,7 +157,32 @@ namespace UnityGLTF.VisibilityHints.Tests
             Assert.IsNotNull(ext);
             Assert.IsNull(ext.Roles, "the legacy single role is not migrated; the hint imposes no restriction");
             Assert.IsNull(ext.AdditionalProperties, "the legacy member is dropped, not preserved as an unknown property");
-            Assert.IsNull(((JObject)ext.Serialize().Value)["role"], "the legacy single role is never re-exported");
+            Assert.IsNull(ext.Serialize(), "a hint without roles, including its legacy role, is never written");
+        }
+
+        [Test]
+        public void RoleOnlyHint_IsOmittedWhenTheRootIsReserialized()
+        {
+            GLTFProperty.TryRegisterExtension(new KHR_node_visibility_hint_Factory());
+            LogAssert.Expect(LogType.Warning, new Regex("legacy 'role'"));
+            const string json = @"{
+                ""asset"": { ""version"": ""2.0"" },
+                ""extensionsUsed"": [ ""KHR_node_visibility_hint"" ],
+                ""nodes"": [
+                    { ""name"": ""Head"", ""extensions"": { ""KHR_node_visibility_hint"": { ""role"": ""third_person"" } } },
+                    { ""name"": ""Arms"", ""extensions"": { ""KHR_node_visibility_hint"": { ""roles"": [ ""first_person"" ] } } }
+                ]
+            }";
+            GLTFParser.ParseJson(new MemoryStream(Encoding.UTF8.GetBytes(json)), out var root);
+            Assert.IsInstanceOf<KHR_node_visibility_hint>(root.Nodes[0].Extensions[KHR_node_visibility_hint.EXTENSION_NAME]);
+
+            var writer = new StringWriter();
+            root.Serialize(writer);
+            var nodes = (JArray)JObject.Parse(writer.ToString())["nodes"];
+            Assert.IsNull(nodes[0]["extensions"], "neither the role-less hint nor an empty extensions object is written");
+            Assert.AreEqual("Head", nodes[0]["name"].Value<string>());
+            CollectionAssert.AreEqual(new[] { "first_person" },
+                nodes[1]["extensions"][KHR_node_visibility_hint.EXTENSION_NAME]["roles"].ToObject<string[]>());
         }
 
         [TestCase(false)]

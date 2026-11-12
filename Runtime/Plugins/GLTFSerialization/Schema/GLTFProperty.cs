@@ -247,14 +247,21 @@ namespace GLTF.Schema
 		{
 			if (Extensions != null && Extensions.Count > 0)
 			{
-				writer.WritePropertyName("extensions");
-				writer.WriteStartObject();
+				bool started = false;
 				foreach (var extension in Extensions)
 				{
+					// An extension object that has nothing valid to write returns null and is omitted.
 					JToken extensionToken = extension.Value.Serialize();
+					if (extensionToken == null) continue;
+					if (!started)
+					{
+						writer.WritePropertyName("extensions");
+						writer.WriteStartObject();
+						started = true;
+					}
 					extensionToken.WriteTo(writer);
 				}
-				writer.WriteEndObject();
+				if (started) writer.WriteEndObject();
 			}
 
 			if(Extras != null)

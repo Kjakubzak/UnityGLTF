@@ -16,7 +16,8 @@ namespace GLTF.Schema
 
         /// <summary>
         /// The authored roles: distinct nonempty strings in authored order (order has no meaning). Null when the
-        /// hint has no valid <c>roles</c>, in which case importers ignore it and exporters skip it.
+        /// hint has no valid <c>roles</c>, in which case importers ignore it and <see cref="Serialize"/> returns null,
+        /// so the hint is not written.
         /// </summary>
         public string[] Roles;
 
@@ -26,8 +27,10 @@ namespace GLTF.Schema
         public JObject AdditionalProperties;
         public JProperty RawData;
 
+        /// <summary>The wire property, or null when there is no valid role; <see cref="GLTFProperty"/> omits a null
+        /// extension.</summary>
         public JProperty Serialize()
-            => new JProperty(EXTENSION_NAME, VisibilityHintJson.Serialize(Roles, Label, Extensions, Extras, AdditionalProperties));
+            => VisibilityHintJson.ToProperty(EXTENSION_NAME, Roles, Label, Extensions, Extras, AdditionalProperties);
 
         public IExtension Clone(GLTFRoot root) => new KHR_node_visibility_hint
         {
@@ -65,16 +68,28 @@ namespace GLTF.Schema
     /// <summary>Shared wire handling of the two visibility-hint extension objects.</summary>
     internal static class VisibilityHintJson
     {
+        internal static JProperty ToProperty(
+            string extensionName, string[] roles, string label, JObject extensions, JToken extras,
+            JObject additionalProperties)
+        {
+            var value = Serialize(roles, label, extensions, extras, additionalProperties);
+            return value != null ? new JProperty(extensionName, value) : null;
+        }
+
+        /// <summary>
+        /// The hint object, or null when <paramref name="roles"/> has no valid role: <c>roles</c> is required, so no
+        /// object is written without it.
+        /// </summary>
         internal static JObject Serialize(
             string[] roles, string label, JObject extensions, JToken extras, JObject additionalProperties)
         {
-            var obj = additionalProperties != null ? (JObject)additionalProperties.DeepClone() : new JObject();
             var array = new JArray();
             if (roles != null)
                 foreach (var role in roles)
                     if (!string.IsNullOrEmpty(role) && !Contains(array, role)) array.Add(role);
-            if (array.Count > 0) obj["roles"] = array;
-            else obj.Remove("roles");
+            if (array.Count == 0) return null;
+            var obj = additionalProperties != null ? (JObject)additionalProperties.DeepClone() : new JObject();
+            obj["roles"] = array;
             // The legacy single "role" is not part of the specification and is never written.
             obj.Remove("role");
             // label is optional but minLength:1; never emit "" (Unity coerces a null serialized string to "").
