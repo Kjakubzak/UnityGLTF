@@ -141,7 +141,7 @@ never writes scene objects; applying the results and mixing them with other writ
    translation, texture offset and texture rotation are additive; rotation angles add as raw scalars, so whole turns
    survive. Morph weights fold whole-array and element records into one complete vector per node, whose untouched
    elements keep their authored value (`ExpressionAggregateRecord.Contributed` marks the touched ones). The
-   remaining types use host composition, and this package makes these choices (spec 314c95c5):
+   remaining types use host composition, and this package makes these choices (KhronosGroup/glTF#2512 @ `7ab5368a`):
    - **Node scale and texture scale** use the same additive formula `b + sum(s - n)` per component, as
      `KHR_character_expression_joint` and `KHR_character_expression_texture_transform` recommend. Two scale responses
      from `1` to `2` and from `1` to `3` give `4`, not `3` (highest index) or `6` (multiplication). Scale results are not

@@ -17,7 +17,7 @@ view and asset instance. The host passes that logic to every query as a `Visibil
 - `rolesWithLogic`: further roles the application has logic for but that do not apply here (an applied role counts
   as having logic).
 
-Evaluation follows the specification (spec 314c95c5, glTF-private #256):
+Evaluation follows the specification (KhronosGroup/glTF#2512 @ `7ab5368a`):
 
 | role in a hint | applies when |
 |---|---|
