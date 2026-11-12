@@ -110,9 +110,10 @@ namespace GLTF.Schema
                         : new JObject();
                     if (s.Target >= 0) so["target"] = s.Target;
                     else so.Remove("target");
-                    // Name is the only source of "name", even when stored additional properties hold one.
+                    // A stored string name (from data baked before name was a defined member) is kept; a stored
+                    // non-string one is never written.
                     if (s.Name != null) so["name"] = s.Name;
-                    else so.Remove("name");
+                    else if (so["name"] != null && so["name"].Type != JTokenType.String) so.Remove("name");
                     if (s.Type != null) so["type"] = s.Type;
                     else so.Remove("type");
                     if (s.Amount.HasValue) so["amount"] = s.Amount.Value;

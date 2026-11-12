@@ -177,8 +177,33 @@ namespace UnityGLTF.KhrCharacter.Tests
             // Entries baked by an earlier version may hold the invalid name in their stored additional properties.
             read.AdditionalProperties["name"] = 7;
             var wire = (JObject)((JArray)((JObject)suppression.Serialize().Value)["suppressions"])[0];
-            Assert.IsNull(wire["name"], "name is written only from Name");
+            Assert.IsNull(wire["name"], "a stored non-string name is never written");
             Assert.AreEqual(1, wire["ACME_note"].Value<int>());
+        }
+
+        [Test]
+        public void SuppressionSchema_WritesAStoredStringNameAndDropsAStoredNonStringName()
+        {
+            // Entries baked before name was a defined member hold it among their additional properties, with no Name.
+            var suppression = new KHR_character_expression_suppression();
+            suppression.Suppressions.Add(new KHR_character_expression_suppression.Suppression
+            {
+                Target = 0, AdditionalProperties = new JObject { { "name", "x" } },
+            });
+            suppression.Suppressions.Add(new KHR_character_expression_suppression.Suppression
+            {
+                Target = 0, AdditionalProperties = new JObject { { "name", 7 }, { "ACME_note", 1 } },
+            });
+            suppression.Suppressions.Add(new KHR_character_expression_suppression.Suppression
+            {
+                Target = 0, Name = "authored", AdditionalProperties = new JObject { { "name", "stale" } },
+            });
+
+            var wire = (JArray)((JObject)suppression.Serialize().Value)["suppressions"];
+            Assert.AreEqual("x", wire[0]["name"].Value<string>(), "a stored string name is still written");
+            Assert.IsNull(wire[1]["name"], "a stored non-string name is never written");
+            Assert.AreEqual(1, wire[1]["ACME_note"].Value<int>());
+            Assert.AreEqual("authored", wire[2]["name"].Value<string>(), "Name wins over a stored name");
         }
 
         [Test]
