@@ -165,6 +165,7 @@ namespace UnityGLTF.VisibilityHints.Tests
         {
             GLTFProperty.TryRegisterExtension(new KHR_node_visibility_hint_Factory());
             LogAssert.Expect(LogType.Warning, new Regex("legacy 'role'"));
+            LogAssert.Expect(LogType.Warning, new Regex("Extension 'KHR_node_visibility_hint' serialized to nothing"));
             const string json = @"{
                 ""asset"": { ""version"": ""2.0"" },
                 ""extensionsUsed"": [ ""KHR_node_visibility_hint"" ],

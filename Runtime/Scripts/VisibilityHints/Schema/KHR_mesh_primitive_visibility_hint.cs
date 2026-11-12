@@ -27,7 +27,7 @@ namespace GLTF.Schema
         public JProperty RawData;
 
         /// <summary>The wire property, or null when there is no valid role; <see cref="GLTFProperty"/> omits a null
-        /// extension.</summary>
+        /// extension with a warning.</summary>
         public JProperty Serialize()
             => VisibilityHintJson.ToProperty(EXTENSION_NAME, Roles, Label, Extensions, Extras, AdditionalProperties);
 

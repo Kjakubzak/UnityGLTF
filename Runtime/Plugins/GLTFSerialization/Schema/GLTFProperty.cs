@@ -252,7 +252,12 @@ namespace GLTF.Schema
 				{
 					// An extension object that has nothing valid to write returns null and is omitted.
 					JToken extensionToken = extension.Value.Serialize();
-					if (extensionToken == null) continue;
+					if (extensionToken == null)
+					{
+						UnityEngine.Debug.LogWarning(
+							$"Extension '{extension.Key}' serialized to nothing and is omitted from the output.");
+						continue;
+					}
 					if (!started)
 					{
 						writer.WritePropertyName("extensions");
